@@ -154,6 +154,7 @@ Two scheduled jobs run automatically via macOS launchd:
 |---|---|---|---|
 | Daily | 6:00 AM every day | `scripts/sync_daily.sh` | `logs/sync_daily.log` |
 | Weekly | 7:00 AM every Sunday | `scripts/sync_weekly.sh` | `logs/sync_weekly.log` |
+| Auth reminder | 10:00 PM every day | `scripts/auth_reminder.sh` | — |
 
 The daily job syncs accounts, balances, positions, transactions, and orders. The weekly job does a full 30-day history refresh.
 
@@ -162,8 +163,10 @@ The daily job syncs accounts, balances, positions, transactions, and orders. The
 ```bash
 cp scripts/com.fifthdragon.sync-daily.plist ~/Library/LaunchAgents/
 cp scripts/com.fifthdragon.sync-weekly.plist ~/Library/LaunchAgents/
+cp scripts/com.fifthdragon.auth-reminder.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.fifthdragon.sync-daily.plist
 launchctl load ~/Library/LaunchAgents/com.fifthdragon.sync-weekly.plist
+launchctl load ~/Library/LaunchAgents/com.fifthdragon.auth-reminder.plist
 ```
 
 ### Uninstall
@@ -171,21 +174,22 @@ launchctl load ~/Library/LaunchAgents/com.fifthdragon.sync-weekly.plist
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.fifthdragon.sync-daily.plist
 launchctl unload ~/Library/LaunchAgents/com.fifthdragon.sync-weekly.plist
+launchctl unload ~/Library/LaunchAgents/com.fifthdragon.auth-reminder.plist
 ```
 
 ### Token renewal (required daily)
 
-**E*TRADE OAuth tokens expire every day at midnight Eastern Time.** The sync scripts check the token file's modification date before running. If the token is stale or missing, the job sends a macOS notification and exits cleanly instead of failing with 401 errors.
+**E*TRADE OAuth tokens expire every day at midnight Eastern Time.**
 
-You will see a notification like: **"Token expired — re-auth needed"**
-
-Re-authenticate before the next scheduled sync:
+At **10:00 PM** each night, the auth reminder job checks if your token is stale. If it is, you'll get a macOS notification: **"Re-authenticate tonight."** Re-authenticate before midnight and the 6 AM sync will run without issues:
 
 ```bash
 python -m etrade_sync auth
 ```
 
-This opens your browser to the E*TRADE authorization page. After approving, paste the verifier code. The new token is saved to `~/.config/etrade/tokens.json` (mode 600). The scheduled jobs will then run successfully until the following midnight ET.
+This opens your browser to the E*TRADE authorization page. After approving, paste the verifier code. The new token is saved to `~/.config/etrade/tokens.json` (mode 600). If you already re-authenticated that day, the 10 PM reminder stays silent.
+
+If the sync scripts detect a stale or missing token at runtime, they send a notification and exit cleanly instead of failing with 401 errors.
 
 ---
 

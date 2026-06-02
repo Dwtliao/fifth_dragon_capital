@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fifthdragon.auth-reminder</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/davidliao/git_repos/fifth_dragon_capital/scripts/auth_reminder.sh</string>
+    </array>
+
+    <!-- Run nightly at 10:00 PM -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>22</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/davidliao/git_repos/fifth_dragon_capital/logs/launchd_auth_reminder.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/davidliao/git_repos/fifth_dragon_capital/logs/launchd_auth_reminder_error.log</string>
+</dict>
+</plist>

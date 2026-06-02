@@ -44,10 +44,19 @@ _UPSERT = """
 """
 
 
-def build_ledger():
-    """Populate ledger from transactions table. Safe to re-run (upsert)."""
+def build_ledger(full_rebuild=False):
+    """Populate ledger from transactions table. Safe to re-run (upsert).
+
+    full_rebuild=True truncates ledger CASCADE before repopulating, resetting
+    surrogate IDs. Use this after mapping changes or schema fixes. Dependent
+    fact tables (fact_transactions, fact_cashflows) are also cleared by CASCADE.
+    """
     with get_connection() as conn:
         with conn.cursor() as cur:
+            if full_rebuild:
+                cur.execute("TRUNCATE TABLE ledger RESTART IDENTITY CASCADE")
+                print("  ledger: truncated (full rebuild)")
+
             cur.execute("""
                 SELECT account_id_key, transaction_id, transaction_date,
                        settlement_date, transaction_type, symbol,

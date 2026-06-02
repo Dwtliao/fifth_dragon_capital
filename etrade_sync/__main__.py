@@ -23,7 +23,11 @@ def main():
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     sub.add_parser("auth", help="Complete OAuth dance and save tokens")
-    sub.add_parser("build-ledger", help="Populate ledger table from transactions")
+    ledger_p = sub.add_parser("build-ledger", help="Populate ledger table from transactions")
+    ledger_p.add_argument(
+        "--full-rebuild", action="store_true",
+        help="Truncate ledger (and dependent fact tables) before repopulating"
+    )
     sub.add_parser("seed-symbols", help="Seed dim_symbols with yfinance metadata")
     sub.add_parser("seed-dates", help="Generate dim_dates date spine")
 
@@ -70,7 +74,7 @@ def main():
         from etrade_sync.db import create_tables
         from etrade_sync.analytics.ledger import build_ledger
         create_tables()
-        build_ledger()
+        build_ledger(full_rebuild=args.full_rebuild)
 
     elif args.command == "seed-symbols":
         from etrade_sync.db import create_tables

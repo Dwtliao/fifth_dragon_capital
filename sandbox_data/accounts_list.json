@@ -1,0 +1,60 @@
+{
+  "AccountListResponse": {
+    "Accounts": {
+      "Account": [
+        {
+          "accountId": "823145980",
+          "accountIdKey": "dBZOKt9xDrtRSAOl4MSiiA",
+          "accountMode": "IRA",
+          "accountDesc": "Brokerage",
+          "accountName": "NickName-1",
+          "accountType": "MARGIN",
+          "institutionType": "BROKERAGE",
+          "accountStatus": "ACTIVE",
+          "closedDate": 0,
+          "shareWorksAccount": false,
+          "fcManagedMssbClosedAccount": false
+        },
+        {
+          "accountId": "583156360",
+          "accountIdKey": "vQMsebA1H5WltUfDkJP48g",
+          "accountMode": "CASH",
+          "accountDesc": "Complete Savings",
+          "accountName": "NickName-2",
+          "accountType": "INDIVIDUAL",
+          "institutionType": "BROKERAGE",
+          "accountStatus": "ACTIVE",
+          "closedDate": 0,
+          "shareWorksAccount": false,
+          "fcManagedMssbClosedAccount": false
+        },
+        {
+          "accountId": "707004180",
+          "accountIdKey": "6_Dpy0rmuQ9cu9IbTfvF2A",
+          "accountMode": "CASH",
+          "accountDesc": "INDIVIDUAL",
+          "accountName": "NickName-3",
+          "accountType": "INDIVIDUAL",
+          "institutionType": "BROKERAGE",
+          "accountStatus": "ACTIVE",
+          "closedDate": 0,
+          "shareWorksAccount": false,
+          "fcManagedMssbClosedAccount": false
+        },
+        {
+          "accountId": "835151430",
+          "accountIdKey": "xj1Dc18FTqWPqkEEVUr5rw",
+          "accountMode": "CASH",
+          "accountDesc": "INDIVIDUAL",
+          "accountName": "",
+          "accountType": "CASH",
+          "institutionType": "BROKERAGE",
+          "accountStatus": "CLOSED",
+          "closedDate": 1521027780,
+          "shareWorksAccount": false,
+          "fcManagedMssbClosedAccount": false
+        }
+      ]
+    }
+  }
+}

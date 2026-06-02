@@ -1,0 +1,186 @@
+{
+  "PortfolioResponse": {
+    "AccountPortfolio": [
+      {
+        "accountId": "833597000",
+        "Position": [
+          {
+            "positionId": 27005131,
+            "symbolDescription": "BR",
+            "dateAcquired": -57600000,
+            "pricePaid": 0,
+            "commissions": 0,
+            "otherFees": 0,
+            "quantity": 10,
+            "positionIndicator": "TYPE2",
+            "positionType": "LONG",
+            "daysGain": -2.7999,
+            "daysGainPct": -1.3346,
+            "marketValue": 207,
+            "totalCost": 0,
+            "totalGain": 207,
+            "totalGainPct": 0,
+            "pctOfPortfolio": 0.0018,
+            "costPerShare": 0,
+            "todayCommissions": 0,
+            "todayFees": 0,
+            "todayPricePaid": 0,
+            "todayQuantity": 0,
+            "lotsDetails": "https://apisb.etrade.com/v1/accounts/E5Nd4LJBsEi_UyHm4Vio9g/portfolio/27005131",
+            "quoteDetails": "https://apisb.etrade.com/v1/market/quote/BR",
+            "Product": {
+              "symbol": "BR",
+              "securityType": "EQ",
+              "expiryYear": 0,
+              "expiryMonth": 0,
+              "expiryDay": 0,
+              "strikePrice": 0,
+              "productId": {
+                "symbol": "BR"
+              }
+            },
+            "Quick": {
+              "lastTrade": 20.7,
+              "lastTradeTime": 1343160240,
+              "change": -0.28,
+              "changePct": -1.3346,
+              "volume": 431591
+            }
+          },
+          {
+            "positionId": 4709131,
+            "symbolDescription": "GLD",
+            "dateAcquired": 1335250800000,
+            "pricePaid": 1,
+            "commissions": 5,
+            "otherFees": 0,
+            "quantity": 2,
+            "positionIndicator": "TYPE1",
+            "positionType": "LONG",
+            "daysGain": 0.9799,
+            "daysGainPct": 0.3201,
+            "marketValue": 307.04,
+            "totalCost": 7,
+            "totalGain": 300.04,
+            "totalGainPct": 4286.2857,
+            "pctOfPortfolio": 0.0028,
+            "costPerShare": 3.5,
+            "todayCommissions": 0,
+            "todayFees": 0,
+            "todayPricePaid": 0,
+            "todayQuantity": 0,
+            "lotsDetails": "https://apisb.etrade.com/v1/accounts/E5Nd4LJBsEi_UyHm4Vio9g/portfolio/4709131",
+            "quoteDetails": "https://apisb.etrade.com/v1/market/quote/GLD",
+            "Product": {
+              "symbol": "GLD",
+              "securityType": "EQ",
+              "expiryYear": 0,
+              "expiryMonth": 0,
+              "expiryDay": 0,
+              "strikePrice": 0,
+              "productId": {
+                "symbol": "GLD"
+              }
+            },
+            "Quick": {
+              "lastTrade": 153.52,
+              "lastTradeTime": 1343160000,
+              "change": 0.49,
+              "changePct": 0.3201,
+              "volume": 6502883
+            }
+          },
+          {
+            "positionId": 4729131,
+            "symbolDescription": "MSFT",
+            "dateAcquired": 1335250800000,
+            "pricePaid": 1,
+            "commissions": 5,
+            "otherFees": 0,
+            "quantity": 1,
+            "positionIndicator": "TYPE2",
+            "positionType": "LONG",
+            "daysGain": -0.13,
+            "daysGainPct": -0.4439,
+            "marketValue": 29.1499,
+            "totalCost": 6,
+            "totalGain": 23.1499,
+            "totalGainPct": 385.8333,
+            "pctOfPortfolio": 0.0002,
+            "costPerShare": 6,
+            "todayCommissions": 0,
+            "todayFees": 0,
+            "todayPricePaid": 0,
+            "todayQuantity": 0,
+            "lotsDetails": "https://apisb.etrade.com/v1/accounts/E5Nd4LJBsEi_UyHm4Vio9g/portfolio/4729131",
+            "quoteDetails": "https://apisb.etrade.com/v1/market/quote/MSFT",
+            "Product": {
+              "symbol": "MSFT",
+              "securityType": "EQ",
+              "expiryYear": 0,
+              "expiryMonth": 0,
+              "expiryDay": 0,
+              "strikePrice": 0,
+              "productId": {
+                "symbol": "MSFT"
+              }
+            },
+            "Quick": {
+              "lastTrade": 29.15,
+              "lastTradeTime": 1343160000,
+              "change": -0.13,
+              "changePct": -0.4439,
+              "volume": 47710804
+            }
+          },
+          {
+            "positionId": 23971131,
+            "symbolDescription": "MSFT",
+            "dateAcquired": -57600000,
+            "pricePaid": 0,
+            "commissions": 0,
+            "otherFees": 0,
+            "quantity": -10,
+            "positionIndicator": "TYPE5",
+            "positionType": "SHORT",
+            "daysGain": 1.3,
+            "daysGainPct": -0.4439,
+            "marketValue": -291.5,
+            "totalCost": 0,
+            "totalGain": -291.5,
+            "totalGainPct": 0,
+            "pctOfPortfolio": -0.0026,
+            "costPerShare": 0,
+            "todayCommissions": 0,
+            "todayFees": 0,
+            "todayPricePaid": 0,
+            "todayQuantity": 0,
+            "lotsDetails": "https://apisb.etrade.com/v1/accounts/E5Nd4LJBsEi_UyHm4Vio9g/portfolio/23971131",
+            "quoteDetails": "https://apisb.etrade.com/v1/market/quote/MSFT",
+            "Product": {
+              "symbol": "MSFT",
+              "securityType": "EQ",
+              "expiryYear": 0,
+              "expiryMonth": 0,
+              "expiryDay": 0,
+              "strikePrice": 0,
+              "productId": {
+                "symbol": "MSFT"
+              }
+            },
+            "Quick": {
+              "lastTrade": 29.15,
+              "lastTradeTime": 1343160000,
+              "change": -0.13,
+              "changePct": -0.4439,
+              "volume": 47710804
+            }
+          }
+        ],
+        "next": "https://apisb.etrade.com/v1/accounts/E5Nd4LJBsEi_UyHm4Vio9g/portfolio?count=4&pageNumber=2",
+        "totalPages": 2,
+        "nextPageNo": "2"
+      }
+    ]
+  }
+}

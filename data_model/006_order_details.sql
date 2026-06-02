@@ -1,0 +1,28 @@
+-- Child table of orders (one row per leg per order)
+CREATE TABLE IF NOT EXISTS order_details (
+    id                   SERIAL PRIMARY KEY,
+    order_id             BIGINT NOT NULL REFERENCES orders(order_id),
+    order_number         INT,
+    symbol               TEXT,
+    symbol_desc          TEXT,
+    security_type        TEXT,
+    order_action         TEXT,
+    price_type           TEXT,
+    order_term           TEXT,
+    limit_price          NUMERIC,
+    stop_price           NUMERIC,
+    status               TEXT,
+    placed_time          TIMESTAMPTZ,
+    executed_time        TIMESTAMPTZ,
+    ordered_quantity     NUMERIC,
+    filled_quantity      NUMERIC,
+    avg_execution_price  NUMERIC,
+    estimated_commission NUMERIC,
+    call_put             TEXT,
+    expiry_year          INT,
+    expiry_month         INT,
+    expiry_day           INT,
+    strike_price         NUMERIC,
+    raw                  JSONB,
+    created_at           TIMESTAMPTZ DEFAULT NOW()
+);

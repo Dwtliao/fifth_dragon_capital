@@ -78,11 +78,31 @@ python -m etrade_sync sync --from 2025-01-01    # from a specific date
 python -m etrade_sync sync --from 2025-01-01 --to 2025-06-30  # date range
 ```
 
+### Analytics layer
+
+After syncing, populate the BI foundation tables:
+
+```bash
+# Build normalized event ledger from transactions (incremental upsert)
+python -m etrade_sync build-ledger
+
+# Full rebuild — truncates ledger and dependent fact tables, then repopulates
+python -m etrade_sync build-ledger --full-rebuild
+
+# Seed symbol metadata (sector, industry, asset class) via yfinance
+python -m etrade_sync seed-symbols
+
+# Generate date spine (calendar + trading day flags)
+python -m etrade_sync seed-dates
+```
+
 ---
 
 ## Database Schema
 
-7 tables in Postgres:
+### Raw sync tables (Layer 0)
+
+7 tables populated by the sync pipeline:
 
 | Table | Type | Key |
 |---|---|---|
@@ -94,7 +114,30 @@ python -m etrade_sync sync --from 2025-01-01 --to 2025-06-30  # date range
 | `order_details` | replace legs on update | FK → `order_id` |
 | `sync_state` | watermarks | `(account_id_key, data_type)` |
 
-Tables are created automatically on first sync (`CREATE TABLE IF NOT EXISTS`).
+Tables are created automatically on first sync. Schema definitions live in `data_model/001_*.sql` through `007_*.sql`.
+
+### Analytics tables (Layer 1–2)
+
+Built on top of the raw sync tables:
+
+| Table | Layer | Description |
+|---|---|---|
+| `ledger` | 1 | Normalized event log — one row per financial event, signed quantities |
+| `dim_symbols` | 2 | Ticker metadata: sector, industry, asset class (seeded via yfinance) |
+| `dim_dates` | 2 | Date spine with ISO week/year and NYSE trading day flag |
+| `dim_accounts` | 2 | Account dimension with SCD Type 2 history + `dim_accounts_current` view |
+
+Schema definitions: `data_model/010_*.sql` through `020_*.sql`.
+
+### Fact tables (Layer 2 — draft, not yet built)
+
+| Table | Description |
+|---|---|
+| `fact_transactions` | One row per financial event, keyed to dims |
+| `fact_positions` | Point-in-time position snapshots, grain enforced on (account, symbol, fetched_at) |
+| `fact_cashflows` | Cash-only events (deposits, withdrawals, dividends, interest, fees) |
+
+Schema definitions: `data_model/030_*.sql` through `032_*.sql`.
 
 ---
 

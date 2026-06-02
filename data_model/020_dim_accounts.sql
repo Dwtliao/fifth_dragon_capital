@@ -37,7 +37,8 @@ CREATE INDEX IF NOT EXISTS dim_accounts_asof
     ON dim_accounts (account_id_key, effective_from DESC, effective_to);
 
 -- Convenience view: current account attributes only.
--- BI queries that don't need historical account state should use this.
+-- BI / dashboard queries: use dim_accounts_current for present-state reporting.
+-- Historical / as-of queries: use dim_accounts directly with effective_from/effective_to.
 CREATE OR REPLACE VIEW dim_accounts_current AS
 SELECT account_sk, account_id_key, account_id, account_name,
        account_mode, account_type, institution_type, status,

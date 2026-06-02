@@ -23,6 +23,9 @@ def main():
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     sub.add_parser("auth", help="Complete OAuth dance and save tokens")
+    sub.add_parser("build-ledger", help="Populate ledger table from transactions")
+    sub.add_parser("seed-symbols", help="Seed dim_symbols with yfinance metadata")
+    sub.add_parser("seed-dates", help="Generate dim_dates date spine")
 
     sync_p = sub.add_parser("sync", help="Sync data from E*TRADE to Postgres")
     sync_p.add_argument(
@@ -62,6 +65,24 @@ def main():
     if args.command == "auth":
         from etrade_sync.auth import run_auth_flow
         run_auth_flow()
+
+    elif args.command == "build-ledger":
+        from etrade_sync.db import create_tables
+        from etrade_sync.analytics.ledger import build_ledger
+        create_tables()
+        build_ledger()
+
+    elif args.command == "seed-symbols":
+        from etrade_sync.db import create_tables
+        from etrade_sync.analytics.symbols import seed_symbols
+        create_tables()
+        seed_symbols()
+
+    elif args.command == "seed-dates":
+        from etrade_sync.db import create_tables
+        from etrade_sync.analytics.dates import seed_dates
+        create_tables()
+        seed_dates()
 
     elif args.command == "sync":
         from etrade_sync.db import create_tables, get_connection

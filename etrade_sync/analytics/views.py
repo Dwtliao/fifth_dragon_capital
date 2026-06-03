@@ -4,6 +4,7 @@ MATERIALIZED_VIEWS = [
     "mv_unrealized_pnl",
     "mv_portfolio_timeseries",
     "mv_allocations",
+    "mv_benchmark_comparison",
 ]
 
 

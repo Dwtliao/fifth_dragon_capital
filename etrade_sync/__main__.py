@@ -19,7 +19,8 @@ def _table_counts(conn):
     counts = {}
     with conn.cursor() as cur:
         for table in ("accounts", "balances", "positions", "transactions",
-                      "orders", "order_details", "ledger", "realized_gains"):
+                      "orders", "order_details", "ledger", "realized_gains",
+                      "market_prices"):
             try:
                 cur.execute(f"SELECT count(*) FROM {table}")
                 counts[table] = cur.fetchone()[0]
@@ -47,6 +48,7 @@ def main():
 
     sub.add_parser("seed-symbols", help="Seed dim_symbols with yfinance metadata")
     sub.add_parser("seed-dates", help="Generate dim_dates date spine")
+    sub.add_parser("seed-prices", help="Fetch benchmark prices (SPY) from yfinance into market_prices")
     sub.add_parser("reconcile", help="Compare ledger positions to API positions snapshot")
     sub.add_parser("refresh-views", help="Refresh all materialized views")
 
@@ -139,6 +141,20 @@ def main():
         try:
             count = seed_dates()
             finish_run(log_id, "success", rows_synced={"dim_dates": count})
+        except Exception as e:
+            finish_run(log_id, "failed", error_msg=str(e))
+            raise
+
+    # ----------------------------------------------------------- seed-prices
+    elif args.command == "seed-prices":
+        from etrade_sync.db import create_tables
+        from etrade_sync.analytics.prices import seed_prices
+        from etrade_sync.analytics.sync_log import start_run, finish_run
+        create_tables()
+        log_id = start_run("seed_prices")
+        try:
+            count = seed_prices()
+            finish_run(log_id, "success", rows_synced={"market_prices": count})
         except Exception as e:
             finish_run(log_id, "failed", error_msg=str(e))
             raise
@@ -249,6 +265,14 @@ def main():
             except Exception as e:
                 print(f"[{_ts()}] WARNING: realized pnl failed — {e}")
             print(f"[{_ts()}] realized pnl done")
+
+            print(f"[{_ts()}] benchmark prices...")
+            try:
+                from etrade_sync.analytics.prices import seed_prices
+                seed_prices()
+            except Exception as e:
+                print(f"[{_ts()}] WARNING: benchmark price fetch failed — {e}")
+            print(f"[{_ts()}] benchmark prices done")
 
             print(f"[{_ts()}] refreshing views...")
             try:

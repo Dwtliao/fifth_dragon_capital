@@ -63,14 +63,15 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 2 | `fact_cashflows` | Cash-only events: deposits, withdrawals, dividends, interest, fees |
 | 2.5 | `reconciliation_log` | Ledger qty vs API positions snapshot, match/discrepancy/ledger_only/api_only |
 | 3 | `mv_unrealized_pnl` | Materialized view from latest positions snapshot |
-| 3 | `realized_gains` | FIFO-matched buy/sell lots, cost_basis, proceeds, realized_pnl, short/long term |
+| 3 | `realized_gains` | Split-adjusted FIFO buy/sell lots, cost_basis, proceeds, realized_pnl, short/long term |
+| 3 | `mv_portfolio_timeseries` | Daily portfolio value, returns, volatility, drawdown |
+| 3 | `mv_allocations` | Sector / asset class breakdown and portfolio weights |
 | 4 | Pipeline Status page | Token freshness, job history, table health, Run Sync Now with live output |
 
 ### Known Gaps / Open Issues
 
 | Issue | Severity | Description |
 |---|---|---|
-| #32 | **Bug** | FIFO cost basis does not adjust for stock splits — `realized_gains` P/L is wrong for split positions |
 | #33 | Low | `dim_symbols.cusip` column never populated by `seed_symbols()` |
 | #34 | Deferred | Ledger only sources from `transactions`; option/spread fills from `orders` not yet mapped |
 
@@ -80,54 +81,26 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 
 Dependencies determine sequence. Do not start a page before its upstream data layer is correct.
 
-### Wave 1 — Correctness fix (before any P/L page)
+### Remaining Issue Order
 
-| Issue | Task |
-|---|---|
-| **#32** | Fix FIFO: apply split-ratio adjustment to buy lot quantities and prices before matching |
+| Order | Issue | Depends on | Notes |
+|---|---|---|---|
+| 1 | **#24** | #22 | Benchmark comparison is the next intelligence-layer unlock once daily portfolio timeseries exists. |
+| 2 | **#25** | #23, `mv_unrealized_pnl` | Portfolio Overview is now unblocked and can be built independently of #24. |
+| 3 | **#26** | #22, #24 | Performance needs both the portfolio timeseries and benchmark view. Realized P/L is now accurate because #32 is done. |
+| 4 | **#27** | ledger | Trading History can start now as a ledger explorer; the tag form still waits on #29. |
+| 5 | **#28** | #23, `dim_symbols` | Risk & Exposure is now unblocked by allocations and symbol metadata. |
+| 6 | **#29** | #27 | Strategy tags depend on a usable ledger explorer. |
+| 7 | **#33** | none | Low-priority backfill for fixed-income metadata. |
+| 8 | **#34** | none | Deferred design pass for options / multi-leg order mapping. |
 
-`realized_gains` P/L is incorrect for any position that has split until this is done.
-This is a hard dependency for #26 (Performance) and any strategy/holding-period views built on `realized_gains`.
-It is a soft dependency for #25 (Portfolio Overview) — can scaffold layout first, but don't ship P/L numbers.
+### Already completed, but worth remembering
 
-### Wave 2 — Intelligence layer (parallel)
-
-| Issue | Task | Depends on |
+| Issue | Status | Why it matters |
 |---|---|---|
-| **#22** | `mv_portfolio_timeseries` — daily portfolio value, daily return %, rolling 7/30/90d returns, rolling volatility, max drawdown | positions snapshots |
-| **#23** | `mv_allocations` — sector/asset class breakdown, % of portfolio, concentration | dim_symbols, positions |
-
-These are independent of each other and can be built in parallel.
-
-### Wave 3 — Benchmark
-
-| Issue | Task | Depends on |
-|---|---|---|
-| **#24** | `mv_benchmark_comparison` — portfolio return vs SPY, alpha, rolling comparison | #22 (needs daily portfolio value) |
-
-Requires market price history for SPY. Source: yfinance (already installed).
-
-### Wave 4 — Dashboard pages (priority order)
-
-| Issue | Page | Depends on |
-|---|---|---|
-| **#25** | Portfolio Overview | #23 (allocations), mv_unrealized_pnl (done) |
-| **#26** | Performance | #22, #24; #32 for accurate realized P/L section |
-| **#27** | Trading History | ledger (done); #29 for tag form (can build ledger explorer first) |
-| **#28** | Risk & Exposure | #23 (allocations), dim_symbols (done) |
-
-### Wave 5 — Strategy tagging
-
-| Issue | Task | Depends on |
-|---|---|---|
-| **#29** | `trade_tags` table + tag form in Trading History | #27 (ledger explorer must exist first) |
-
-### Deferred
-
-| Issue | Task |
-|---|---|
-| **#33** | Backfill `dim_symbols.cusip` from positions raw JSONB |
-| **#34** | Map filled option/spread legs from `orders` into ledger |
+| **#22** | Done | Provides `mv_portfolio_timeseries` for performance charts and benchmark comparison. |
+| **#23** | Done | Provides `mv_allocations` for Portfolio Overview and Risk & Exposure. |
+| **#32** | Done | Split-adjusted FIFO is now in place, so realized P/L is correct for split positions. |
 
 ---
 
@@ -152,7 +125,7 @@ Requires market price history for SPY. Source: yfinance (already installed).
 - Rolling 30/90-day return vs SPY benchmark (mv_benchmark_comparison)
 - Rolling 30-day volatility
 - Max drawdown chart
-- Realized P/L by year/quarter (from realized_gains — requires #32 for accuracy)
+- Realized P/L by year/quarter (from realized_gains)
 
 ### Page 4: Trading History (#27)
 - Win rate, avg win/loss, profit factor
@@ -179,9 +152,9 @@ Source: `positions` snapshots (one per `fetched_at` timestamp)
 Key columns:
 - `date`, `total_market_value`, `total_cost_basis`, `total_unrealized_pnl`
 - `daily_return_pct` (day-over-day market value change)
-- `rolling_7d_return`, `rolling_30d_return`, `rolling_90d_return`
+- `rolling_7d_return_pct`, `rolling_30d_return_pct`, `rolling_90d_return_pct`
 - `rolling_volatility_30d` (stddev of daily returns)
-- `max_drawdown_pct` (peak-to-trough from running max)
+- `drawdown_from_peak_pct` (peak-to-trough from running max)
 
 ### `mv_allocations` (#23)
 Source: latest positions snapshot + `dim_symbols`

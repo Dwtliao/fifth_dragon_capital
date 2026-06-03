@@ -197,18 +197,28 @@ def donut_chart(df, theta_col, color_col, label):
 
     return (arc + text).properties(height=320)
 
+def summary_table(df, label_col):
+    display = df[[label_col, "market_value", "pct"]].copy()
+    display["market_value"] = display["market_value"].apply(lambda x: f"${x:,.0f}")
+    display["pct"]          = display["pct"].apply(lambda x: f"{x:.1f}%")
+    display.columns         = [label_col.replace("_", " ").title(), "Market Value", "% Portfolio"]
+    st.dataframe(display, use_container_width=True, hide_index=True)
+
+
 col_l, col_r = st.columns(2)
 with col_l:
     st.subheader("By Sector")
     if not sector_chart_df.empty:
         st.altair_chart(donut_chart(sector_chart_df, "market_value", "sector", "Sector"),
                         use_container_width=True)
+        summary_table(sector_chart_df, "sector")
 
 with col_r:
     st.subheader("By Asset Class")
     if not asset_chart_df.empty:
         st.altair_chart(donut_chart(asset_chart_df, "market_value", "asset_class", "Asset Class"),
                         use_container_width=True)
+        summary_table(asset_chart_df, "asset_class")
 
 st.divider()
 

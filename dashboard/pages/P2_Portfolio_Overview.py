@@ -164,7 +164,15 @@ st.divider()
 # ── allocation charts (respond to position filters) ───────────────────────────
 
 def donut_chart(df, theta_col, color_col, label):
-    return (
+    df = df.copy()
+    # Only label slices >= 3% to avoid clutter on small slivers
+    df["slice_label"] = df.apply(
+        lambda r: f"{r['pct']:.1f}%  ${r[theta_col]:,.0f}"
+        if r["pct"] >= 3 else "",
+        axis=1,
+    )
+
+    arc = (
         alt.Chart(df)
         .mark_arc(innerRadius=60)
         .encode(
@@ -173,11 +181,21 @@ def donut_chart(df, theta_col, color_col, label):
             tooltip=[
                 alt.Tooltip(f"{color_col}:N", title=label),
                 alt.Tooltip(f"{theta_col}:Q", title="Market Value ($)", format=",.0f"),
-                alt.Tooltip("pct:Q", title="% of Portfolio", format=".1f"),
+                alt.Tooltip("pct:Q",          title="% of Portfolio",   format=".1f"),
             ],
         )
-        .properties(height=300)
     )
+
+    text = (
+        alt.Chart(df)
+        .mark_text(radius=155, size=11)
+        .encode(
+            theta=alt.Theta(f"{theta_col}:Q", stack=True),
+            text=alt.Text("slice_label:N"),
+        )
+    )
+
+    return (arc + text).properties(height=320)
 
 col_l, col_r = st.columns(2)
 with col_l:

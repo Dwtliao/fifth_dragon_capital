@@ -1,6 +1,6 @@
 -- Materialized view: current portfolio allocations by position.
 -- One row per (account, symbol) from the latest positions snapshot.
--- Joins to dim_symbols for sector and asset class metadata.
+-- Override priority: dim_symbol_overrides > dim_symbols (yfinance) > fallback.
 -- Dollar columns are ROUND(..., 2). pct_of_portfolio is left as double precision.
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_allocations AS
 WITH latest_positions AS (
@@ -20,17 +20,18 @@ portfolio_total AS (
 SELECT
     p.account_id_key,
     p.symbol,
-    COALESCE(s.sector,     'Unknown')                       AS sector,
-    COALESCE(s.asset_class, p.security_type, 'Unknown')     AS asset_class,
+    COALESCE(o.sector,      s.sector,     'Unknown')            AS sector,
+    COALESCE(o.asset_class, s.asset_class, p.security_type, 'Unknown') AS asset_class,
     p.security_type,
     p.quantity,
-    ROUND(p.total_cost::numeric, 2)                         AS cost_basis,
-    ROUND(p.market_value::numeric, 2)                       AS market_value,
-    p.market_value / NULLIF(pt.total_mv, 0) * 100           AS pct_of_portfolio,
-    ROUND((p.market_value - p.total_cost)::numeric, 2)      AS unrealized_pnl
+    ROUND(p.total_cost::numeric, 2)                              AS cost_basis,
+    ROUND(p.market_value::numeric, 2)                            AS market_value,
+    p.market_value / NULLIF(pt.total_mv, 0) * 100                AS pct_of_portfolio,
+    ROUND((p.market_value - p.total_cost)::numeric, 2)           AS unrealized_pnl
 FROM latest_positions p
 CROSS JOIN portfolio_total pt
-LEFT JOIN dim_symbols s ON s.symbol = p.symbol
+LEFT JOIN dim_symbols s          ON s.symbol = p.symbol
+LEFT JOIN dim_symbol_overrides o ON o.symbol = p.symbol
 ORDER BY p.market_value DESC NULLS LAST;
 
 CREATE UNIQUE INDEX IF NOT EXISTS mv_allocations_pk

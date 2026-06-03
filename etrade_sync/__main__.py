@@ -51,6 +51,7 @@ def main():
     sub.add_parser("seed-prices", help="Fetch benchmark prices (SPY) from yfinance into market_prices")
     sub.add_parser("reconcile", help="Compare ledger positions to API positions snapshot")
     sub.add_parser("refresh-views", help="Refresh all materialized views")
+    sub.add_parser("migrate", help="Drop + recreate all materialized views and re-apply all SQL files")
 
     log_p = sub.add_parser("log-event", help="Write a pipeline event to sync_log (used by shell scripts)")
     log_p.add_argument("--job", required=True, help="Job name")
@@ -179,6 +180,11 @@ def main():
         from etrade_sync.analytics.views import refresh_views
         create_tables()
         refresh_views()
+
+    # --------------------------------------------------------------- migrate
+    elif args.command == "migrate":
+        from etrade_sync.db import migrate
+        migrate()
 
     # --------------------------------------------------------------- sync
     elif args.command == "sync":

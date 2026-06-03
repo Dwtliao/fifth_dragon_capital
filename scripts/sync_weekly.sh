@@ -37,7 +37,7 @@ check_token_freshness() {
 
 check_token_freshness
 
-if "$PYTHON" -m etrade_sync sync --days 30 >> "$LOG_FILE" 2>&1; then
+if SYNC_TRIGGERED_BY=launchd "$PYTHON" -m etrade_sync sync --days 30 >> "$LOG_FILE" 2>&1; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') Weekly sync completed successfully" >> "$LOG_FILE"
     "$NOTIFY" -title "Fifth Dragon Capital" -subtitle "E*TRADE Pipeline" \
               -message "Weekly sync completed successfully"

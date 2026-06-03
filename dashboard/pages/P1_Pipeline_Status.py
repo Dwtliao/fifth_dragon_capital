@@ -13,7 +13,7 @@ from dashboard.db import query, scalar
 st.set_page_config(page_title="Pipeline Status — Fifth Dragon Capital", layout="wide")
 st.title("Pipeline Status")
 
-PYTHON = "/Users/davidliao/git_repos/py312/venv/bin/python"
+PYTHON = sys.executable
 TOKEN_FILE = Path.home() / ".config/etrade/tokens.json"
 ET = ZoneInfo("America/New_York")
 

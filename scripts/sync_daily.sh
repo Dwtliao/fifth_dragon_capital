@@ -40,7 +40,7 @@ check_token_freshness() {
 check_token_freshness
 
 run_sync() {
-    "$PYTHON" -m etrade_sync sync >> "$LOG_FILE" 2>&1
+    SYNC_TRIGGERED_BY=launchd "$PYTHON" -m etrade_sync sync >> "$LOG_FILE" 2>&1
 }
 
 if run_sync; then

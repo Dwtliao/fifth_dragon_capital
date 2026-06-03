@@ -45,6 +45,8 @@ def main():
 
     sub.add_parser("seed-symbols", help="Seed dim_symbols with yfinance metadata")
     sub.add_parser("seed-dates", help="Generate dim_dates date spine")
+    sub.add_parser("reconcile", help="Compare ledger positions to API positions snapshot")
+    sub.add_parser("refresh-views", help="Refresh all materialized views")
 
     log_p = sub.add_parser("log-event", help="Write a pipeline event to sync_log (used by shell scripts)")
     log_p.add_argument("--job", required=True, help="Job name")
@@ -125,6 +127,27 @@ def main():
             finish_run(log_id, "failed", error_msg=str(e))
             raise
 
+    # ------------------------------------------------------------ reconcile
+    elif args.command == "reconcile":
+        from etrade_sync.db import create_tables
+        from etrade_sync.analytics.reconcile import reconcile
+        from etrade_sync.analytics.sync_log import start_run, finish_run
+        create_tables()
+        log_id = start_run("reconcile")
+        try:
+            counts = reconcile()
+            finish_run(log_id, "success", rows_synced=counts)
+        except Exception as e:
+            finish_run(log_id, "failed", error_msg=str(e))
+            raise
+
+    # --------------------------------------------------------- refresh-views
+    elif args.command == "refresh-views":
+        from etrade_sync.db import create_tables
+        from etrade_sync.analytics.views import refresh_views
+        create_tables()
+        refresh_views()
+
     # --------------------------------------------------------------- sync
     elif args.command == "sync":
         from etrade_sync.db import create_tables, get_connection
@@ -133,6 +156,7 @@ def main():
         from etrade_sync.sync.transactions import sync_transactions
         from etrade_sync.sync.orders import sync_orders
         from etrade_sync.analytics.ledger import build_ledger
+        from etrade_sync.analytics.views import refresh_views
         from etrade_sync.analytics.sync_log import start_run, finish_run
 
         job_name = f"sync:{args.only}" if args.only else "sync"
@@ -193,7 +217,7 @@ def main():
             elapsed = time.time() - t0
             print(f"[{_ts()}] {name} done ({elapsed:.1f}s)")
 
-        # Always rebuild ledger after a full sync
+        # Always rebuild ledger and refresh views after a full sync
         if not args.only:
             print(f"[{_ts()}] ledger...")
             try:
@@ -201,6 +225,13 @@ def main():
             except Exception as e:
                 print(f"[{_ts()}] WARNING: ledger rebuild failed — {e}")
             print(f"[{_ts()}] ledger done")
+
+            print(f"[{_ts()}] refreshing views...")
+            try:
+                refresh_views()
+            except Exception as e:
+                print(f"[{_ts()}] WARNING: view refresh failed — {e}")
+            print(f"[{_ts()}] views done")
 
         # Summary + sync_log
         elapsed_total = time.time() - start

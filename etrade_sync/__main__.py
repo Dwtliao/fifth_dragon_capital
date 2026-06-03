@@ -178,13 +178,27 @@ def main():
     elif args.command == "refresh-views":
         from etrade_sync.db import create_tables
         from etrade_sync.analytics.views import refresh_views
+        from etrade_sync.analytics.sync_log import start_run, finish_run
         create_tables()
-        refresh_views()
+        log_id = start_run("refresh_views")
+        try:
+            refresh_views()
+            finish_run(log_id, "success")
+        except Exception as e:
+            finish_run(log_id, "failed", error_msg=str(e))
+            raise
 
     # --------------------------------------------------------------- migrate
     elif args.command == "migrate":
         from etrade_sync.db import migrate
-        migrate()
+        from etrade_sync.analytics.sync_log import start_run, finish_run
+        log_id = start_run("migrate")
+        try:
+            migrate()
+            finish_run(log_id, "success")
+        except Exception as e:
+            finish_run(log_id, "failed", error_msg=str(e))
+            raise
 
     # --------------------------------------------------------------- sync
     elif args.command == "sync":

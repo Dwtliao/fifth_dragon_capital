@@ -80,8 +80,9 @@ with col_filter:
     job_filter = st.selectbox(
         "Filter by job",
         ["all", "sync", "sync:accounts", "sync:balances", "sync:positions",
-         "sync:transactions", "sync:orders", "build_ledger", "seed_symbols",
-         "seed_dates", "daily_sync", "weekly_sync"],
+         "sync:transactions", "sync:orders", "build_ledger", "build_realized_pnl",
+         "seed_symbols", "seed_dates", "seed_prices", "refresh_views", "migrate",
+         "reconcile", "daily_sync", "weekly_sync"],
         label_visibility="collapsed",
     )
 with col_limit:
@@ -254,9 +255,18 @@ if run_btn:
             output_box.code("\n".join(lines), language=None)
         proc.wait()
 
-    if proc.returncode == 0:
-        st.success(f"{job} completed successfully.")
-    else:
-        st.error(f"{job} failed — see output above.")
-
+    st.session_state["last_job_output"] = "\n".join(lines)
+    st.session_state["last_job_name"]   = job
+    st.session_state["last_job_ok"]     = proc.returncode == 0
     st.rerun()
+
+# Show persisted result from previous run
+if "last_job_output" in st.session_state:
+    ok = st.session_state["last_job_ok"]
+    name = st.session_state["last_job_name"]
+    if ok:
+        st.success(f"{name} completed successfully.")
+    else:
+        st.error(f"{name} failed.")
+    with st.expander("Output", expanded=not ok):
+        st.code(st.session_state["last_job_output"], language=None)

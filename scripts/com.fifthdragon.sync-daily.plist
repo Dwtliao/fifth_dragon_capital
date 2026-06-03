@@ -34,6 +34,8 @@
     <dict>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/Users/davidliao/git_repos/py312/venv/bin</string>
+        <key>SYNC_TRIGGERED_BY</key>
+        <string>launchd</string>
     </dict>
 </dict>
 </plist>

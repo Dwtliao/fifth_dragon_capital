@@ -21,6 +21,7 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') Daily sync started" >> "$LOG_FILE"
 check_token_freshness() {
     if [[ ! -f "$TOKEN_FILE" ]]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: Token file missing — re-authentication required" >> "$LOG_FILE"
+        SYNC_TRIGGERED_BY=launchd "$PYTHON" -m etrade_sync log-event --job daily_sync --status token_stale >> "$LOG_FILE" 2>&1 || true
         "$NOTIFY" -title "Fifth Dragon Capital" -subtitle "Re-authentication required" \
                   -message "Run: python -m etrade_sync auth" -sound Basso
         exit 0
@@ -29,6 +30,7 @@ check_token_freshness() {
     token_date=$(TZ="America/New_York" date -r "$TOKEN_FILE" '+%Y-%m-%d')
     if [[ "$token_date" != "$today_et" ]]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: Token is stale (written $token_date, today is $today_et ET) — re-authentication required" >> "$LOG_FILE"
+        SYNC_TRIGGERED_BY=launchd "$PYTHON" -m etrade_sync log-event --job daily_sync --status token_stale >> "$LOG_FILE" 2>&1 || true
         "$NOTIFY" -title "Fifth Dragon Capital" -subtitle "Token expired — re-auth needed" \
                   -message "Run: python -m etrade_sync auth" -sound Basso
         exit 0

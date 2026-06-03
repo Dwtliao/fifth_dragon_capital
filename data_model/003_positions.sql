@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS positions (
+    id               SERIAL PRIMARY KEY,
+    account_id_key   TEXT NOT NULL,
+    fetched_at       TIMESTAMPTZ DEFAULT NOW(),
+    position_id      BIGINT,
+    symbol           TEXT,
+    symbol_desc      TEXT,
+    security_type    TEXT,
+    position_type    TEXT,
+    quantity         NUMERIC,
+    cost_per_share   NUMERIC,
+    total_cost       NUMERIC,
+    market_value     NUMERIC,
+    total_gain       NUMERIC,
+    total_gain_pct   NUMERIC,
+    days_gain        NUMERIC,
+    days_gain_pct    NUMERIC,
+    pct_of_portfolio NUMERIC,
+    raw              JSONB
+);

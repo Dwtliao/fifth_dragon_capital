@@ -70,7 +70,7 @@ def sync_accounts(account_filter=None, only=None):
                 cur.execute(upsert_sql, (
                     acct["accountIdKey"],
                     acct.get("accountId"),
-                    acct.get("accountName"),
+                    acct.get("accountName") or acct.get("accountDesc"),
                     acct.get("accountDesc"),
                     acct.get("accountMode"),
                     acct.get("accountType"),

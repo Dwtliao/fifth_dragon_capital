@@ -54,8 +54,11 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 0 | Raw sync pipeline | accounts, balances, positions, transactions, orders, order_details |
 | 0 | Scheduled sync (launchd) | Daily 6AM full sync, Sunday 7AM 30-day refresh, 10PM auth reminder |
 | 0 | Pipeline monitoring | sync_log table, triggered_by tracking (manual vs launchd) |
+| 0 | `migrate` command | Drop + recreate all materialized views + re-apply all SQL files. Run after any schema change. |
 | 1 | `ledger` table | Normalized event log, signed quantities, upsert-safe, source_line_id for future multi-leg |
 | 2 | `dim_symbols` | yfinance metadata: sector, industry, asset class, exchange |
+| 2 | `dim_sectors` | Canonical sector list with sort order — source of truth for sector dropdowns |
+| 2 | `dim_symbol_overrides` | Manual sector/asset class overrides — wins over yfinance in all views. Managed via P9. |
 | 2 | `dim_dates` | 2013–2027 date spine, NYSE trading day flag, ISO week/year |
 | 2 | `dim_accounts` | SCD Type 2 history, account_sk surrogate, dim_accounts_current view |
 | 2 | `fact_transactions` | One row per ledger event keyed to dims |
@@ -64,16 +67,23 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 2.5 | `reconciliation_log` | Ledger qty vs API positions snapshot, match/discrepancy/ledger_only/api_only |
 | 3 | `mv_unrealized_pnl` | Materialized view from latest positions snapshot |
 | 3 | `realized_gains` | Split-adjusted FIFO buy/sell lots, cost_basis, proceeds, realized_pnl, short/long term |
-| 3 | `mv_portfolio_timeseries` | Daily portfolio value, returns, volatility, drawdown |
-| 3 | `mv_allocations` | Sector / asset class breakdown and portfolio weights |
+| 3 | `mv_portfolio_timeseries` | Daily portfolio value, returns, volatility, drawdown — all accounts aggregated |
+| 3 | `mv_portfolio_timeseries_by_account` | Same as above with account_id_key as dimension — used by Performance page account filter |
+| 3 | `mv_allocations` | Sector / asset class breakdown with override priority: dim_symbol_overrides > yfinance |
+| 3 | `mv_attribution_timeseries` | Daily sector + asset class market value/P/L per account — attribution drill-downs |
 | 3 | `market_prices` | SPY benchmark price history via yfinance |
-| 3 | `mv_benchmark_comparison` | Portfolio return vs SPY, alpha, rolling comparison |
-| 4 | Pipeline Status page | Token freshness, job history, table health, Run Sync Now with live output |
+| 3 | `mv_benchmark_comparison` | Portfolio return vs SPY, alpha, rolling comparison — all accounts |
+| 3 | `mv_benchmark_comparison_by_account` | Per-account portfolio vs SPY — used when account filter is active |
+| 4 | Pipeline Status page (P1) | Token alert, full job runner (all batch commands), live output, sync_log history |
+| 4 | Portfolio Overview page (P2) | Account + position filters, KPIs, sector/asset class donuts with labels + summary tables |
+| 4 | Performance page (P3) | Equity curve, drawdown, rolling returns, attribution by account/sector/asset class, realized P/L |
+| 4 | Symbol Admin page (P9) | Sector/asset class override UI, manage sectors, auto-refreshes mv_allocations on save |
 
 ### Known Gaps / Open Issues
 
 | Issue | Severity | Description |
 |---|---|---|
+| #35 | Medium | OAuth re-auth flow not yet in the dashboard UI — still requires terminal |
 | #33 | Low | `dim_symbols.cusip` column never populated by `seed_symbols()` |
 | #34 | Deferred | Ledger only sources from `transactions`; option/spread fills from `orders` not yet mapped |
 
@@ -87,22 +97,23 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 
 | Order | Issue | Depends on | Notes |
 |---|---|---|---|
-| 1 | **#25** | #23, `mv_unrealized_pnl` | Portfolio Overview is now unblocked and can be built independently of the benchmark work. |
-| 2 | **#26** | #22, #24 | Performance needs both the portfolio timeseries and benchmark view. Realized P/L is now accurate because #32 is done. |
-| 3 | **#27** | ledger | Trading History can start now as a ledger explorer; the tag form still waits on #29. |
-| 4 | **#28** | #23, `dim_symbols` | Risk & Exposure is now unblocked by allocations and symbol metadata. |
-| 5 | **#29** | #27 | Strategy tags depend on a usable ledger explorer. |
-| 6 | **#33** | none | Low-priority backfill for fixed-income metadata. |
-| 7 | **#34** | none | Deferred design pass for options / multi-leg order mapping. |
+| 1 | **#27** | ledger | Trading History — ledger explorer; strategy tag form still waits on #29 |
+| 2 | **#28** | #23, `dim_symbols` | Risk & Exposure — sector concentration, position sizing, exposure analysis |
+| 3 | **#29** | #27 | Strategy tags — depends on usable ledger explorer |
+| 4 | **#35** | none | OAuth re-auth UI in Pipeline Status — two-step Streamlit widget |
+| 5 | **#33** | none | Low-priority backfill for `dim_symbols.cusip` |
+| 6 | **#34** | none | Deferred design pass for options / multi-leg order mapping |
 
-### Already completed, but worth remembering
+### Completed
 
-| Issue | Status | Why it matters |
+| Issue | Status | Notes |
 |---|---|---|
-| **#22** | Done | Provides `mv_portfolio_timeseries` for performance charts and benchmark comparison. |
-| **#23** | Done | Provides `mv_allocations` for Portfolio Overview and Risk & Exposure. |
-| **#24** | Done | Provides `market_prices` and `mv_benchmark_comparison` for benchmark charts. |
-| **#32** | Done | Split-adjusted FIFO is now in place, so realized P/L is correct for split positions. |
+| **#22** | ✅ Done | `mv_portfolio_timeseries` — all-account daily timeseries |
+| **#23** | ✅ Done | `mv_allocations` with sector override priority |
+| **#24** | ✅ Done | `market_prices` + `mv_benchmark_comparison` |
+| **#25** | ✅ Done | Portfolio Overview — account filter, position filters, donut charts with labels |
+| **#26** | ✅ Done | Performance — equity curve, drawdown, rolling returns, attribution, realized P/L |
+| **#32** | ✅ Done | Split-adjusted FIFO cost basis |
 
 ---
 
@@ -110,24 +121,31 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 
 ### Page 1: Pipeline Status ✅ (done)
 - Token freshness alert
-- Last sync status and job run history (sync_log)
+- Job run history (sync_log) with filter by job name
 - Table health (row counts)
-- Run Sync Now button with live output streaming
+- Run Jobs panel: all batch commands with live output streaming, persisted result after rerun
 
-### Page 2: Portfolio Overview (#25)
-- Total account value, cash, invested capital
-- Unrealized P/L vs cost basis
-- Allocation pie: sector / asset class (from mv_allocations)
-- Top positions by market value
-- Exposure by ticker
+### Page 2: Portfolio Overview ✅ (done)
+- Global account filter + position filters (symbol, sector, asset class)
+- KPIs: total account value, invested MV, cash, unrealized P/L, P/L % — all respond to position filters
+- Sector and asset class donut charts with % + $ slice labels and summary tables below
+- Full positions table with P/L %
 
-### Page 3: Performance (#26)
-- Equity curve (cumulative return from mv_portfolio_timeseries)
-- Daily/weekly/monthly return table
-- Rolling 30/90-day return vs SPY benchmark (mv_benchmark_comparison)
-- Rolling 30-day volatility
-- Max drawdown / drawdown-from-peak chart
-- Realized P/L by year/quarter (from realized_gains)
+### Page 3: Performance ✅ (done)
+- Global filters: Account | Period (YTD/1Y/3Y/All) | SPY toggle
+- KPIs: portfolio return, SPY return, alpha, max drawdown, volatility
+- Equity curve vs SPY (switches data source on account filter)
+- Drawdown from peak area chart
+- Rolling 30-day return vs SPY
+- Attribution tabs: By Account (overlaid equity curves), By Sector, By Asset Class (stacked area + P/L bar)
+- Realized P/L by year with local year filter and lot detail expander
+
+### Page 9: Symbol Admin ✅ (done)
+- Symbol table showing effective sector/asset class with source (override/yfinance/unknown)
+- Filter to "Unknown sector only" to quickly find gaps
+- Override form: set sector + asset class per symbol, with notes
+- Saving auto-refreshes mv_allocations
+- Manage Sectors tab: view canonical list, add custom sectors
 
 ### Page 4: Trading History (#27)
 - Win rate, avg win/loss, profit factor
@@ -148,32 +166,37 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 
 ## Intelligence Layer — View Specs
 
-### `mv_portfolio_timeseries` (#22)
-Source: `positions` snapshots (one per `fetched_at` timestamp)
+### `mv_portfolio_timeseries`
+Source: `positions` snapshots — all accounts aggregated
 
-Key columns:
-- `date`, `total_market_value`, `total_cost_basis`, `total_unrealized_pnl`
-- `daily_return_pct` (day-over-day market value change)
-- `rolling_7d_return_pct`, `rolling_30d_return_pct`, `rolling_90d_return_pct`
-- `rolling_volatility_30d` (stddev of daily returns)
-- `drawdown_from_peak_pct` (peak-to-trough from running max)
+Key columns: `date`, `total_market_value`, `total_cost_basis`, `total_unrealized_pnl`, `daily_return_pct`, `rolling_7/30/90d_return_pct`, `rolling_volatility_30d`, `drawdown_from_peak_pct`
 
-### `mv_allocations` (#23)
-Source: latest positions snapshot + `dim_symbols`
+### `mv_portfolio_timeseries_by_account`
+Source: same as above, partitioned by `account_id_key`
 
-Key columns:
-- `symbol`, `sector`, `asset_class`, `market_value`, `pct_of_portfolio`
-- Aggregated: sector totals, asset class totals
+Same columns + `account_id_key`. Rolling and drawdown metrics are PARTITION BY account.
 
-### `mv_benchmark_comparison` (#24)
-Source: `mv_portfolio_timeseries` + `market_prices` (SPY daily close via yfinance)
+### `mv_allocations`
+Source: latest positions snapshot + `dim_symbol_overrides` (priority) + `dim_symbols` (fallback)
 
-Key columns:
-- `date`, `portfolio_daily_return_pct`, `spy_daily_return_pct`, `alpha_pct`
-- `portfolio_cumulative_pct`, `spy_cumulative_pct`
-- `rolling_30d_portfolio_pct`, `rolling_30d_spy_pct`
+Key columns: `account_id_key`, `symbol`, `sector`, `asset_class`, `market_value`, `cost_basis`, `unrealized_pnl`, `pct_of_portfolio`
 
-Requires a `market_prices` table seeded from yfinance.
+### `mv_attribution_timeseries`
+Source: daily positions snapshots joined to dim_symbol_overrides / dim_symbols
+
+Key columns: `date`, `account_id_key`, `sector`, `asset_class`, `market_value`, `cost_basis`, `unrealized_pnl`, `pct_of_account`
+
+One row per (date, account, sector, asset_class). Used for attribution stacked area charts.
+
+### `mv_benchmark_comparison`
+Source: `mv_portfolio_timeseries` + `market_prices` (SPY)
+
+Key columns: `date`, `portfolio_daily_return_pct`, `spy_daily_return_pct`, `portfolio_cumulative_pct`, `spy_cumulative_pct`, `rolling_30d_portfolio_pct`, `rolling_30d_spy_pct`, `alpha_pct`
+
+### `mv_benchmark_comparison_by_account`
+Source: `mv_portfolio_timeseries_by_account` + `market_prices` (SPY)
+
+Same columns + `account_id_key`. Cumulative returns anchored to each account's first date.
 
 ---
 

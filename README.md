@@ -104,14 +104,21 @@ python -m etrade_sync build-ledger --full-rebuild
 # FIFO cost basis matching — rebuilds realized_gains table
 python -m etrade_sync build-realized-pnl
 
-# Refresh all materialized views (mv_unrealized_pnl, ...)
+# Refresh all materialized views
 python -m etrade_sync refresh-views
+
+# Apply schema changes — drop + recreate all materialized views, re-run all SQL files
+# Run this after any data_model/*.sql change. Table data is preserved.
+python -m etrade_sync migrate
 
 # Compare ledger reconstructed positions to latest API snapshot
 python -m etrade_sync reconcile
 
 # Seed symbol metadata (sector, industry, asset class) via yfinance
 python -m etrade_sync seed-symbols
+
+# Seed SPY benchmark price history via yfinance
+python -m etrade_sync seed-prices
 
 # Generate date spine (calendar + NYSE trading day flags)
 python -m etrade_sync seed-dates
@@ -153,6 +160,8 @@ All tables are created automatically on first sync. Schema definitions live in `
 | Table | Description |
 |---|---|
 | `dim_symbols` | Ticker metadata: CUSIP, sector, industry, asset class, exchange (via yfinance) |
+| `dim_sectors` | Canonical sector list with sort order — source of truth for the sector dropdown in the dashboard |
+| `dim_symbol_overrides` | Manual sector/asset class overrides per symbol — takes precedence over yfinance in all views |
 | `dim_dates` | Date spine 2013–2027: ISO week/year, NYSE trading day flag, fiscal period |
 | `dim_accounts` | SCD Type 2 account history: `account_sk` surrogate, `effective_from/to`, `is_current`. `dim_accounts_current` view for current-state queries. |
 
@@ -164,12 +173,19 @@ All tables are created automatically on first sync. Schema definitions live in `
 | `fact_positions` | Point-in-time position snapshots, grain on `(account_id_key, symbol, fetched_at)` |
 | `fact_cashflows` | Cash-only events: deposits, withdrawals, dividends, interest, fees |
 
-### Analytics tables — `data_model/050_*.sql` – `051_*.sql`
+### Analytics tables — `data_model/050_*.sql` – `058_*.sql`
 
 | Table/View | Description |
 |---|---|
 | `mv_unrealized_pnl` | Materialized view: unrealized P/L from latest positions snapshot |
-| `realized_gains` | FIFO-matched buy/sell lots with cost basis, proceeds, realized P/L, holding period, short/long term classification |
+| `realized_gains` | FIFO-matched buy/sell lots with split-adjusted cost basis, proceeds, realized P/L, short/long term |
+| `mv_portfolio_timeseries` | Daily portfolio value, returns, rolling metrics, drawdown — aggregated across all accounts |
+| `mv_allocations` | Current sector / asset class breakdown with override priority: `dim_symbol_overrides` > yfinance |
+| `market_prices` | SPY daily close prices via yfinance — used for benchmark comparison |
+| `mv_benchmark_comparison` | Portfolio return vs SPY: cumulative, rolling 30d, alpha — all-accounts |
+| `mv_portfolio_timeseries_by_account` | Same as `mv_portfolio_timeseries` but with `account_id_key` as a dimension |
+| `mv_attribution_timeseries` | Daily sector + asset class market value and P/L per account — used for attribution drill-downs |
+| `mv_benchmark_comparison_by_account` | Portfolio vs SPY cumulative/rolling comparison per account |
 
 ---
 
@@ -197,9 +213,12 @@ streamlit run dashboard/app.py
 
 | Page | Description |
 |---|---|
-| Pipeline Status | Token freshness alert, last sync status, job run history, table health, last sync times, Run Sync Now button with live output streaming |
+| Pipeline Status | Token freshness alert, job run history, table health, last sync times. **Run Jobs** panel covers all batch commands (sync, migrate, refresh-views, build-ledger, build-realized-pnl, seed-symbols, seed-prices, seed-dates, reconcile) with live output streaming. |
+| Portfolio Overview | Total account value, cash, invested capital, unrealized P/L. Account filter + position filters (symbol, sector, asset class). Sector and asset class donut charts with % and $ labels and summary tables. Full positions table. All KPIs and charts respond to active filters. |
+| Performance | Equity curve vs SPY, drawdown, rolling 30d returns, rolling volatility. Account + Period + SPY toggle filters. Attribution drill-downs by Account (overlaid equity curves), Sector, and Asset Class (stacked area + unrealized P/L bar). Realized P/L by year with lot detail table. |
+| Symbol Admin (P9) | Manage sector and asset class overrides per symbol. Override wins over yfinance data in all views. Manage Sectors tab to add custom sectors. Saving an override auto-refreshes `mv_allocations`. |
 
-More pages (portfolio overview, performance, trading history, risk/exposure) are in progress.
+Trading History (#27), Risk & Exposure (#28), and Strategy Tags (#29) are in progress.
 
 ---
 

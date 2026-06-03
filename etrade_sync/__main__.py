@@ -233,6 +233,14 @@ def main():
                 print(f"[{_ts()}] WARNING: view refresh failed — {e}")
             print(f"[{_ts()}] views done")
 
+            print(f"[{_ts()}] reconciling positions...")
+            try:
+                from etrade_sync.analytics.reconcile import reconcile
+                reconcile()
+            except Exception as e:
+                print(f"[{_ts()}] WARNING: reconcile failed — {e}")
+            print(f"[{_ts()}] reconcile done")
+
         # Summary + sync_log
         elapsed_total = time.time() - start
         print(f"\n[{_ts()}] Sync complete in {elapsed_total:.1f}s")

@@ -45,7 +45,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 
 ---
 
-## Current State (as of 2026-06-03)
+## Current State (as of 2026-06-03, updated)
 
 ### ✅ Completed
 
@@ -75,8 +75,9 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 3 | `mv_benchmark_comparison` | Portfolio return vs SPY, alpha, rolling comparison — all accounts |
 | 3 | `mv_benchmark_comparison_by_account` | Per-account portfolio vs SPY — used when account filter is active |
 | 4 | Pipeline Status page (P1) | Token alert, full job runner (all batch commands), live output, sync_log history |
-| 4 | Portfolio Overview page (P2) | Account + position filters, KPIs, sector/asset class donuts with labels + summary tables |
+| 4 | Portfolio Overview page (P2) | Account + position filters, KPIs, sector/asset class donuts with labels + summary tables. Cash KPI uses `cash_available_for_invest` (correct for margin + IRA accounts). |
 | 4 | Performance page (P3) | Equity curve, drawdown, rolling returns, attribution by account/sector/asset class, realized P/L |
+| 4 | Trading History page (P4) | P/L heatmap, cash flow/income charts, trade scatterplot, ledger explorer with active-filter display, strategy tag form |
 | 4 | Symbol Admin page (P9) | Sector/asset class override UI, manage sectors, auto-refreshes mv_allocations on save |
 
 ### Known Gaps / Open Issues
@@ -97,12 +98,11 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 
 | Order | Issue | Depends on | Notes |
 |---|---|---|---|
-| 1 | **#27** | ledger | Trading History — ledger explorer; strategy tag form still waits on #29 |
-| 2 | **#28** | #23, `dim_symbols` | Risk & Exposure — sector concentration, position sizing, exposure analysis |
-| 3 | **#29** | #27 | Strategy tags — depends on usable ledger explorer |
-| 4 | **#35** | none | OAuth re-auth UI in Pipeline Status — two-step Streamlit widget |
-| 5 | **#33** | none | Low-priority backfill for `dim_symbols.cusip` |
-| 6 | **#34** | none | Deferred design pass for options / multi-leg order mapping |
+| 1 | **#28** | #23, `dim_symbols` | Risk & Exposure — sector concentration, position sizing, exposure analysis |
+| 2 | **#29** | #27 | Strategy tags — depends on usable ledger explorer |
+| 3 | **#35** | none | OAuth re-auth UI in Pipeline Status — two-step Streamlit widget |
+| 4 | **#33** | none | Low-priority backfill for `dim_symbols.cusip` |
+| 5 | **#34** | none | Deferred design pass for options / multi-leg order mapping |
 
 ### Completed
 
@@ -113,6 +113,7 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 | **#24** | ✅ Done | `market_prices` + `mv_benchmark_comparison` |
 | **#25** | ✅ Done | Portfolio Overview — account filter, position filters, donut charts with labels |
 | **#26** | ✅ Done | Performance — equity curve, drawdown, rolling returns, attribution, realized P/L |
+| **#27** | ✅ Done | Trading History — P/L heatmap, cash flow/income charts, trade scatterplot, ledger explorer, strategy tag form |
 | **#32** | ✅ Done | Split-adjusted FIFO cost basis |
 
 ---
@@ -211,3 +212,5 @@ Same columns + `account_id_key`. Cumulative returns anchored to each account's f
 | Strategy tags: manual or auto? | Manual via Streamlit form first; auto-tag options later (#34 dependency) |
 | Dashboard deployment? | Local only for now; Streamlit Cloud possible later |
 | Orders → ledger? | Deferred (#34) — stock fills covered by transactions; option/spread mapping needs separate design pass |
+| Cash KPI field? | Use `cash_available_for_invest` (`cashAvailableForInvestment` from E*TRADE API). `net_cash` includes margin buying power on margin accounts (wrong); `cash_balance` excludes money market funds on IRA accounts (wrong). `cash_available_for_invest` is correct for all account types. |
+| E*TRADE transaction history depth? | API returns ~2 months for IRA Rollover despite requesting 2-year lookback. This is an E*TRADE API limitation, not a code bug. History available via CSV export only. |

@@ -112,7 +112,7 @@ positions_display = (
 
 cash_row = query(f"""
     SELECT
-        round(sum(cash_balance)::numeric, 2)        AS cash_balance,
+        round(sum(cash_available_for_invest)::numeric, 2) AS net_cash,
         round(sum(total_account_value)::numeric, 2) AS total_account_value
     FROM balances
     WHERE fetched_at = (SELECT MAX(fetched_at) FROM balances)
@@ -141,7 +141,7 @@ if filters_active:
         + (f"asset class={sel_asset_class}" if sel_asset_class else "")
     )
 
-cash     = float(cash_row.get("cash_balance")        or 0)
+cash     = float(cash_row.get("net_cash")             or 0)
 total_av = float(cash_row.get("total_account_value") or 0)
 
 delta_label = None
@@ -153,8 +153,8 @@ c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Total Account Value", f"${total_av:,.0f}", delta=delta_label,
           help="Cash + invested value for selected account. Not affected by position filters.")
 c2.metric("Invested (Market Value)", f"${mv_filtered:,.0f}")
-c3.metric("Cash Balance", f"${cash:,.0f}",
-          help="Account cash balance. Not affected by position filters.")
+c3.metric("Cash", f"${cash:,.0f}",
+          help="Net cash including money market funds. Not affected by position filters.")
 c4.metric("Unrealized P/L", f"${upnl_filtered:,.0f}")
 c5.metric("Unrealized P/L %", f"{upnl_pct:.2f}%")
 

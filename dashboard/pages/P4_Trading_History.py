@@ -381,6 +381,24 @@ with tab_ledger:
 
     sym_ledger = _sw.replace("AND symbol", "AND l.symbol")
 
+    # Show active filters for diagnostics
+    active_filters = []
+    if account_filter:
+        active_filters.append(f"account={sel_account}")
+    active_filters.append(f"period={sel_period} (cutoff {cutoff_s})")
+    active_filters.append(f"types={sel_types}")
+    if sym_search.strip():
+        active_filters.append(f"symbol~'{sym_search.strip()}'")
+    st.caption("Active filters: " + " | ".join(active_filters))
+
+    total_count = query(f"""
+        SELECT COUNT(*) AS n
+        FROM ledger l
+        JOIN accounts a USING (account_id_key)
+        WHERE l.event_timestamp >= %(cutoff)s
+          {_aw} {type_filter} {sym_ledger}
+    """, {"cutoff": cutoff_s, **_awp, **type_params, **_swp})[0]["n"]
+
     ledger_df = pd.DataFrame(query(f"""
         SELECT
             l.event_timestamp::date  AS date,
@@ -402,7 +420,7 @@ with tab_ledger:
     if ledger_df.empty:
         st.info("No ledger entries match the current filters.")
     else:
-        st.caption(f"Showing {len(ledger_df):,} rows (limit {ledger_limit})")
+        st.caption(f"Showing {len(ledger_df):,} of {total_count:,} matching rows (limit {ledger_limit})")
         ledger_display = ledger_df.copy()
         ledger_display["date"]       = pd.to_datetime(ledger_display["date"]).dt.strftime("%Y-%m-%d")
         ledger_display["net_amount"] = ledger_display["net_amount"].apply(

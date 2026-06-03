@@ -120,7 +120,19 @@ def build_realized_pnl():
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE realized_gains")
+            # Preserve trade tags keyed by (account, symbol, buy_date, sell_date)
+            # so they survive the truncate and can be re-linked to new IDs.
+            cur.execute("""
+                SELECT tt.account_id_key, tt.symbol,
+                       rg.buy_date, rg.sell_date,
+                       tt.tag, tt.notes
+                FROM trade_tags tt
+                JOIN realized_gains rg ON rg.id = tt.realized_gain_id
+            """)
+            saved_tags = cur.fetchall()
+
+            cur.execute("TRUNCATE TABLE trade_tags, realized_gains")
+
             if lots:
                 cur.executemany(
                     """
@@ -134,6 +146,28 @@ def build_realized_pnl():
                     """,
                     lots,
                 )
+
+            # Re-link saved tags to new realized_gains IDs
+            relinked = 0
+            for acct, sym, buy_date, sell_date, tag, notes in saved_tags:
+                cur.execute("""
+                    SELECT id FROM realized_gains
+                    WHERE account_id_key = %s AND symbol = %s
+                      AND buy_date = %s AND sell_date = %s
+                    LIMIT 1
+                """, (acct, sym, buy_date, sell_date))
+                row = cur.fetchone()
+                if row:
+                    cur.execute("""
+                        INSERT INTO trade_tags
+                            (account_id_key, symbol, realized_gain_id, tag, notes)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (realized_gain_id, tag) DO NOTHING
+                    """, (acct, sym, row[0], tag, notes))
+                    relinked += 1
+
+            if saved_tags:
+                print(f"  realized_pnl: re-linked {relinked}/{len(saved_tags)} trade tag(s)")
 
     print(f"  realized_pnl: {len(lots)} FIFO lot(s) matched")
     return len(lots)

@@ -2,6 +2,8 @@ from etrade_sync.db import get_connection
 
 MATERIALIZED_VIEWS = [
     "mv_unrealized_pnl",
+    "mv_portfolio_timeseries",
+    "mv_allocations",
 ]
 
 

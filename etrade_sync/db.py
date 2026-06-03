@@ -8,8 +8,11 @@ DATA_MODEL_DIR = Path(__file__).parent.parent / "data_model"
 
 # Drop in reverse dependency order so CASCADE isn't needed.
 _MATERIALIZED_VIEWS = [
+    "mv_benchmark_comparison_by_account",  # depends on mv_portfolio_timeseries_by_account
     "mv_benchmark_comparison",
+    "mv_attribution_timeseries",
     "mv_allocations",
+    "mv_portfolio_timeseries_by_account",
     "mv_portfolio_timeseries",
     "mv_unrealized_pnl",
 ]

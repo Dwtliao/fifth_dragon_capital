@@ -66,6 +66,8 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 3 | `realized_gains` | Split-adjusted FIFO buy/sell lots, cost_basis, proceeds, realized_pnl, short/long term |
 | 3 | `mv_portfolio_timeseries` | Daily portfolio value, returns, volatility, drawdown |
 | 3 | `mv_allocations` | Sector / asset class breakdown and portfolio weights |
+| 3 | `market_prices` | SPY benchmark price history via yfinance |
+| 3 | `mv_benchmark_comparison` | Portfolio return vs SPY, alpha, rolling comparison |
 | 4 | Pipeline Status page | Token freshness, job history, table health, Run Sync Now with live output |
 
 ### Known Gaps / Open Issues
@@ -85,14 +87,13 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 
 | Order | Issue | Depends on | Notes |
 |---|---|---|---|
-| 1 | **#24** | #22 | Benchmark comparison is the next intelligence-layer unlock once daily portfolio timeseries exists. |
-| 2 | **#25** | #23, `mv_unrealized_pnl` | Portfolio Overview is now unblocked and can be built independently of #24. |
-| 3 | **#26** | #22, #24 | Performance needs both the portfolio timeseries and benchmark view. Realized P/L is now accurate because #32 is done. |
-| 4 | **#27** | ledger | Trading History can start now as a ledger explorer; the tag form still waits on #29. |
-| 5 | **#28** | #23, `dim_symbols` | Risk & Exposure is now unblocked by allocations and symbol metadata. |
-| 6 | **#29** | #27 | Strategy tags depend on a usable ledger explorer. |
-| 7 | **#33** | none | Low-priority backfill for fixed-income metadata. |
-| 8 | **#34** | none | Deferred design pass for options / multi-leg order mapping. |
+| 1 | **#25** | #23, `mv_unrealized_pnl` | Portfolio Overview is now unblocked and can be built independently of the benchmark work. |
+| 2 | **#26** | #22, #24 | Performance needs both the portfolio timeseries and benchmark view. Realized P/L is now accurate because #32 is done. |
+| 3 | **#27** | ledger | Trading History can start now as a ledger explorer; the tag form still waits on #29. |
+| 4 | **#28** | #23, `dim_symbols` | Risk & Exposure is now unblocked by allocations and symbol metadata. |
+| 5 | **#29** | #27 | Strategy tags depend on a usable ledger explorer. |
+| 6 | **#33** | none | Low-priority backfill for fixed-income metadata. |
+| 7 | **#34** | none | Deferred design pass for options / multi-leg order mapping. |
 
 ### Already completed, but worth remembering
 
@@ -100,6 +101,7 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 |---|---|---|
 | **#22** | Done | Provides `mv_portfolio_timeseries` for performance charts and benchmark comparison. |
 | **#23** | Done | Provides `mv_allocations` for Portfolio Overview and Risk & Exposure. |
+| **#24** | Done | Provides `market_prices` and `mv_benchmark_comparison` for benchmark charts. |
 | **#32** | Done | Split-adjusted FIFO is now in place, so realized P/L is correct for split positions. |
 
 ---
@@ -124,7 +126,7 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 - Daily/weekly/monthly return table
 - Rolling 30/90-day return vs SPY benchmark (mv_benchmark_comparison)
 - Rolling 30-day volatility
-- Max drawdown chart
+- Max drawdown / drawdown-from-peak chart
 - Realized P/L by year/quarter (from realized_gains)
 
 ### Page 4: Trading History (#27)
@@ -164,11 +166,12 @@ Key columns:
 - Aggregated: sector totals, asset class totals
 
 ### `mv_benchmark_comparison` (#24)
-Source: `mv_portfolio_timeseries` + market price history table (SPY daily close via yfinance)
+Source: `mv_portfolio_timeseries` + `market_prices` (SPY daily close via yfinance)
 
 Key columns:
-- `date`, `portfolio_return_pct`, `spy_return_pct`, `alpha`
-- `rolling_30d_portfolio`, `rolling_30d_spy`
+- `date`, `portfolio_daily_return_pct`, `spy_daily_return_pct`, `alpha_pct`
+- `portfolio_cumulative_pct`, `spy_cumulative_pct`
+- `rolling_30d_portfolio_pct`, `rolling_30d_spy_pct`
 
 Requires a `market_prices` table seeded from yfinance.
 

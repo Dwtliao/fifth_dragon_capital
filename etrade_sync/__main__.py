@@ -19,7 +19,7 @@ def _table_counts(conn):
     counts = {}
     with conn.cursor() as cur:
         for table in ("accounts", "balances", "positions", "transactions",
-                      "orders", "order_details", "ledger"):
+                      "orders", "order_details", "ledger", "realized_gains"):
             try:
                 cur.execute(f"SELECT count(*) FROM {table}")
                 counts[table] = cur.fetchone()[0]
@@ -42,6 +42,8 @@ def main():
         "--full-rebuild", action="store_true",
         help="Truncate ledger (and dependent fact tables) before repopulating"
     )
+
+    sub.add_parser("build-realized-pnl", help="FIFO cost basis matching — rebuild realized_gains")
 
     sub.add_parser("seed-symbols", help="Seed dim_symbols with yfinance metadata")
     sub.add_parser("seed-dates", help="Generate dim_dates date spine")
@@ -84,6 +86,20 @@ def main():
         create_tables()
         if args.status == "token_stale":
             log_token_stale(args.job)
+
+    # ----------------------------------------------------- build-realized-pnl
+    elif args.command == "build-realized-pnl":
+        from etrade_sync.db import create_tables
+        from etrade_sync.analytics.realized_pnl import build_realized_pnl
+        from etrade_sync.analytics.sync_log import start_run, finish_run
+        create_tables()
+        log_id = start_run("build_realized_pnl")
+        try:
+            count = build_realized_pnl()
+            finish_run(log_id, "success", rows_synced={"realized_gains": count})
+        except Exception as e:
+            finish_run(log_id, "failed", error_msg=str(e))
+            raise
 
     # ---------------------------------------------------------- build-ledger
     elif args.command == "build-ledger":
@@ -225,6 +241,14 @@ def main():
             except Exception as e:
                 print(f"[{_ts()}] WARNING: ledger rebuild failed — {e}")
             print(f"[{_ts()}] ledger done")
+
+            print(f"[{_ts()}] realized pnl...")
+            try:
+                from etrade_sync.analytics.realized_pnl import build_realized_pnl
+                build_realized_pnl()
+            except Exception as e:
+                print(f"[{_ts()}] WARNING: realized pnl failed — {e}")
+            print(f"[{_ts()}] realized pnl done")
 
             print(f"[{_ts()}] refreshing views...")
             try:

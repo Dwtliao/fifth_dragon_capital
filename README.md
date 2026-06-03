@@ -1,6 +1,6 @@
 # Fifth Dragon Capital — E*TRADE Data Pipeline
 
-A Python CLI that syncs your E*TRADE account data to a local Postgres database. Pulls accounts, balances, positions, transactions, and orders on demand.
+A Python CLI that syncs E*TRADE account data to a local Postgres database and builds a personal finance analytics layer on top of it. Pulls accounts, balances, positions, transactions, and orders; constructs a normalized ledger; runs FIFO cost basis matching; and exposes everything through a Streamlit dashboard.
 
 ---
 
@@ -9,6 +9,7 @@ A Python CLI that syncs your E*TRADE account data to a local Postgres database. 
 - Python 3.12+
 - PostgreSQL running locally
 - E*TRADE API credentials ([developer.etrade.com](https://developer.etrade.com))
+- `terminal-notifier` for macOS background notifications: `brew install terminal-notifier`
 
 ---
 
@@ -49,16 +50,27 @@ This opens your browser to the E*TRADE authorization page. After approving, past
 Tokens expire daily at midnight ET. Re-run `auth` when you see a 401 error.
 
 ```bash
-# Step 2: Sync all data
+# Step 2: Sync all data and build the analytics layer
 python -m etrade_sync sync
+
+# Step 3: Seed reference tables (one-time, re-run when new symbols appear)
+python -m etrade_sync seed-symbols   # sector/industry metadata via yfinance
+python -m etrade_sync seed-dates     # calendar + NYSE trading day spine
+
+# Step 4: Launch the dashboard
+streamlit run dashboard/app.py
 ```
+
+A full `sync` automatically runs the ledger rebuild, FIFO realized P/L matching, materialized view refresh, and position reconciliation after pulling data from E*TRADE.
 
 ---
 
 ## Usage
 
+### Sync
+
 ```bash
-# Sync everything (incremental, uses watermarks)
+# Sync everything (incremental, uses watermarks in sync_state)
 python -m etrade_sync sync
 
 # Sync a single account
@@ -71,28 +83,37 @@ python -m etrade_sync sync --only positions
 python -m etrade_sync sync --only transactions
 python -m etrade_sync sync --only orders
 
-# Historical range options (mutually exclusive)
+# Historical range options (mutually exclusive; apply to transactions + orders only)
 python -m etrade_sync sync --days 30            # last N days
 python -m etrade_sync sync --from-beginning     # full 2-year history
 python -m etrade_sync sync --from 2025-01-01    # from a specific date
-python -m etrade_sync sync --from 2025-01-01 --to 2025-06-30  # date range
+python -m etrade_sync sync --from 2025-01-01 --to 2025-06-30
 ```
 
 ### Analytics layer
 
-After syncing, populate the BI foundation tables:
+These run automatically after every full sync. Run manually after schema changes or to force a rebuild:
 
 ```bash
-# Build normalized event ledger from transactions (incremental upsert)
+# Rebuild normalized ledger from transactions (incremental upsert)
 python -m etrade_sync build-ledger
 
-# Full rebuild — truncates ledger and dependent fact tables, then repopulates
+# Full rebuild — truncates ledger and dependent tables before repopulating
 python -m etrade_sync build-ledger --full-rebuild
+
+# FIFO cost basis matching — rebuilds realized_gains table
+python -m etrade_sync build-realized-pnl
+
+# Refresh all materialized views (mv_unrealized_pnl, ...)
+python -m etrade_sync refresh-views
+
+# Compare ledger reconstructed positions to latest API snapshot
+python -m etrade_sync reconcile
 
 # Seed symbol metadata (sector, industry, asset class) via yfinance
 python -m etrade_sync seed-symbols
 
-# Generate date spine (calendar + trading day flags)
+# Generate date spine (calendar + NYSE trading day flags)
 python -m etrade_sync seed-dates
 ```
 
@@ -100,80 +121,55 @@ python -m etrade_sync seed-dates
 
 ## Database Schema
 
-### Raw sync tables (Layer 0)
+All tables are created automatically on first sync. Schema definitions live in `data_model/` as numbered SQL files executed in order.
 
-7 tables populated by the sync pipeline:
+### Raw sync tables — `data_model/001_*.sql` – `007_*.sql`
 
-| Table | Type | Key |
+| Table | Strategy | Key |
 |---|---|---|
-| `accounts` | upsert | `account_id_key` |
-| `balances` | append (point-in-time snapshots) | — |
-| `positions` | append (point-in-time snapshots) | — |
-| `transactions` | upsert | `transaction_id` |
-| `orders` | upsert header | `order_id` |
-| `order_details` | replace legs on update | FK → `order_id` |
-| `sync_state` | watermarks | `(account_id_key, data_type)` |
+| `accounts` | Upsert | `account_id_key` |
+| `balances` | Append (point-in-time snapshots) | — |
+| `positions` | Append (point-in-time snapshots) | — |
+| `transactions` | Upsert | `transaction_id` |
+| `orders` | Upsert header + replace legs | `order_id` |
+| `order_details` | Replaced on each order update | FK → `order_id` |
+| `sync_state` | Watermarks per `(account_id_key, data_type)` | — |
 
-Tables are created automatically on first sync. Schema definitions live in `data_model/001_*.sql` through `007_*.sql`.
-
-### Analytics tables (Layer 1–2)
-
-Built on top of the raw sync tables:
-
-| Table | Layer | Description |
-|---|---|---|
-| `ledger` | 1 | Normalized event log — one row per financial event, signed quantities |
-| `dim_symbols` | 2 | Ticker metadata: sector, industry, asset class (seeded via yfinance) |
-| `dim_dates` | 2 | Date spine with ISO week/year and NYSE trading day flag |
-| `dim_accounts` | 2 | Account dimension with SCD Type 2 history + `dim_accounts_current` view |
-
-Schema definitions: `data_model/010_*.sql` through `020_*.sql`.
-
-### Fact tables (Layer 2 — draft, not yet built)
+### Pipeline monitoring — `data_model/008_*.sql` – `009_*.sql`
 
 | Table | Description |
 |---|---|
-| `fact_transactions` | One row per financial event, keyed to dims |
-| `fact_positions` | Point-in-time position snapshots, grain enforced on (account, symbol, fetched_at) |
-| `fact_cashflows` | Cash-only events (deposits, withdrawals, dividends, interest, fees) |
+| `sync_log` | One row per pipeline run — job name, status, duration, row counts, triggered_by |
+| `reconciliation_log` | Per-position comparison of ledger qty vs latest API snapshot |
 
-Schema definitions: `data_model/030_*.sql` through `032_*.sql`.
+### Ledger — `data_model/010_*.sql`
 
----
+| Table | Description |
+|---|---|
+| `ledger` | Normalized event log — one row per financial event, signed quantities (positive=acquired, negative=disposed). Grain extended with `source_line_id` for future multi-leg order fan-out. |
 
-## Verification
+### Dimension tables — `data_model/011_*.sql` – `020_*.sql`
 
-Connect with `psql $DATABASE_URL` and run:
+| Table | Description |
+|---|---|
+| `dim_symbols` | Ticker metadata: CUSIP, sector, industry, asset class, exchange (via yfinance) |
+| `dim_dates` | Date spine 2013–2027: ISO week/year, NYSE trading day flag, fiscal period |
+| `dim_accounts` | SCD Type 2 account history: `account_sk` surrogate, `effective_from/to`, `is_current`. `dim_accounts_current` view for current-state queries. |
 
-```sql
--- Row counts across all tables
-SELECT 'accounts'      AS tbl, count(*) FROM accounts
-UNION ALL SELECT 'balances',      count(*) FROM balances
-UNION ALL SELECT 'positions',     count(*) FROM positions
-UNION ALL SELECT 'transactions',  count(*) FROM transactions
-UNION ALL SELECT 'orders',        count(*) FROM orders
-UNION ALL SELECT 'order_details', count(*) FROM order_details;
+### Fact tables — `data_model/030_*.sql` – `032_*.sql`
 
--- Latest positions by market value
-SELECT symbol, security_type, quantity, market_value, total_gain_pct
-FROM positions
-WHERE fetched_at = (SELECT MAX(fetched_at) FROM positions)
-ORDER BY market_value DESC NULLS LAST
-LIMIT 20;
+| Table | Description |
+|---|---|
+| `fact_transactions` | One row per financial event keyed to dims |
+| `fact_positions` | Point-in-time position snapshots, grain on `(account_id_key, symbol, fetched_at)` |
+| `fact_cashflows` | Cash-only events: deposits, withdrawals, dividends, interest, fees |
 
--- Recent transactions
-SELECT transaction_date, transaction_type, description, amount, symbol
-FROM transactions
-ORDER BY transaction_date DESC NULLS LAST
-LIMIT 20;
+### Analytics tables — `data_model/050_*.sql` – `051_*.sql`
 
--- Orders with legs
-SELECT o.order_id, o.order_type, o.status, o.placed_time,
-       d.symbol, d.order_action, d.ordered_quantity, d.security_type
-FROM orders o
-JOIN order_details d ON d.order_id = o.order_id
-ORDER BY o.placed_time DESC NULLS LAST;
-```
+| Table/View | Description |
+|---|---|
+| `mv_unrealized_pnl` | Materialized view: unrealized P/L from latest positions snapshot |
+| `realized_gains` | FIFO-matched buy/sell lots with cost basis, proceeds, realized P/L, holding period, short/long term classification |
 
 ---
 
@@ -182,16 +178,32 @@ ORDER BY o.placed_time DESC NULLS LAST;
 | Data type | Strategy | Notes |
 |---|---|---|
 | Accounts | Upsert | Re-run safe; `updated_at` tracks changes |
-| Balances | Append | Each run adds a new snapshot for trend tracking |
-| Positions | Append | Each run adds a new snapshot; query by `MAX(fetched_at)` for current |
+| Balances | Append | Each run adds a snapshot for trend tracking |
+| Positions | Append | Each run adds a snapshot; query by `MAX(fetched_at)` for current |
 | Transactions | Incremental | Watermark in `sync_state`; 2-year lookback on first run |
 | Orders | Incremental | Header upsert + legs replaced on each sync |
+| Ledger | Upsert from transactions | Auto-runs after every full sync |
+| Realized P/L | Full rebuild | FIFO-matched; auto-runs after ledger rebuild |
+| Materialized views | `REFRESH CONCURRENTLY` | Auto-runs after full sync |
+| Reconciliation | Full rebuild | Compares ledger qty to API positions; auto-runs after full sync |
+
+---
+
+## Dashboard
+
+```bash
+streamlit run dashboard/app.py
+```
+
+| Page | Description |
+|---|---|
+| Pipeline Status | Token freshness alert, last sync status, job run history, table health, last sync times, Run Sync Now button with live output streaming |
+
+More pages (portfolio overview, performance, trading history, risk/exposure) are in progress.
 
 ---
 
 ## Automated Sync (macOS launchd)
-
-Two scheduled jobs run automatically via macOS launchd:
 
 | Job | Schedule | Script | Log |
 |---|---|---|---|
@@ -199,7 +211,7 @@ Two scheduled jobs run automatically via macOS launchd:
 | Weekly | 7:00 AM every Sunday | `scripts/sync_weekly.sh` | `logs/sync_weekly.log` |
 | Auth reminder | 10:00 PM every day | `scripts/auth_reminder.sh` | — |
 
-The daily job syncs accounts, balances, positions, transactions, and orders. The weekly job does a full 30-day history refresh.
+The daily job runs a full sync (all data types + ledger rebuild + realized P/L + view refresh + reconcile). The weekly job does a full 30-day history refresh.
 
 ### Install the launchd agents
 
@@ -224,15 +236,13 @@ launchctl unload ~/Library/LaunchAgents/com.fifthdragon.auth-reminder.plist
 
 **E*TRADE OAuth tokens expire every day at midnight Eastern Time.**
 
-At **10:00 PM** each night, the auth reminder job checks if your token is stale. If it is, you'll get a macOS notification: **"Re-authenticate tonight."** Re-authenticate before midnight and the 6 AM sync will run without issues:
+At **10:00 PM** each night, the auth reminder job checks if your token is stale. If it is, you'll get a macOS notification. Re-authenticate before midnight so the 6 AM sync runs cleanly:
 
 ```bash
 python -m etrade_sync auth
 ```
 
-This opens your browser to the E*TRADE authorization page. After approving, paste the verifier code. The new token is saved to `~/.config/etrade/tokens.json` (mode 600). If you already re-authenticated that day, the 10 PM reminder stays silent.
-
-If the sync scripts detect a stale or missing token at runtime, they send a notification and exit cleanly instead of failing with 401 errors.
+This opens your browser to the E*TRADE authorization page. After approving, paste the verifier code. The new token is saved to `~/.config/etrade/tokens.json` (mode 600). If the sync scripts detect a stale or missing token at runtime, they send a notification and exit cleanly instead of hitting 401 errors.
 
 ---
 
@@ -241,3 +251,32 @@ If the sync scripts detect a stale or missing token at runtime, they send a noti
 Set `ETRADE_DEV=true` in `.env` for the sandbox (`apisb.etrade.com`). Switch to `ETRADE_DEV=false` for production (`api.etrade.com`). Re-run `python -m etrade_sync auth` whenever you change environments.
 
 Note: the E*TRADE sandbox orders endpoint is unreliable by design (intended for order placement testing only). Orders sync is fully verified against production.
+
+---
+
+## Verification
+
+```sql
+-- Row counts across all tables
+SELECT 'accounts'       AS tbl, count(*) FROM accounts
+UNION ALL SELECT 'transactions', count(*) FROM transactions
+UNION ALL SELECT 'ledger',       count(*) FROM ledger
+UNION ALL SELECT 'realized_gains', count(*) FROM realized_gains;
+
+-- Current unrealized P/L
+SELECT symbol, quantity, cost_basis, market_value, unrealized_pnl, unrealized_pnl_pct
+FROM mv_unrealized_pnl
+ORDER BY unrealized_pnl DESC;
+
+-- Realized gains/losses this year
+SELECT symbol, buy_date, sell_date, quantity, cost_basis, proceeds, realized_pnl, term
+FROM realized_gains
+WHERE sell_date >= date_trunc('year', current_date)
+ORDER BY sell_date;
+
+-- Recent pipeline runs
+SELECT job_name, status, started_at, duration_s, triggered_by
+FROM sync_log
+ORDER BY started_at DESC
+LIMIT 10;
+```

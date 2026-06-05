@@ -84,6 +84,11 @@ cost_filtered = filtered["cost_basis"].sum()
 upnl_filtered = filtered["unrealized_pnl"].sum()
 upnl_pct      = upnl_filtered / cost_filtered * 100 if cost_filtered else 0
 
+# Recompute % of portfolio from the filtered market values so the visible
+# rows always sum to 100% regardless of account or position filters.
+filtered = filtered.copy()
+filtered["pct_of_portfolio"] = filtered["market_value"] / mv_filtered * 100 if mv_filtered else 0
+
 # Sector donut: exclude Fixed Income and Cash — they have no equity sector.
 # Those classes belong in the asset_class donut, not here.
 sector_chart_df = (
@@ -283,10 +288,14 @@ st.divider()
 st.subheader("Positions")
 
 if not positions_display.empty:
+    pct_sum = positions_display["pct_of_portfolio"].sum()
+    if abs(pct_sum - 100) > 0.1:
+        st.warning(f"⚠️ Portfolio weights sum to {pct_sum:.1f}% — expected 100%. Check for missing positions or data gaps.")
+
     display = positions_display.copy()
     display.columns = [
         "Symbol", "Sector", "Asset Class", "Vehicle Type", "Themes", "Quantity",
-        "Cost Basis", "Market Value", "Unrealized P/L", "P/L %", "% Portfolio",
+        "Cost Basis", "Market Value", "Unrealized P/L", "% Portfolio", "P/L %",
     ]
     st.dataframe(
         display,

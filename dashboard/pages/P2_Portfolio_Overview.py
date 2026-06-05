@@ -1,4 +1,5 @@
 import sys
+from datetime import date
 from pathlib import Path
 
 import altair as alt
@@ -363,3 +364,69 @@ if not lots_df.empty:
                     "Unrealized P/L", "P/L %", "Days Held",
                 ]
                 st.dataframe(show, use_container_width=True, hide_index=True)
+
+
+# ── add historical lot ─────────────────────────────────────────────────────────
+
+st.divider()
+st.subheader("Add Historical Lot")
+st.caption(
+    "For positions held before your earliest CSV history. "
+    "Saves to a git-tracked CSV in `data/manual_lots/` and rebuilds the pipeline."
+)
+
+acct_labels = [account_label(a) for a in accounts]
+default_acct_idx = next(
+    (i for i, a in enumerate(accounts) if a["account_id_key"] == account_filter), 0
+) if account_filter else 0
+
+sym_options = sorted(positions_raw["symbol"].unique().tolist()) if not positions_raw.empty else []
+
+with st.form("add_manual_lot", clear_on_submit=True):
+    col1, col2 = st.columns(2)
+    with col1:
+        manual_acct_label = st.selectbox("Account", acct_labels, index=default_acct_idx)
+        manual_symbol = st.selectbox("Symbol", sym_options) if sym_options else st.text_input("Symbol")
+        manual_note = st.text_input("Note (optional)", placeholder="e.g. Transferred from old broker")
+    with col2:
+        manual_date  = st.date_input("Buy Date", value=date(2020, 1, 1),
+                                     min_value=date(2000, 1, 1), max_value=date.today())
+        manual_qty   = st.number_input("Quantity (shares)", min_value=0.0, step=1.0, format="%.4f")
+        manual_price = st.number_input("Buy Price per share ($)", min_value=0.0, step=0.01, format="%.4f")
+    submitted = st.form_submit_button("Save Lot & Rebuild", type="primary")
+
+if submitted:
+    if manual_qty <= 0 or manual_price <= 0:
+        st.error("Quantity and price must be greater than zero.")
+    else:
+        selected_acct = accounts[acct_labels.index(manual_acct_label)]
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from etrade_sync.sync.manual_lots import append_manual_lot
+        from etrade_sync.sync.csv_import import import_csv
+        from etrade_sync.analytics.ledger import build_ledger
+        from etrade_sync.analytics.realized_pnl import build_realized_pnl
+        from etrade_sync.analytics.views import refresh_views
+
+        with st.spinner("Saving lot and rebuilding pipeline…"):
+            path = append_manual_lot(
+                account_name=selected_acct["account_name"] or selected_acct["account_type"],
+                account_id=selected_acct["account_id"],
+                symbol=manual_symbol,
+                buy_date=manual_date,
+                quantity=manual_qty,
+                price=manual_price,
+                note=manual_note,
+            )
+            result = import_csv(str(path), selected_acct["account_id_key"])
+            build_ledger(full_rebuild=True)
+            build_realized_pnl()
+            refresh_views()
+
+        if result["errors"]:
+            st.error(f"Import errors: {result['errors']}")
+        else:
+            st.success(
+                f"Added: {manual_symbol}  {manual_qty:g} shares @ ${manual_price:.4f}"
+                f"  on {manual_date}  ({selected_acct['account_name'] or selected_acct['account_type']})"
+            )
+            st.rerun()

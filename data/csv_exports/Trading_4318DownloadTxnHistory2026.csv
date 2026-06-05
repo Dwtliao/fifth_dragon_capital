@@ -1,0 +1,74 @@
+All Transactions Activity Types
+
+Account Activity for Trading Acct -4318 from Current Year
+
+Total:,3202.77
+
+Activity/Trade Date,Transaction Date,Settlement Date,Activity Type,Description,Symbol,Cusip,Quantity #,Price $,Amount $,Commission,Category,Note
+06/04/26,06/04/26,06/04/26,Dividend,KINROSS GOLD CORP NEW ADJ GROSS DIV AMOUNT      0.15 FOREIGN TAX PAID IS       0.15,KGC,--,,,0.0,0.0,--,--
+06/04/26,06/04/26,06/04/26,Qualified Dividend,KINROSS GOLD CORP NEW REC 06/04/26 PAY 06/04/26 RATE 0.00000000 QTY 0.00000000,KGC,--,,,0.85,0.0,--,--
+06/03/26,06/03/26,06/03/26,Transfer,TRNSFR CASH TO MARGIN,--,--,,,1187.66,0.0,--,--
+06/03/26,06/03/26,06/03/26,Transfer,TRNSFR CASH TO MARGIN,--,--,,,-1187.66,0.0,--,--
+06/02/26,06/02/26,06/03/26,Sold,UNITED STATES OIL FUND LP UNSOLICITED TRADE,USO,--,-4.0,137.191,548.74,0.02,--,--
+06/02/26,06/02/26,06/03/26,Bought,SPROTT URANIUM MINERS ETF UNSOLICITED TRADE,URNM,--,10.0,65.25,-652.5,0.0,--,--
+06/02/26,06/02/26,06/03/26,Bought,ENERGY FUELS INC COM NEW UNSOLICITED TRADE,UUUU,--,25.0,19.32,-483.0,0.0,--,--
+06/02/26,06/02/26,06/03/26,Bought,CAMECO CORP UNSOLICITED TRADE,CCJ,--,5.0,120.18,-600.9,0.0,--,--
+06/01/26,06/01/26,05/29/26,Dividend,170.310000 DWS US TREASURY MONEY S REINVEST PRICE $ 1 As of 05/29/26,IUSXX,--,170.31,1.0,-170.31,0.0,--,--
+06/01/26,06/01/26,05/29/26,Dividend,DWS US TREASURY MONEY S DIV PAYMENT,IUSXX,--,,,170.31,0.0,--,--
+05/29/26,05/29/26,05/29/26,Interest Income,MORGAN STANLEY BANK N.A. (Period 05/01-05/31),MSBNK,--,,,0.07,0.0,--,--
+05/22/26,05/22/26,05/22/26,Transfer,TRNSFR CASH TO MARGIN,--,--,,,3627.85,0.0,--,--
+05/22/26,05/22/26,05/22/26,Transfer,TRNSFR CASH TO MARGIN,--,--,,,-3627.85,0.0,--,--
+05/21/26,05/21/26,05/22/26,Bought,AMPLIFY JUNIOR SILVER MINERS UNSOLICITED TRADE,SILJ,--,25.0,28.78,-719.5,0.0,--,--
+05/21/26,05/21/26,05/22/26,Bought,SIBANYE GOLD LTD ADR UNSOLICITED TRADE,SBSW,--,50.0,11.495,-574.75,0.0,--,--
+05/21/26,05/21/26,05/22/26,Bought,WHEATON PRECIOUS METALS CORP UNSOLICITED TRADE,WPM,--,5.0,126.23,-631.15,0.0,--,--
+05/21/26,05/21/26,05/22/26,Bought,NEW FOUND GOLD CORP UNSOLICITED TRADE,NFGC,--,250.0,1.906,-476.55,0.0,--,--
+05/21/26,05/21/26,05/22/26,Bought,VANECK JUNIOR GOLD MINERS ET UNSOLICITED TRADE,GDXJ,--,5.0,110.9,-554.5,0.0,--,--
+05/21/26,05/21/26,05/22/26,Bought,FRANCO-NEVADA CORP UNSOLICITED TRADE,FNV,--,3.0,223.8,-671.4,0.0,--,--
+05/20/26,05/20/26,05/20/26,Transfer,TRNSFR CASH TO MARGIN,--,--,,,4922.67,0.0,--,--
+05/20/26,05/20/26,05/20/26,Transfer,TRNSFR CASH TO MARGIN,--,--,,,-4922.67,0.0,--,--
+05/19/26,05/19/26,05/19/26,Transfer,TRNSFR CASH TO MARGIN,--,--,,,5000.0,0.0,--,--
+05/19/26,05/19/26,05/19/26,Transfer,TRNSFR CASH TO MARGIN,--,--,,,-5000.0,0.0,--,--
+05/19/26,05/19/26,05/20/26,Bought,UNITED STATES TREASURY BILL DUE 10/22/2026,912797UL9,912797UL9,5000.0,98.453,-4922.67,0.0,--,--
+05/15/26,05/15/26,05/18/26,Sold,DWS US TREASURY MONEY S CONFIRM NBR UNSOLICITED TRADE,IUSXX,--,-10000.0,1.0,10000.0,0.0,--,--
+05/13/26,05/13/26,05/13/26,Transfer,TRNSFR CASH TO MARGIN,--,--,,,10000.0,0.0,--,--
+05/13/26,05/13/26,05/13/26,Transfer,TRNSFR CASH TO MARGIN,--,--,,,-10000.0,0.0,--,--
+05/12/26,05/12/26,05/19/26,Bought,GOLDMAN SACHS BK NEW YORK NY CD 3.80 DUE 11/19/2026   0,38151PNX5,38151PNX5,5000.0,100.0,-5000.0,0.0,--,--
+05/11/26,05/11/26,05/12/26,Sold,DWS US TREASURY MONEY S CONFIRM NBR UNSOLICITED TRADE,IUSXX,--,-8000.0,1.0,8000.0,0.0,--,--
+05/08/26,05/08/26,05/13/26,Bought,BANK OF AMERICA NA CD 3.90 DUE 11/13/2026   0,06051YAC4,06051YAC4,10000.0,100.0,-10000.0,0.0,--,--
+05/08/26,05/08/26,05/08/26,Online Transfer,TRANSFER FROM XXXXXX2274  REFID:20544372395,--,--,,,10000.0,0.0,--,--
+05/01/26,05/01/26,04/30/26,Dividend,193.920000 DWS US TREASURY MONEY S REINVEST PRICE $ 1 As of 04/30/26,IUSXX,--,193.92,1.0,-193.92,0.0,--,--
+05/01/26,05/01/26,04/30/26,Dividend,DWS US TREASURY MONEY S DIV PAYMENT,IUSXX,--,,,193.92,0.0,--,--
+04/30/26,04/30/26,04/30/26,Interest Income,MORGAN STANLEY BANK N.A. (Period 04/01-04/30),MSBNK,--,,,0.02,0.0,--,--
+04/07/26,04/07/26,04/07/26,Transfer,TRNSFR MARGIN TO CASH,--,--,,,-577.08,0.0,--,--
+04/07/26,04/07/26,04/07/26,Transfer,TRNSFR MARGIN TO CASH,--,--,,,577.08,0.0,--,--
+04/06/26,04/06/26,04/07/26,Sold,META PLATFORMS INC CL A UNSOLICITED TRADE,META,--,-1.0,577.095,577.08,0.02,--,--
+04/02/26,04/02/26,04/02/26,Qualified Dividend,SIBANYE GOLD LTD ADR,SBSW,--,,,7.46,0.0,--,--
+04/02/26,04/02/26,04/02/26,Dividend,SIBANYE GOLD LTD ADR ADJ GROSS DIV AMOUNT      1.87 FOREIGN TAX PAID IS       1.87,SBSW,--,,,0.0,0.0,--,--
+04/01/26,04/01/26,03/31/26,Dividend,199.300000 DWS US TREASURY MONEY S REINVEST PRICE $ 1 As of 03/31/26,IUSXX,--,199.3,1.0,-199.3,0.0,--,--
+04/01/26,04/01/26,03/31/26,Dividend,DWS US TREASURY MONEY S DIV PAYMENT,IUSXX,--,,,199.3,0.0,--,--
+03/31/26,03/31/26,03/31/26,Interest Income,MORGAN STANLEY BANK N.A. (Period 03/01-03/31),MSBNK,--,,,0.01,0.0,--,--
+03/26/26,03/26/26,03/26/26,Qualified Dividend,KINROSS GOLD CORP NEW REC 03/26/26 PAY 03/26/26 RATE 0.00000000 QTY 0.00000000,KGC,--,,,0.85,0.0,--,--
+03/26/26,03/26/26,03/26/26,Qualified Dividend,META PLATFORMS INC CL A REC 03/26/26 PAY 03/26/26 RATE 0.00000000 QTY 0.00000000,META,--,,,0.53,0.0,--,--
+03/26/26,03/26/26,03/26/26,Dividend,KINROSS GOLD CORP NEW ADJ GROSS DIV AMOUNT      0.15 FOREIGN TAX PAID IS       0.15,KGC,--,,,0.0,0.0,--,--
+03/02/26,03/02/26,02/27/26,Dividend,180.050000 DWS US TREASURY MONEY S REINVEST PRICE $ 1 As of 02/27/26,IUSXX,--,180.05,1.0,-180.05,0.0,--,--
+03/02/26,03/02/26,02/27/26,Dividend,DWS US TREASURY MONEY S DIV PAYMENT,IUSXX,--,,,180.05,0.0,--,--
+02/27/26,02/27/26,02/27/26,Interest Income,MORGAN STANLEY BANK N.A. (Period 02/01-02/28),MSBNK,--,,,0.01,0.0,--,--
+02/02/26,02/02/26,01/30/26,Dividend,199.340000 DWS US TREASURY MONEY S REINVEST PRICE $ 1 As of 01/30/26,IUSXX,--,199.34,1.0,-199.34,0.0,--,--
+02/02/26,02/02/26,01/30/26,Dividend,DWS US TREASURY MONEY S DIV PAYMENT,IUSXX,--,,,199.34,0.0,--,--
+01/30/26,01/30/26,01/30/26,Interest Income,MORGAN STANLEY BANK N.A. (Period 01/01-01/31),MSBNK,--,,,0.02,0.0,--,--
+01/23/26,01/23/26,01/23/26,Transfer,TRNSFR CASH TO MARGIN,--,--,,,645.95,0.0,--,--
+01/23/26,01/23/26,01/23/26,Transfer,TRNSFR CASH TO MARGIN,--,--,,,-645.95,0.0,--,--
+01/22/26,01/22/26,01/23/26,Bought,META PLATFORMS INC CL A UNSOLICITED TRADE,META,--,1.0,645.95,-645.95,0.0,--,--
+01/02/26,01/02/26,12/31/25,Dividend,205.140000 DWS US TREASURY MONEY S REINVEST PRICE $ 1 As of 12/31/25,IUSXX,--,205.14,1.0,-205.14,0.0,--,--
+01/02/26,01/02/26,12/31/25,Dividend,DWS US TREASURY MONEY S,IUSXX,--,,,205.14,0.0,--,--
+
+
+
+"For all accounts, the Activity Date and the Processing Date are displayed. However, for Morgan Stanley and Co. and Externally Held accounts, only the Activity Date is available; therefore, the Processing Date listed for these accounts will be equivalent to the Activity Date. Please rely on the official account statements of your Morgan Stanley & Co. or Externally Held account for the actual Processing Date of any of these assets, and refer to the definitions section for more information on these categories."
+
+"The information provided with respect to your employee stock option plan (""ESOP"") was obtained from third party sources which Morgan Stanley believes to be reliable. However, we make no representation or guarantee that the information is accurate or complete. There may be other requirements, details, and criteria governing your ESOP. Please refer to the documentation provided by your employer for the terms and conditions governing your ESOP."
+
+E*TRADE from Morgan Stanley credits and offers may be subject to U.S. withholding taxes and reporting at retail value. Taxes related to these credits and offers are the customer's responsibility.
+
+"Under the Bank Deposit Program, free credit balances held in an account(s) at Morgan Stanley Smith Barney LLC are automatically deposited into an interest bearing deposit account(s), at FDIC-insured banks. For more information, view the Bank Deposit Program Disclosure Statement."
+

@@ -1,0 +1,69 @@
+All Transactions Activity Types
+
+Account Activity for SEP IRA -0609 from Current Year
+
+Total:,3083.95
+
+Activity/Trade Date,Transaction Date,Settlement Date,Activity Type,Description,Symbol,Cusip,Quantity #,Price $,Amount $,Commission,Category,Note
+06/04/26,06/04/26,06/04/26,Qualified Dividend,KINROSS GOLD CORP NEW REC 06/04/26 PAY 06/04/26 RATE 0.00000000 QTY 0.00000000,KGC,--,,,1.0,0.0,--,--
+06/02/26,06/02/26,06/03/26,Sold,UNITED STATES OIL FUND LP UNSOLICITED TRADE,USO,--,-4.0,137.205,548.8,0.02,--,--
+06/02/26,06/02/26,06/03/26,Bought,SPROTT URANIUM MINERS ETF UNSOLICITED TRADE,URNM,--,10.0,65.25,-652.5,0.0,--,--
+06/02/26,06/02/26,06/03/26,Bought,ENERGY FUELS INC COM NEW UNSOLICITED TRADE,UUUU,--,25.0,19.326,-483.16,0.0,--,--
+06/02/26,06/02/26,06/03/26,Bought,CAMECO CORP UNSOLICITED TRADE,CCJ,--,5.0,120.23,-601.15,0.0,--,--
+06/01/26,06/01/26,05/29/26,Dividend,141.750000 DWS US TREASURY MONEY S REINVEST PRICE $ 1 As of 05/29/26,IUSXX,--,141.75,1.0,-141.75,0.0,--,--
+06/01/26,06/01/26,05/29/26,Dividend,DWS US TREASURY MONEY S DIV PAYMENT,IUSXX,--,,,141.75,0.0,--,--
+05/29/26,05/29/26,05/29/26,Interest Income,MORGAN STANLEY PRIVATE BANK NA (Period 05/01-05/31),MSPBNA,--,,,0.04,0.0,--,--
+05/21/26,05/21/26,05/22/26,Sold,DWS US TREASURY MONEY S CONFIRM NBR UNSOLICITED TRADE,IUSXX,--,-5000.0,1.0,5000.0,0.0,--,--
+05/21/26,05/21/26,05/22/26,Bought,NEW FOUND GOLD CORP UNSOLICITED TRADE,NFGC,--,250.0,1.905,-476.25,0.0,--,--
+05/21/26,05/21/26,05/22/26,Bought,WHEATON PRECIOUS METALS CORP UNSOLICITED TRADE,WPM,--,5.0,126.4,-632.0,0.0,--,--
+05/21/26,05/21/26,05/22/26,Bought,VANECK JUNIOR GOLD MINERS ET UNSOLICITED TRADE,GDXJ,--,5.0,110.98,-554.9,0.0,--,--
+05/21/26,05/21/26,05/22/26,Bought,FRANCO-NEVADA CORP UNSOLICITED TRADE,FNV,--,3.0,223.8,-671.4,0.0,--,--
+05/08/26,05/08/26,05/11/26,Sold,DWS US TREASURY MONEY S CONFIRM NBR UNSOLICITED TRADE,IUSXX,--,-1600.0,1.0,1600.0,0.0,--,--
+05/08/26,05/08/26,05/13/26,Bought,BANK OF AMERICA NA CD 3.90 DUE 11/13/2026   0,06051YAC4,06051YAC4,5000.0,100.0,-5000.0,0.0,--,--
+05/01/26,05/01/26,04/30/26,Dividend,146.270000 DWS US TREASURY MONEY S REINVEST PRICE $ 1 As of 04/30/26,IUSXX,--,146.27,1.0,-146.27,0.0,--,--
+05/01/26,05/01/26,05/04/26,Sold,UNITED STATES OIL FUND LP UNSOLICITED TRADE,USO,--,-3.0,142.55,427.64,0.01,--,--
+05/01/26,05/01/26,05/04/26,Bought,VANECK JUNIOR GOLD MINERS ET UNSOLICITED TRADE,GDXJ,--,5.0,116.2,-581.0,0.0,--,--
+05/01/26,05/01/26,05/04/26,Bought,WHEATON PRECIOUS METALS CORP UNSOLICITED TRADE,WPM,--,5.0,126.1,-630.5,0.0,--,--
+05/01/26,05/01/26,05/04/26,Bought,FRANCO-NEVADA CORP UNSOLICITED TRADE,FNV,--,3.0,226.75,-680.25,0.0,--,--
+05/01/26,05/01/26,04/30/26,Dividend,DWS US TREASURY MONEY S DIV PAYMENT,IUSXX,--,,,146.27,0.0,--,--
+04/30/26,04/30/26,04/30/26,Interest Income,MORGAN STANLEY PRIVATE BANK NA (Period 04/01-04/30),MSPBNA,--,,,0.06,0.0,--,--
+04/07/26,04/07/26,04/07/26,Qualified Dividend,CANADIAN NATURAL RESOURCES LTD REC 04/07/26 PAY 04/07/26 RATE 0.00000000 QTY 0.00000000,CNQ,--,,,6.74,0.0,--,--
+04/06/26,04/06/26,04/07/26,Sold,META PLATFORMS INC CL A UNSOLICITED TRADE,META,--,-1.0,577.23,577.21,0.02,--,--
+04/02/26,04/02/26,04/02/26,Qualified Dividend,SIBANYE GOLD LTD ADR,SBSW,--,,,7.46,0.0,--,--
+04/02/26,04/02/26,04/02/26,Dividend,SIBANYE GOLD LTD ADR ADJ GROSS DIV AMOUNT      1.87 FOREIGN TAX PAID IS       1.87,SBSW,--,,,0.0,0.0,--,--
+04/02/26,04/02/26,04/06/26,Bought,URANIUM ENERGY CORP UNSOLICITED TRADE,UEC,--,50.0,13.617,-680.87,0.0,--,--
+04/01/26,04/01/26,03/31/26,Dividend,150.330000 DWS US TREASURY MONEY S REINVEST PRICE $ 1 As of 03/31/26,IUSXX,--,150.33,1.0,-150.33,0.0,--,--
+04/01/26,04/01/26,03/31/26,Dividend,DWS US TREASURY MONEY S DIV PAYMENT,IUSXX,--,,,150.33,0.0,--,--
+03/31/26,03/31/26,03/31/26,Interest Income,MORGAN STANLEY PRIVATE BANK NA (Period 03/01-03/31),MSPBNA,--,,,0.06,0.0,--,--
+03/26/26,03/26/26,03/26/26,Qualified Dividend,META PLATFORMS INC CL A REC 03/26/26 PAY 03/26/26 RATE 0.00000000 QTY 0.00000000,META,--,,,0.53,0.0,--,--
+03/26/26,03/26/26,03/26/26,Qualified Dividend,KINROSS GOLD CORP NEW REC 03/26/26 PAY 03/26/26 RATE 0.00000000 QTY 0.00000000,KGC,--,,,1.0,0.0,--,--
+03/25/26,03/25/26,03/25/26,Dividend,ST STR ENERGY SEL SEC SPDR,XLE,--,,,5.01,0.0,--,--
+03/02/26,03/02/26,02/27/26,Dividend,139.530000 DWS US TREASURY MONEY S REINVEST PRICE $ 1 As of 02/27/26,IUSXX,--,139.53,1.0,-139.53,0.0,--,--
+03/02/26,03/02/26,02/27/26,Dividend,DWS US TREASURY MONEY S DIV PAYMENT,IUSXX,--,,,139.53,0.0,--,--
+02/27/26,02/27/26,02/27/26,Interest Income,MORGAN STANLEY PRIVATE BANK NA (Period 02/01-02/28),MSPBNA,--,,,0.06,0.0,--,--
+02/10/26,02/10/26,02/11/26,Sold,HARMONY GOLD MNG LTD ADR NEW UNSOLICITED TRADE,HMY,--,-5.0,21.421,107.11,0.0,--,--
+02/05/26,02/05/26,02/06/26,Bought,UNITED STATES TREASURY BILL DUE 06/18/2026,912797TD9,912797TD9,3000.0,98.703,-2961.08,0.0,--,--
+02/04/26,02/04/26,02/05/26,Sold,DWS US TREASURY MONEY S CONFIRM NBR UNSOLICITED TRADE,IUSXX,--,-10000.0,1.0,10000.0,0.0,--,--
+02/04/26,02/04/26,02/05/26,Bought,UNITED STATES TREASURY BILL DUE 07/30/2026,912797TQ0,912797TQ0,3000.0,98.29,-2948.7,0.0,--,--
+02/02/26,02/02/26,01/30/26,Dividend,183.910000 DWS US TREASURY MONEY S REINVEST PRICE $ 1 As of 01/30/26,IUSXX,--,183.91,1.0,-183.91,0.0,--,--
+02/02/26,02/02/26,01/30/26,Dividend,DWS US TREASURY MONEY S DIV PAYMENT,IUSXX,--,,,183.91,0.0,--,--
+01/30/26,01/30/26,01/30/26,Interest Income,MORGAN STANLEY PRIVATE BANK NA (Period 01/01-01/31),MSPBNA,--,,,0.01,0.0,--,--
+01/30/26,01/30/26,02/02/26,Sold,HARMONY GOLD MNG LTD ADR NEW UNSOLICITED TRADE,HMY,--,-10.0,21.535,215.35,0.0,--,--
+01/30/26,01/30/26,02/02/26,Sold,HARMONY GOLD MNG LTD ADR NEW UNSOLICITED TRADE,HMY,--,-15.0,22.91,343.65,0.0,--,--
+01/22/26,01/22/26,01/23/26,Sold,DWS US TREASURY MONEY S CONFIRM NBR UNSOLICITED TRADE,IUSXX,--,-2000.0,1.0,2000.0,0.0,--,--
+01/22/26,01/22/26,01/23/26,Bought,META PLATFORMS INC CL A UNSOLICITED TRADE,META,--,1.0,646.6,-646.6,0.0,--,--
+01/09/26,01/09/26,01/12/26,Sold,US NATURAL GAS FUND LP UNSOLICITED TRADE,UNG,--,-40.0,10.905,436.19,0.0,--,--
+01/06/26,01/06/26,01/06/26,Qualified Dividend,CANADIAN NATURAL RESOURCES LTD REC 01/06/26 PAY 01/06/26 RATE 0.00000000 QTY 0.00000000,CNQ,--,,,6.39,0.0,--,--
+01/02/26,01/02/26,12/31/25,Dividend,191.030000 DWS US TREASURY MONEY S REINVEST PRICE $ 1 As of 12/31/25,IUSXX,--,191.03,1.0,-191.03,0.0,--,--
+01/02/26,01/02/26,12/31/25,Dividend,DWS US TREASURY MONEY S,IUSXX,--,,,191.03,0.0,--,--
+
+
+
+"For all accounts, the Activity Date and the Processing Date are displayed. However, for Morgan Stanley and Co. and Externally Held accounts, only the Activity Date is available; therefore, the Processing Date listed for these accounts will be equivalent to the Activity Date. Please rely on the official account statements of your Morgan Stanley & Co. or Externally Held account for the actual Processing Date of any of these assets, and refer to the definitions section for more information on these categories."
+
+"The information provided with respect to your employee stock option plan (""ESOP"") was obtained from third party sources which Morgan Stanley believes to be reliable. However, we make no representation or guarantee that the information is accurate or complete. There may be other requirements, details, and criteria governing your ESOP. Please refer to the documentation provided by your employer for the terms and conditions governing your ESOP."
+
+E*TRADE from Morgan Stanley credits and offers may be subject to U.S. withholding taxes and reporting at retail value. Taxes related to these credits and offers are the customer's responsibility.
+
+"Under the Bank Deposit Program, free credit balances held in an account(s) at Morgan Stanley Smith Barney LLC are automatically deposited into an interest bearing deposit account(s), at FDIC-insured banks. For more information, view the Bank Deposit Program Disclosure Statement."
+

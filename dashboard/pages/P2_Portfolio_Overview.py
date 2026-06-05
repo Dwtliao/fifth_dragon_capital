@@ -175,10 +175,10 @@ st.divider()
 
 def donut_chart(df, theta_col, color_col, label):
     df = df.copy()
-    # Only label slices >= 3% to avoid clutter on small slivers
+    # Labels inside the arc: % only for slices >= 5%, blank for slivers.
+    # Dollar amounts are in the summary table below.
     df["slice_label"] = df.apply(
-        lambda r: f"{r['pct']:.1f}%  ${r[theta_col]:,.0f}"
-        if r["pct"] >= 3 else "",
+        lambda r: f"{r['pct']:.1f}%" if r["pct"] >= 5 else "",
         axis=1,
     )
 
@@ -198,7 +198,7 @@ def donut_chart(df, theta_col, color_col, label):
 
     text = (
         alt.Chart(df)
-        .mark_text(radius=155, size=11)
+        .mark_text(radius=100, size=12, color="white", fontWeight="bold")
         .encode(
             theta=alt.Theta(f"{theta_col}:Q", stack=True),
             text=alt.Text("slice_label:N"),

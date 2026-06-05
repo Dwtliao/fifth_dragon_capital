@@ -147,10 +147,20 @@ def build_transaction_fingerprints(
         "description2": normalize_text(description2),
     }
 
-    dedupe_payload = dict(canonical_payload)
-    dedupe_payload["price"] = normalize_decimal(price, 2)
-    dedupe_payload["amount"] = normalize_decimal(amount, 2)
-    dedupe_payload["fee"] = normalize_decimal(fee, 2)
+    # dedupe_payload: narrow business-key for cross-source dedup (CSV vs API).
+    # Excludes settlement_date (CSV uses T+2 synthetic; API returns actual),
+    # description/description2 (always differ between CSV and API formats),
+    # and fee (can be 0.0 vs 0 or absent). Only fields that are stable across
+    # both source representations of the same trade.
+    dedupe_payload = {
+        "account_id_key": normalize_text(account_id_key),
+        "event_type":     event_type,
+        "symbol":         normalize_symbol(symbol),
+        "transaction_date": normalize_date(transaction_date),
+        "quantity":       normalize_decimal(quantity, 2),
+        "price":          normalize_decimal(price, 2),
+        "amount":         normalize_decimal(amount, 2),
+    }
 
     return {
         "event_type": event_type,

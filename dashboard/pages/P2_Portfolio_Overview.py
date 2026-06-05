@@ -278,6 +278,19 @@ lots_df = pd.DataFrame(query(f"""
     ORDER BY ol.symbol, ol.buy_date
 """, _params))
 
+# Position quantities from E*TRADE for reconciliation check
+pos_qty = {}
+if not lots_df.empty:
+    pos_raw = query(f"""
+        SELECT symbol, SUM(quantity)::float AS qty
+        FROM positions
+        WHERE fetched_at = (SELECT MAX(fetched_at) FROM positions)
+          AND security_type = 'EQ'
+          {_lot_where.replace('ol.account_id_key', 'account_id_key')}
+        GROUP BY symbol
+    """, _params)
+    pos_qty = {r["symbol"]: r["qty"] for r in pos_raw}
+
 if not lots_df.empty:
     lots_df["pnl_pct"] = (
         lots_df["unrealized_pnl"] / lots_df["cost_basis"].replace(0, float("nan")) * 100
@@ -295,18 +308,34 @@ if not lots_df.empty:
 
         for symbol in sorted(multi_lots["symbol"].unique()):
             sym_lots = multi_lots[multi_lots["symbol"] == symbol].copy()
+
+            # Reconcile lot total qty against actual position qty
+            lot_total_qty = sym_lots["quantity"].sum()
+            position_qty  = pos_qty.get(symbol, None)
+            reconciled    = position_qty is None or abs(lot_total_qty - position_qty) < 0.01
+
             total_cost = sym_lots["cost_basis"].sum()
             total_val  = sym_lots["current_value"].sum()
             total_pnl  = sym_lots["unrealized_pnl"].sum()
             total_pnl_pct = total_pnl / total_cost * 100 if total_cost else 0
 
+            warn = "" if reconciled else "  ⚠️ lot qty mismatch"
             label = (
                 f"{symbol}  —  {len(sym_lots)} lots  |  "
                 f"Cost ${total_cost:,.0f}  →  "
                 f"Value ${total_val:,.0f}  |  "
                 f"P/L ${total_pnl:+,.0f}  ({total_pnl_pct:+.1f}%)"
+                f"{warn}"
             )
             with st.expander(label):
+                if not reconciled:
+                    st.warning(
+                        f"Lot total ({lot_total_qty:,.0f} shares) doesn't match "
+                        f"position ({position_qty:,.0f} shares). "
+                        "E*TRADE likely recorded the same fill twice under different transaction IDs. "
+                        "Run **Reconcile** from Pipeline Status to investigate.",
+                        icon="⚠️",
+                    )
                 show = sym_lots[[
                     "account_id", "buy_date", "quantity",
                     "buy_price", "cost_basis",
@@ -326,7 +355,7 @@ if not lots_df.empty:
                 show["pnl_pct"]       = show["pnl_pct"].apply(
                     lambda x: f"{x:+.1f}%" if pd.notna(x) else "—"
                 )
-                show["days_held"]     = show["days_held"].apply(lambda x: f"{x.days}d" if pd.notna(x) else "—")
+                show["days_held"]     = show["days_held"].apply(lambda x: f"{int(x)}d" if pd.notna(x) else "—")
 
                 show.columns = [
                     "Account", "Buy Date", "Qty", "Buy Price (adj)",

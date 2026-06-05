@@ -104,4 +104,78 @@ def build_ledger(full_rebuild=False):
                 count += 1
 
     print(f"  ledger: upserted {count} row(s) from transactions")
+
+    # Dedup guard: removes duplicate ledger rows that arise when the same
+    # event appears in both the E*TRADE API and a CSV import, or when the
+    # API returns the same fill twice under different transaction_ids.
+    # Keeps the earliest row (lowest id) per business key.
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Round price to 2dp before grouping: CSV exports use 2dp while
+            # the API returns higher precision (e.g. $11.50 vs $11.4997).
+            cur.execute("""
+                DELETE FROM ledger
+                WHERE id IN (
+                    SELECT id FROM (
+                        SELECT id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY account_id_key, event_type, symbol,
+                                                event_timestamp::date, quantity,
+                                                ROUND(price::numeric, 2)
+                                   ORDER BY id
+                               ) AS rn
+                        FROM ledger
+                        WHERE event_type IN ('buy', 'sell')
+                          AND symbol   IS NOT NULL
+                          AND quantity IS NOT NULL
+                          AND price    IS NOT NULL
+                    ) ranked
+                    WHERE rn > 1
+                )
+            """)
+            buy_sell_dupes = cur.rowcount
+
+            # Cash events (dividend, interest, fee) dedup by amount instead of qty/price
+            cur.execute("""
+                DELETE FROM ledger
+                WHERE id IN (
+                    SELECT id FROM (
+                        SELECT id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY account_id_key, event_type, symbol,
+                                                event_timestamp::date, net_amount
+                                   ORDER BY id
+                               ) AS rn
+                        FROM ledger
+                        WHERE event_type IN ('dividend', 'dividend_qualified', 'interest', 'fee')
+                          AND net_amount IS NOT NULL
+                    ) ranked
+                    WHERE rn > 1
+                )
+            """)
+            cash_dupes = cur.rowcount
+
+            # Split events dedup by (account, symbol, date, quantity)
+            cur.execute("""
+                DELETE FROM ledger
+                WHERE id IN (
+                    SELECT id FROM (
+                        SELECT id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY account_id_key, symbol,
+                                                event_timestamp::date, quantity
+                                   ORDER BY id
+                               ) AS rn
+                        FROM ledger
+                        WHERE event_type = 'split'
+                    ) ranked
+                    WHERE rn > 1
+                )
+            """)
+            cash_dupes += cur.rowcount
+
+            dupes = buy_sell_dupes + cash_dupes
+            if dupes:
+                print(f"  ledger: removed {dupes} duplicate(s) ({buy_sell_dupes} fills, {cash_dupes} cash events)")
+
     return count

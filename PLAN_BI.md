@@ -2,8 +2,6 @@
 
 ## Architecture Overview
 
-Four layers built on top of the raw E*TRADE sync pipeline:
-
 ```
 ┌─────────────────────────────────────────┐
 │  Layer 4: BI Layer (Streamlit)          │  ← Dashboards, charts, exploration
@@ -16,7 +14,7 @@ Four layers built on top of the raw E*TRADE sync pipeline:
 ├─────────────────────────────────────────┤
 │  Layer 1: Trading Ledger                │  ← Normalized event log (foundation)
 ├─────────────────────────────────────────┤
-│  Layer 0: Raw Sync (existing)           │  ← E*TRADE API → Postgres raw tables
+│  Layer 0: Raw Sync                      │  ← E*TRADE API → Postgres raw tables
 │  accounts, balances, positions,         │
 │  transactions, orders, order_details    │
 └─────────────────────────────────────────┘
@@ -26,375 +24,198 @@ Raw tables are never modified by the BI layers — they stay as the source of tr
 
 ---
 
-## Phase 1 — Trading Ledger (Foundation)
+## Data Model Design Principles
 
-**Why:** Current `transactions` table mixes event types (buy, sell, dividend, fee, transfer) without a
-unified schema. Accurate P/L requires tracking every event precisely.
+These apply to all SQL files in `data_model/` and Python analytics modules.
 
-### `ledger` table
+**Rounding policy**
+- Dollar/monetary columns (`market_value`, `cost_basis`, `proceeds`, etc.): `ROUND(…::numeric, 2)` — two decimal places is semantically meaningful for currency.
+- Rate/percentage/metric columns (`daily_return_pct`, `pct_of_portfolio`, `rolling_volatility`, `drawdown`, etc.): store as **double precision, no rounding** — the view is the source of truth; the dashboard and query layer handle display formatting. Rounding rates in the view would silently discard precision needed for charts and compounding calculations.
 
-One row per financial event, normalized from `transactions` + `orders`:
+**Numbered SQL files**
+- All schema files are prefixed with a three-digit number (`001_`, `052_`, etc.) so `db.py` can execute them in sorted order and guarantee FK-safe creation. This is the same pattern used by Flyway and Django migrations.
 
-```sql
-CREATE TABLE ledger (
-    id               SERIAL PRIMARY KEY,
-    account_id_key   TEXT NOT NULL,
-    event_date       TIMESTAMPTZ NOT NULL,
-    event_type       TEXT NOT NULL,       -- see taxonomy below
-    symbol           TEXT,               -- ticker or CUSIP
-    security_type    TEXT,               -- EQ, OPTN, BOND, MF, CASH
-    quantity         NUMERIC,            -- positive = acquired, negative = disposed
-    price            NUMERIC,            -- per share/unit
-    gross_amount     NUMERIC,            -- quantity × price
-    net_amount       NUMERIC,            -- after fees/commissions
-    fee              NUMERIC DEFAULT 0,
-    currency         TEXT DEFAULT 'USD',
-    source_table     TEXT,               -- 'transactions' or 'orders'
-    source_id        TEXT,               -- transaction_id or order_id
-    raw              JSONB,
-    created_at       TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (source_table, source_id)
-);
-```
+**Materialized views vs tables**
+- Use a **materialized view** when the result is derived purely from existing tables and can be fully recomputed by a SQL refresh (e.g. `mv_unrealized_pnl`, `mv_allocations`).
+- Use a **computed table** (truncate + rebuild from Python) when the logic requires stateful iteration that SQL can't express cleanly (e.g. `realized_gains` — FIFO matching with split adjustments).
+- All materialized views must have a `UNIQUE INDEX` so they support `REFRESH CONCURRENTLY` (required by psycopg2 autocommit mode).
 
-### Event Taxonomy
+**Raw tables are immutable from the BI layer**
+- Layers 1–4 only read from Layer 0. Raw sync tables (`positions`, `transactions`, etc.) are never updated or deleted by analytics code.
 
-Map raw E*TRADE `transaction_type` → normalized `event_type`:
+---
 
-| E*TRADE type | Ledger event_type | Notes |
+## Current State (as of 2026-06-05, updated)
+
+### ✅ Completed
+
+| Layer | Item | Notes |
 |---|---|---|
-| Bought | `buy` | quantity > 0 |
-| Sold | `sell` | quantity < 0 |
-| Dividend | `dividend` | income |
-| Qualified Dividend | `dividend_qualified` | tax-advantaged |
-| Interest Income | `interest` | cash income |
-| Fee | `fee` | commission/fee |
-| Transfer | `transfer` | cash in/out |
-| Online Transfer | `deposit` or `withdrawal` | based on sign |
-| Stock Split | `split` | adjust cost basis |
-| Redemption | `redemption` | bond/fund maturity |
-| Bill Payment | `withdrawal` | |
-| POS | `withdrawal` | debit card |
+| 0 | Raw sync pipeline | accounts, balances, positions, transactions, orders, order_details |
+| 0 | Scheduled sync (launchd) | Daily 6AM full sync, Sunday 7AM 30-day refresh, 10PM auth reminder |
+| 0 | Pipeline monitoring | sync_log table, triggered_by tracking (manual vs launchd) |
+| 0 | `migrate` command | Drop + recreate all materialized views + re-apply all SQL files. Run after any schema change. |
+| 0 | CSV transaction backfill | `import-csv` CLI command loads E*TRADE CSV exports into transactions. Source-aware dedup handles API/CSV overlaps. 2025–2026 history loaded for all 4 accounts and committed to git for portability. |
+| 1 | `ledger` table | Normalized event log, signed quantities, upsert-safe, source_line_id for future multi-leg |
+| 2 | `dim_symbols` | yfinance metadata: sector, industry, asset class, exchange |
+| 2 | `dim_sectors` | Canonical sector list with sort order — source of truth for sector dropdowns |
+| 2 | `dim_symbol_overrides` | Manual sector/asset class overrides — wins over yfinance in all views. Managed via P9. |
+| 2 | `dim_dates` | 2013–2027 date spine, NYSE trading day flag, ISO week/year |
+| 2 | `dim_accounts` | SCD Type 2 history, account_sk surrogate, dim_accounts_current view |
+| 2 | `fact_transactions` | One row per ledger event keyed to dims |
+| 2 | `fact_positions` | Point-in-time position snapshots |
+| 2 | `fact_cashflows` | Cash-only events: deposits, withdrawals, dividends, interest, fees |
+| 2.5 | `reconciliation_log` | Ledger qty vs API positions snapshot, match/discrepancy/ledger_only/api_only |
+| 3 | `mv_unrealized_pnl` | Materialized view from latest positions snapshot |
+| 3 | `realized_gains` | Split-adjusted FIFO buy/sell lots, cost_basis, proceeds, realized_pnl, short/long term |
+| 3 | `open_lots` | Remaining buy lots after FIFO matching, split-adjusted qty and price. Rebuilt alongside realized_gains. |
+| 3 | `mv_portfolio_timeseries` | Daily portfolio value, returns, volatility, drawdown — all accounts aggregated |
+| 3 | `mv_portfolio_timeseries_by_account` | Same as above with account_id_key as dimension — used by Performance page account filter |
+| 3 | `mv_allocations` | Sector / asset class breakdown with override priority: dim_symbol_overrides > yfinance |
+| 3 | `mv_attribution_timeseries` | Daily sector + asset class market value/P/L per account — attribution drill-downs |
+| 3 | `market_prices` | SPY benchmark price history via yfinance |
+| 3 | `mv_benchmark_comparison` | Portfolio return vs SPY, alpha, rolling comparison — all accounts |
+| 3 | `mv_benchmark_comparison_by_account` | Per-account portfolio vs SPY — used when account filter is active |
+| 4 | Pipeline Status page (P1) | Token alert, full job runner (all batch commands), live output, sync_log history |
+| 4 | Portfolio Overview page (P2) | Account + position filters, KPIs, sector/asset class donuts with labels + summary tables. Cash KPI uses `cash_available_for_invest` (correct for margin + IRA accounts). Position lot detail expander per multi-lot symbol with split-adjusted buy prices, cost basis, current value, P/L, days held, and quantity reconciliation warning. |
+| 4 | Performance page (P3) | Equity curve, drawdown, rolling returns, attribution by account/sector/asset class, realized P/L |
+| 4 | Trading History page (P4) | P/L heatmap, cash flow/income charts, trade scatterplot, ledger explorer with active-filter display, strategy tag form |
+| 4 | Symbol Admin page (P9) | Sector/asset class override UI, manage sectors, auto-refreshes mv_allocations on save |
 
-### Derivable from ledger
+### Known Gaps / Open Issues
 
-Once populated, the ledger directly supports:
-- Cost basis per position (sum of buys × price)
-- Average entry price (total cost / total shares)
-- Realized P/L (matched buy/sell pairs using FIFO)
-- Net deposits (sum of deposits - withdrawals)
-- Cash balance reconciliation
-
----
-
-## Phase 2 — Analytical Schema (Star Schema)
-
-Build dimensional model on top of the ledger for BI query performance.
-
-### Fact Tables
-
-#### `fact_transactions`
-Derived from `ledger` — one row per trade/income event:
-```sql
--- Columns: date_key, account_key, symbol_key, event_type,
---          quantity, price, gross_amount, net_amount, fee
-```
-
-#### `fact_positions`
-Derived from raw `positions` snapshots — daily portfolio state:
-```sql
--- Columns: date_key, account_key, symbol_key, quantity,
---          cost_basis, market_value, unrealized_pnl, unrealized_pnl_pct
-```
-
-#### `fact_cashflows`
-Deposits, withdrawals, dividends, interest — cash-only events:
-```sql
--- Columns: date_key, account_key, event_type, amount, running_balance
-```
-
-#### `fact_option_greeks` *(future)*
-If options data becomes available via market API:
-```sql
--- Columns: date_key, symbol_key, delta, gamma, theta, vega, iv
-```
-
-### Dimension Tables
-
-#### `dim_accounts`
-```sql
-CREATE TABLE dim_accounts AS
-SELECT account_id_key, account_id, account_name, account_mode,
-       account_type, institution_type, status
-FROM accounts;
-```
-
-#### `dim_symbols`
-Ticker metadata — enriched from an external source (Yahoo Finance, etc.):
-```sql
-CREATE TABLE dim_symbols (
-    symbol       TEXT PRIMARY KEY,
-    name         TEXT,
-    sector       TEXT,        -- Energy, Technology, Materials, etc.
-    industry     TEXT,
-    asset_class  TEXT,        -- Equity, Bond, ETF, Option, Cash
-    currency     TEXT DEFAULT 'USD',
-    exchange     TEXT
-);
-```
-
-#### `dim_dates`
-Standard date spine for time-series joins:
-```sql
-CREATE TABLE dim_dates (
-    date_key     DATE PRIMARY KEY,
-    year         INT,
-    quarter      INT,
-    month        INT,
-    week         INT,
-    day_of_week  INT,
-    is_weekend   BOOL,
-    is_trading_day BOOL
-);
-```
+| Issue | Severity | Description |
+|---|---|---|
+| #35 | Medium | OAuth re-auth flow not yet in the dashboard UI — still requires terminal |
+| #33 | Low | `dim_symbols.cusip` column never populated by `seed_symbols()` |
+| #34 | Deferred | Ledger only sources from `transactions`; option/spread fills from `orders` not yet mapped |
 
 ---
 
-## Phase 2.5 — Reconciliation & Correctness
+## Issue Queue and Build Order
 
-**Why:** Before building analytics, verify the pipeline produces numbers that agree with E*TRADE's own reported values. Catching discrepancies early avoids building dashboards on bad data.
+Dependencies determine sequence. Do not start a page before its upstream data layer is correct.
 
-### Checks to implement
+### Remaining Issue Order
 
-| Check | Method |
-|---|---|
-| Cash balance | Calculated cash ledger (deposits − withdrawals + dividends + interest − buys + sells − fees) == API cash balance |
-| Current positions | Reconstructed positions from ledger (cumulative quantity per symbol) == E*TRADE positions endpoint |
-| Market value | Reconstructed shares × latest price == E*TRADE market value (within rounding) |
-| Realized P/L | FIFO-computed realized P/L == E*TRADE tax documents where available |
-| No duplicates | `(source_table, source_id)` unique constraint in ledger holds |
-| Missing corporate actions | Splits/mergers that cause quantity gaps in ledger |
+| Order | Issue | Depends on | Notes |
+|---|---|---|---|
+| 1 | **#28** | #23, `dim_symbols` | Risk & Exposure — sector concentration, position sizing, exposure analysis |
+| 2 | **#29** | #27 | Strategy tags — depends on usable ledger explorer |
+| 3 | **#35** | none | OAuth re-auth UI in Pipeline Status — two-step Streamlit widget |
+| 4 | **#33** | none | Low-priority backfill for `dim_symbols.cusip` |
+| 5 | **#34** | none | Deferred design pass for options / multi-leg order mapping |
 
-### First milestone
+### Completed
 
-> "Given E*TRADE data, reconstruct current positions, cash balance, realized P/L, unrealized P/L, and daily portfolio value — and compare each against broker-reported values."
-
-This milestone must pass before moving to Phase 3.
-
----
-
-## Phase 3 — Intelligence Layer
-
-Materialized views that derive the actual insights. Refreshed after each sync.
-
-### A. Realized P/L (FIFO cost basis matching)
-
-```sql
-CREATE MATERIALIZED VIEW mv_realized_pnl AS
--- Match sell events to buy events using FIFO per symbol per account
--- Columns: account_id_key, symbol, open_date, close_date,
---          quantity, cost_basis, proceeds, realized_gain,
---          holding_days, short_term (< 1 year), long_term
-```
-
-Key outputs:
-- Realized gain/loss per trade
-- Short-term vs long-term classification (tax relevant)
-- Holding period per lot
-
-### B. Unrealized P/L
-
-```sql
-CREATE MATERIALIZED VIEW mv_unrealized_pnl AS
-SELECT
-    p.account_id_key,
-    p.symbol,
-    p.quantity,
-    p.total_cost       AS cost_basis,
-    p.market_value,
-    p.market_value - p.total_cost AS unrealized_pnl,
-    p.total_gain_pct   AS unrealized_pnl_pct,
-    p.fetched_at       AS as_of
-FROM positions p
-WHERE p.fetched_at = (SELECT MAX(fetched_at) FROM positions);
-```
-
-### C. Trading Performance Metrics
-
-```sql
-CREATE MATERIALIZED VIEW mv_trading_performance AS
--- Per symbol, per account, rolling periods
--- Columns:
---   win_rate          (% of trades with realized gain > 0)
---   avg_win           (avg gain on winning trades)
---   avg_loss          (avg loss on losing trades)
---   expectancy        (win_rate × avg_win - loss_rate × avg_loss)
---   profit_factor     (gross_profit / gross_loss)
---   max_drawdown      (largest peak-to-trough loss)
---   avg_holding_days
-```
-
-### D. Allocation Analytics
-
-```sql
-CREATE MATERIALIZED VIEW mv_allocations AS
--- Join current positions → dim_symbols for sector/asset class
--- Columns:
---   sector, asset_class, market_value, pct_of_portfolio,
---   concentration_score
--- Highlights: uranium exposure, precious metals, tech, bonds, cash
-```
-
-### E. Benchmark Comparison
-
-```sql
-CREATE MATERIALIZED VIEW mv_benchmark_comparison AS
--- Join mv_portfolio_timeseries against a market_prices table (SPY daily close)
--- Columns: date, portfolio_return_pct, spy_return_pct, alpha,
---          rolling_30d_portfolio, rolling_30d_spy
-```
-
-Requires a market price history table (see Open Questions for data source).
-
-### F. Time-Series Analytics
-
-```sql
-CREATE MATERIALIZED VIEW mv_portfolio_timeseries AS
--- From positions snapshots over time
--- Columns: date, total_market_value, total_cost_basis,
---          total_unrealized_pnl, daily_return_pct,
---          rolling_7d_return, rolling_30d_return,
---          rolling_90d_return, rolling_volatility_30d,
---          max_drawdown_pct
-```
+| Issue | Status | Notes |
+|---|---|---|
+| **#22** | ✅ Done | `mv_portfolio_timeseries` — all-account daily timeseries |
+| **#23** | ✅ Done | `mv_allocations` with sector override priority |
+| **#24** | ✅ Done | `market_prices` + `mv_benchmark_comparison` |
+| **#25** | ✅ Done | Portfolio Overview — account filter, position filters, donut charts with labels |
+| **#26** | ✅ Done | Performance — equity curve, drawdown, rolling returns, attribution, realized P/L |
+| **#27** | ✅ Done | Trading History — P/L heatmap, cash flow/income charts, trade scatterplot, ledger explorer, strategy tag form |
+| **#32** | ✅ Done | Split-adjusted FIFO cost basis |
 
 ---
 
-## Phase 3.5 — Strategy Tagging
+## Dashboard Pages — Spec
 
-**Why:** Reporting by trade type (swing vs long-term vs options play) is far more actionable than aggregate stats. A single tag per trade unlocks P/L, win rate, capital deployed, and holding period broken out by strategy.
+### Page 1: Pipeline Status ✅ (done)
+- Token freshness alert
+- Job run history (sync_log) with filter by job name
+- Table health (row counts)
+- Run Jobs panel: all batch commands with live output streaming, persisted result after rerun
 
-### `trade_tags` table
+### Page 2: Portfolio Overview ✅ (done)
+- Global account filter + position filters (symbol, sector, asset class)
+- KPIs: total account value, invested MV, cash, unrealized P/L, P/L % — all respond to position filters
+- Sector and asset class donut charts with % + $ slice labels and summary tables below
+- Full positions table with P/L %
 
-```sql
-CREATE TABLE trade_tags (
-    id              SERIAL PRIMARY KEY,
-    source_table    TEXT NOT NULL,   -- 'ledger' or 'orders'
-    source_id       TEXT NOT NULL,   -- ledger.source_id or orders.order_id
-    strategy        TEXT NOT NULL,   -- see taxonomy below
-    notes           TEXT,
-    tagged_at       TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (source_table, source_id)
-);
-```
+### Page 3: Performance ✅ (done)
+- Global filters: Account | Period (YTD/1Y/3Y/All) | SPY toggle
+- KPIs: portfolio return, SPY return, alpha, max drawdown, volatility
+- Equity curve vs SPY (switches data source on account filter)
+- Drawdown from peak area chart
+- Rolling 30-day return vs SPY
+- Attribution tabs: By Account (overlaid equity curves), By Sector, By Asset Class (stacked area + P/L bar)
+- Realized P/L by year with local year filter and lot detail expander
 
-### Strategy taxonomy
+### Page 9: Symbol Admin ✅ (done)
+- Symbol table showing effective sector/asset class with source (override/yfinance/unknown)
+- Filter to "Unknown sector only" to quickly find gaps
+- Override form: set sector + asset class per symbol, with notes
+- Saving auto-refreshes mv_allocations
+- Manage Sectors tab: view canonical list, add custom sectors
 
-| Tag | Description |
-|---|---|
-| `swing_trade` | Short-term directional, days to weeks |
-| `long_term` | Buy and hold, months to years |
-| `earnings_play` | Position entered around earnings event |
-| `covered_call` | Short call against long equity |
-| `cash_secured_put` | Short put with cash collateral |
-| `hedge` | Reduces portfolio risk |
-| `dividend` | Held primarily for income |
-| `rebalance` | Portfolio allocation adjustment |
-
-Tags can be added via a simple Streamlit form on the Transaction History page or via direct SQL. Programmatic tagging (e.g., auto-tag options by type) is a later enhancement.
-
-### Metrics unlocked by tagging
-
-- P/L by strategy
-- Win rate by strategy
-- Average holding period by strategy
-- Capital deployed by strategy over time
-
----
-
-## Phase 4 — BI Layer
-
-### Tool: Streamlit *(recommended)*
-
-**Why Streamlit for this project:**
-- Python-first — same language as the pipeline
-- Lives in this repo as `dashboard/`
-- Runs locally, no server needed
-- Can be deployed to Streamlit Cloud later for mobile access
-- Full control over layout and calculations
-
-### Dashboard Pages
-
-#### 1. Portfolio Overview
-- Total account value, cash, invested capital
-- Unrealized P/L today vs cost basis
-- Margin usage (if applicable)
-- Allocation pie: sector / asset class breakdown
-- Exposure by ticker (top N)
-- Top 10 positions by market value
-
-#### 2. Performance
-- Equity curve (cumulative return from position snapshots)
-- Daily/weekly/monthly return table
-- Rolling 30/90-day return chart vs SPY benchmark
-- Volatility (rolling 30-day)
-- Max drawdown chart with drawdown periods highlighted
-- Realized P/L by year/quarter
-
-#### 3. Trading History
-- Win rate, avg win / avg loss, profit factor
-- Realized P/L by ticker
-- P/L by strategy tag (requires Phase 3.5)
-- P/L by holding period bucket (<1 week, 1w–1m, 1m–1y, >1y)
-- Commissions/fees impact over time
+### Page 4: Trading History (#27)
+- Win rate, avg win/loss, profit factor
+- Realized P/L by ticker and holding period bucket (<1w, 1w–1m, 1m–1y, >1y)
 - Monthly P/L heatmap (year × month grid)
 - Trade scatterplot: return % vs holding days
-- Searchable/filterable ledger with strategy tag form
+- Searchable/filterable ledger explorer
+- Strategy tag form (#29)
 
-#### 4. Account Detail
-- Per-account breakdown
-- Position-level detail with cost basis and unrealized P/L
-- Order history
-
-#### 5. Risk & Exposure
-- Sector concentration bar chart
-- Uranium/energy/precious metals exposure (given your holdings)
-- Options exposure (delta-adjusted if greeks available)
-- Largest losing trades
+### Page 5: Risk & Exposure (#28)
+- Sector concentration bar chart (from mv_allocations)
+- Asset class breakdown
+- Largest losing positions / trades
 - Short-term vs long-term holding breakdown
-- Position sizing relative to portfolio %
+- Position sizing as % of portfolio
 
 ---
 
-## Build Sequence
+## Intelligence Layer — View Specs
 
-| Step | Phase | Task | Estimated effort |
-|---|---|---|---|
-| 1 | ✅ Done | Raw sync pipeline (accounts, balances, positions, transactions, orders) | — |
-| 2 | ✅ Done | Scheduling (daily/weekly launchd + auth reminder) | — |
-| 3 | Ledger | Build `ledger` table + populate from transactions | 2-3 hours |
-| 4 | Dimensions | `dim_symbols` (manual seed for your holdings) | 1 hour |
-| 5 | Reconcile | Reconstruct positions from ledger; compare to API positions | 2-3 hours |
-| 6 | Intelligence | `mv_unrealized_pnl`, `mv_realized_pnl` (FIFO) | 3-4 hours |
-| 7 | Intelligence | `mv_portfolio_timeseries`, `mv_allocations` | 2-3 hours |
-| 8 | Intelligence | `mv_benchmark_comparison` (requires market price history) | 2 hours |
-| 9 | BI | Streamlit scaffold + Portfolio Overview page | 3-4 hours |
-| 10 | BI | Performance + Trading History pages | 3-4 hours |
-| 11 | BI | Risk & Exposure page | 2 hours |
-| 12 | Tagging | Strategy tag table + tag form in Trading History page | 2-3 hours |
-| 13 | BI | P/L by strategy, win rate by strategy charts | 2 hours |
-| 14 | Future | Tax-lot and wash-sale-aware reporting | TBD |
+### `mv_portfolio_timeseries`
+Source: `positions` snapshots — all accounts aggregated
 
-**Total estimated for steps 3–13:** ~25 hours of focused development
+Key columns: `date`, `total_market_value`, `total_cost_basis`, `total_unrealized_pnl`, `daily_return_pct`, `rolling_7/30/90d_return_pct`, `rolling_volatility_30d`, `drawdown_from_peak_pct`
+
+### `mv_portfolio_timeseries_by_account`
+Source: same as above, partitioned by `account_id_key`
+
+Same columns + `account_id_key`. Rolling and drawdown metrics are PARTITION BY account.
+
+### `mv_allocations`
+Source: latest positions snapshot + `dim_symbol_overrides` (priority) + `dim_symbols` (fallback)
+
+Key columns: `account_id_key`, `symbol`, `sector`, `asset_class`, `market_value`, `cost_basis`, `unrealized_pnl`, `pct_of_portfolio`
+
+### `mv_attribution_timeseries`
+Source: daily positions snapshots joined to dim_symbol_overrides / dim_symbols
+
+Key columns: `date`, `account_id_key`, `sector`, `asset_class`, `market_value`, `cost_basis`, `unrealized_pnl`, `pct_of_account`
+
+One row per (date, account, sector, asset_class). Used for attribution stacked area charts.
+
+### `mv_benchmark_comparison`
+Source: `mv_portfolio_timeseries` + `market_prices` (SPY)
+
+Key columns: `date`, `portfolio_daily_return_pct`, `spy_daily_return_pct`, `portfolio_cumulative_pct`, `spy_cumulative_pct`, `rolling_30d_portfolio_pct`, `rolling_30d_spy_pct`, `alpha_pct`
+
+### `mv_benchmark_comparison_by_account`
+Source: `mv_portfolio_timeseries_by_account` + `market_prices` (SPY)
+
+Same columns + `account_id_key`. Cumulative returns anchored to each account's first date.
 
 ---
 
-## Open Questions
+## Resolved Design Decisions
 
-- [ ] FIFO vs average cost for P/L calculation? (FIFO is US tax standard)
-- [ ] Do you want tax lot tracking per trade?
-- [ ] Source for `dim_symbols` sector/industry data? (Yahoo Finance API is free)
-- [ ] Source for market price history for benchmark comparison? (Yahoo Finance `yfinance` library is simplest)
-- [ ] Deploy Streamlit locally only, or to cloud for mobile access?
-- [ ] How frequently refresh materialized views? (after each sync, or on-demand?)
-- [ ] Strategy tags: manual only, or also auto-tag options by contract type?
+| Question | Decision |
+|---|---|
+| FIFO vs average cost? | FIFO — US tax standard |
+| Source for symbol metadata? | yfinance (free, already used) |
+| Source for benchmark prices? | yfinance (SPY daily close) |
+| Materialized view refresh frequency? | After every full sync (auto-wired in `__main__.py`) |
+| Strategy tags: manual or auto? | Manual via Streamlit form first; auto-tag options later (#34 dependency) |
+| Dashboard deployment? | Local only for now; Streamlit Cloud possible later |
+| Orders → ledger? | Deferred (#34) — stock fills covered by transactions; option/spread mapping needs separate design pass |
+| Cash KPI field? | Use `cash_available_for_invest` (`cashAvailableForInvestment` from E*TRADE API). `net_cash` includes margin buying power on margin accounts (wrong); `cash_balance` excludes money market funds on IRA accounts (wrong). `cash_available_for_invest` is correct for all account types. |
+| E*TRADE transaction history depth? | API returns ~2 months for IRA Rollover despite requesting 2-year lookback. This is an E*TRADE API limitation, not a code bug. History available via CSV export only. |
+| CSV backfill dedup strategy? | Two-pass source-aware dedup in `build_ledger()`. Pass A (cross-source): removes CSV rows shadowed by an API row using `ROUND(price, 2)` to handle CSV 2dp vs API precision. Pass B (same-source): removes API rows E*TRADE returned twice under different IDs using exact price, so genuine same-day fills at similar-but-distinct prices are never collapsed. |
+| CSV files in git? | Yes — E*TRADE transaction CSVs contain no credentials and serve as portable transaction history. Committing them means a fresh clone can fully rebuild the pipeline without re-downloading from E*TRADE. Stored in `data/csv_exports/`. |
+| Bond positions in lot detail? | Excluded from Portfolio Overview lot detail. Bonds use face-value quantities (e.g. 15,000 = $15,000 face) and price-per-$100-face, making qty × price misleading without a bond-specific formula. |

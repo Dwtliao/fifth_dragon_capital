@@ -19,7 +19,8 @@ def _table_counts(conn):
     counts = {}
     with conn.cursor() as cur:
         for table in ("accounts", "balances", "positions", "transactions",
-                      "orders", "order_details", "ledger", "realized_gains"):
+                      "orders", "order_details", "ledger", "realized_gains",
+                      "market_prices"):
             try:
                 cur.execute(f"SELECT count(*) FROM {table}")
                 counts[table] = cur.fetchone()[0]
@@ -47,8 +48,21 @@ def main():
 
     sub.add_parser("seed-symbols", help="Seed dim_symbols with yfinance metadata")
     sub.add_parser("seed-dates", help="Generate dim_dates date spine")
+    sub.add_parser("seed-prices", help="Fetch benchmark prices (SPY) from yfinance into market_prices")
     sub.add_parser("reconcile", help="Compare ledger positions to API positions snapshot")
     sub.add_parser("refresh-views", help="Refresh all materialized views")
+    sub.add_parser("migrate", help="Drop + recreate all materialized views and re-apply all SQL files")
+
+    csv_p = sub.add_parser("import-csv", help="Import an E*TRADE CSV export into transactions")
+    csv_p.add_argument("file", help="Path to the E*TRADE CSV file")
+    csv_p.add_argument(
+        "--account", required=True, metavar="ACCOUNT_ID",
+        help="account_id_key or account_id (full or last-4 digits) to assign these transactions",
+    )
+    csv_p.add_argument(
+        "--rebuild", action="store_true",
+        help="Rebuild ledger, realized P&L, and refresh views after import",
+    )
 
     log_p = sub.add_parser("log-event", help="Write a pipeline event to sync_log (used by shell scripts)")
     log_p.add_argument("--job", required=True, help="Job name")
@@ -78,6 +92,57 @@ def main():
     if args.command == "auth":
         from etrade_sync.auth import run_auth_flow
         run_auth_flow()
+
+    # ----------------------------------------------------------- import-csv
+    elif args.command == "import-csv":
+        from etrade_sync.db import create_tables, get_connection
+        from etrade_sync.sync.csv_import import import_csv
+        create_tables()
+
+        # Resolve account_id_key from the --account argument:
+        # accept exact account_id_key, full account_id, or last-4 digits.
+        acct_arg = args.account.strip()
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT account_id_key, account_id, account_name
+                    FROM accounts
+                    WHERE account_id_key = %s
+                       OR account_id     = %s
+                       OR account_id LIKE %s
+                """, (acct_arg, acct_arg, f"%{acct_arg}"))
+                matches = cur.fetchall()
+
+        if not matches:
+            print(f"ERROR: no account found matching '{acct_arg}'")
+            print("Run 'python -m etrade_sync sync --only accounts' to populate accounts first.")
+            sys.exit(1)
+        if len(matches) > 1:
+            print(f"ERROR: '{acct_arg}' matches multiple accounts — be more specific:")
+            for key, aid, name in matches:
+                print(f"  {key}  {aid}  {name}")
+            sys.exit(1)
+
+        account_id_key, account_id, account_name = matches[0]
+        print(f"Importing into: {account_name} ({account_id})")
+
+        result = import_csv(args.file, account_id_key)
+        print(f"  inserted={result['inserted']}  skipped={result['skipped']}  errors={len(result['errors'])}")
+        for e in result["errors"]:
+            print(f"  ERROR: {e}")
+        if result["errors"]:
+            sys.exit(1)
+
+        if args.rebuild:
+            from etrade_sync.analytics.ledger import build_ledger
+            from etrade_sync.analytics.realized_pnl import build_realized_pnl
+            from etrade_sync.analytics.views import refresh_views
+            print(f"[{_ts()}] rebuilding ledger...")
+            build_ledger(full_rebuild=True)
+            print(f"[{_ts()}] rebuilding realized P&L...")
+            build_realized_pnl()
+            print(f"[{_ts()}] refreshing views...")
+            refresh_views()
 
     # ------------------------------------------------------------ log-event
     elif args.command == "log-event":
@@ -143,6 +208,20 @@ def main():
             finish_run(log_id, "failed", error_msg=str(e))
             raise
 
+    # ----------------------------------------------------------- seed-prices
+    elif args.command == "seed-prices":
+        from etrade_sync.db import create_tables
+        from etrade_sync.analytics.prices import seed_prices
+        from etrade_sync.analytics.sync_log import start_run, finish_run
+        create_tables()
+        log_id = start_run("seed_prices")
+        try:
+            count = seed_prices()
+            finish_run(log_id, "success", rows_synced={"market_prices": count})
+        except Exception as e:
+            finish_run(log_id, "failed", error_msg=str(e))
+            raise
+
     # ------------------------------------------------------------ reconcile
     elif args.command == "reconcile":
         from etrade_sync.db import create_tables
@@ -161,8 +240,27 @@ def main():
     elif args.command == "refresh-views":
         from etrade_sync.db import create_tables
         from etrade_sync.analytics.views import refresh_views
+        from etrade_sync.analytics.sync_log import start_run, finish_run
         create_tables()
-        refresh_views()
+        log_id = start_run("refresh_views")
+        try:
+            refresh_views()
+            finish_run(log_id, "success")
+        except Exception as e:
+            finish_run(log_id, "failed", error_msg=str(e))
+            raise
+
+    # --------------------------------------------------------------- migrate
+    elif args.command == "migrate":
+        from etrade_sync.db import migrate
+        from etrade_sync.analytics.sync_log import start_run, finish_run
+        log_id = start_run("migrate")
+        try:
+            migrate()
+            finish_run(log_id, "success")
+        except Exception as e:
+            finish_run(log_id, "failed", error_msg=str(e))
+            raise
 
     # --------------------------------------------------------------- sync
     elif args.command == "sync":
@@ -249,6 +347,14 @@ def main():
             except Exception as e:
                 print(f"[{_ts()}] WARNING: realized pnl failed — {e}")
             print(f"[{_ts()}] realized pnl done")
+
+            print(f"[{_ts()}] benchmark prices...")
+            try:
+                from etrade_sync.analytics.prices import seed_prices
+                seed_prices()
+            except Exception as e:
+                print(f"[{_ts()}] WARNING: benchmark price fetch failed — {e}")
+            print(f"[{_ts()}] benchmark prices done")
 
             print(f"[{_ts()}] refreshing views...")
             try:

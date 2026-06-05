@@ -80,8 +80,9 @@ with col_filter:
     job_filter = st.selectbox(
         "Filter by job",
         ["all", "sync", "sync:accounts", "sync:balances", "sync:positions",
-         "sync:transactions", "sync:orders", "build_ledger", "seed_symbols",
-         "seed_dates", "daily_sync", "weekly_sync"],
+         "sync:transactions", "sync:orders", "build_ledger", "build_realized_pnl",
+         "seed_symbols", "seed_dates", "seed_prices", "refresh_views", "migrate",
+         "reconcile", "daily_sync", "weekly_sync"],
         label_visibility="collapsed",
     )
 with col_limit:
@@ -184,47 +185,88 @@ else:
 
 st.divider()
 
-# ── run sync now ──────────────────────────────────────────────────────────────
+# ── run jobs ──────────────────────────────────────────────────────────────────
 
-st.subheader("Run Sync Now")
+st.subheader("Run Jobs")
 
-if not fresh:
-    st.error("Token is expired — re-authenticate before running sync.")
-else:
-    col_only, col_btn = st.columns([2, 1])
-    with col_only:
-        only = st.selectbox(
-            "Data type",
-            ["all", "accounts", "balances", "positions", "transactions", "orders"],
-        )
-    with col_btn:
-        st.write("")
-        st.write("")
-        run_btn = st.button("▶ Run Sync", type="primary", use_container_width=True)
+JOBS = {
+    "sync":               "Pull latest data from E*TRADE (accounts, balances, positions, transactions, orders)",
+    "migrate":            "Apply SQL schema changes — drop + recreate all materialized views, re-run all SQL files",
+    "refresh-views":      "Refresh all materialized views without re-syncing",
+    "build-ledger":       "Rebuild the ledger table from transactions",
+    "build-realized-pnl": "Recompute FIFO realized P/L from ledger",
+    "seed-symbols":       "Fetch symbol metadata (sector, asset class) from yfinance",
+    "seed-prices":        "Fetch SPY benchmark prices from yfinance",
+    "seed-dates":         "Regenerate the dim_dates date spine",
+    "reconcile":          "Compare ledger positions to latest API snapshot",
+}
 
-    if run_btn:
-        cmd = [PYTHON, "-m", "etrade_sync", "sync"]
+NEEDS_TOKEN = {"sync"}
+
+col_job, col_btn = st.columns([3, 1])
+with col_job:
+    job = st.selectbox("Job", list(JOBS.keys()),
+                       format_func=lambda j: f"{j}  —  {JOBS[j]}")
+with col_btn:
+    st.write("")
+    st.write("")
+    run_btn = st.button("▶ Run", type="primary", use_container_width=True)
+
+# Per-job options
+cmd_extra = []
+
+if job == "sync":
+    if not fresh:
+        st.error("Token is expired — re-authenticate before running sync.")
+        run_btn = False
+    c1, c2 = st.columns(2)
+    with c1:
+        only = st.selectbox("Data type", ["all", "accounts", "balances", "positions", "transactions", "orders"])
         if only != "all":
-            cmd += ["--only", only]
+            cmd_extra += ["--only", only]
+    with c2:
+        date_range = st.selectbox("Date range (transactions + orders)", ["default (90d)", "30 days", "365 days", "from beginning"])
+        if date_range == "30 days":
+            cmd_extra += ["--days", "30"]
+        elif date_range == "365 days":
+            cmd_extra += ["--days", "365"]
+        elif date_range == "from beginning":
+            cmd_extra += ["--from-beginning"]
 
-        output_box = st.empty()
-        lines = []
-        with st.spinner("Syncing…"):
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=str(Path(__file__).parent.parent.parent),
-            )
-            for line in proc.stdout:
-                lines.append(line.rstrip())
-                output_box.code("\n".join(lines), language=None)
-            proc.wait()
+elif job == "build-ledger":
+    full_rebuild = st.checkbox("Full rebuild (truncate ledger before repopulating)")
+    if full_rebuild:
+        cmd_extra += ["--full-rebuild"]
 
-        if proc.returncode == 0:
-            st.success("Sync completed successfully.")
-        else:
-            st.error("Sync failed — see output above.")
+if run_btn:
+    cmd = [PYTHON, "-m", "etrade_sync", job] + cmd_extra
+    output_box = st.empty()
+    lines = []
+    with st.spinner(f"Running {job}…"):
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=str(Path(__file__).parent.parent.parent),
+        )
+        for line in proc.stdout:
+            lines.append(line.rstrip())
+            output_box.code("\n".join(lines), language=None)
+        proc.wait()
 
-        st.rerun()
+    st.session_state["last_job_output"] = "\n".join(lines)
+    st.session_state["last_job_name"]   = job
+    st.session_state["last_job_ok"]     = proc.returncode == 0
+    st.rerun()
+
+# Show persisted result from previous run
+if "last_job_output" in st.session_state:
+    ok = st.session_state["last_job_ok"]
+    name = st.session_state["last_job_name"]
+    if ok:
+        st.success(f"{name} completed successfully.")
+    else:
+        st.error(f"{name} failed.")
+    with st.expander("Output", expanded=not ok):
+        st.code(st.session_state["last_job_output"], language=None)

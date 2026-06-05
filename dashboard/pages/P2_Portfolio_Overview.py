@@ -1,4 +1,5 @@
 import sys
+from datetime import date
 from pathlib import Path
 
 import altair as alt
@@ -329,11 +330,14 @@ if not lots_df.empty:
             )
             with st.expander(label):
                 if not reconciled:
+                    missing = position_qty - lot_total_qty
                     st.warning(
                         f"Lot total ({lot_total_qty:,.0f} shares) doesn't match "
-                        f"position ({position_qty:,.0f} shares). "
-                        "E*TRADE likely recorded the same fill twice under different transaction IDs. "
-                        "Run **Reconcile** from Pipeline Status to investigate.",
+                        f"position ({position_qty:,.0f} shares) — {missing:,.0f} shares unaccounted for. "
+                        "This is usually caused by purchases predating your CSV history. "
+                        "Use **Add Historical Lot** below to fill in the missing lots. "
+                        "If the position was recently acquired, run **Reconcile** from Pipeline Status "
+                        "to check for duplicate fills.",
                         icon="⚠️",
                     )
                 show = sym_lots[[
@@ -363,3 +367,185 @@ if not lots_df.empty:
                     "Unrealized P/L", "P/L %", "Days Held",
                 ]
                 st.dataframe(show, use_container_width=True, hide_index=True)
+
+
+# ── add historical lot ─────────────────────────────────────────────────────────
+
+st.divider()
+st.subheader("Add Historical Lot")
+st.caption(
+    "For positions held before your earliest CSV history. "
+    "Saves to a git-tracked CSV in `data/manual_lots/` and rebuilds the pipeline."
+)
+
+acct_labels = [account_label(a) for a in accounts]
+default_acct_idx = next(
+    (i for i, a in enumerate(accounts) if a["account_id_key"] == account_filter), 0
+) if account_filter else 0
+
+sym_options = sorted(positions_raw["symbol"].unique().tolist()) if not positions_raw.empty else []
+
+with st.form("add_manual_lot", clear_on_submit=True):
+    col1, col2 = st.columns(2)
+    with col1:
+        manual_acct_label = st.selectbox("Account", acct_labels, index=default_acct_idx)
+        manual_symbol = st.selectbox("Symbol", sym_options) if sym_options else st.text_input("Symbol")
+        manual_note = st.text_input("Note (optional)", placeholder="e.g. Transferred from old broker")
+    with col2:
+        manual_date  = st.date_input("Buy Date", value=date(2020, 1, 1),
+                                     min_value=date(2000, 1, 1), max_value=date.today())
+        manual_qty   = st.number_input("Quantity (shares)", min_value=0.0, step=1.0, format="%.4f")
+        manual_price = st.number_input("Buy Price per share ($)", min_value=0.0, step=0.01, format="%.4f")
+    submitted = st.form_submit_button("Save Lot & Rebuild", type="primary")
+
+if submitted:
+    if manual_qty <= 0 or manual_price <= 0:
+        st.error("Quantity and price must be greater than zero.")
+    else:
+        selected_acct = accounts[acct_labels.index(manual_acct_label)]
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from etrade_sync.sync.manual_lots import append_manual_lot
+        from etrade_sync.sync.csv_import import import_csv
+        from etrade_sync.analytics.ledger import build_ledger
+        from etrade_sync.analytics.realized_pnl import build_realized_pnl
+        from etrade_sync.analytics.views import refresh_views
+
+        with st.spinner("Saving lot and rebuilding pipeline…"):
+            path = append_manual_lot(
+                account_name=selected_acct["account_name"] or selected_acct["account_type"],
+                account_id=selected_acct["account_id"],
+                symbol=manual_symbol,
+                buy_date=manual_date,
+                quantity=manual_qty,
+                price=manual_price,
+                note=manual_note,
+            )
+            result = import_csv(str(path), selected_acct["account_id_key"])
+            build_ledger(full_rebuild=True)
+            build_realized_pnl()
+            refresh_views()
+
+        if result["errors"]:
+            st.error(f"Import errors: {result['errors']}")
+        else:
+            st.success(
+                f"Added: {manual_symbol}  {manual_qty:g} shares @ ${manual_price:.4f}"
+                f"  on {manual_date}  ({selected_acct['account_name'] or selected_acct['account_type']})"
+            )
+            st.rerun()
+
+
+# ── manage manual lots ─────────────────────────────────────────────────────────
+
+manual_lots_rows = query(f"""
+    SELECT t.transaction_id, t.account_id_key,
+           a.account_name, a.account_id,
+           t.transaction_date::date          AS buy_date,
+           t.symbol,
+           t.quantity::float                 AS quantity,
+           t.price::float                    AS price,
+           COALESCE((t.raw::jsonb)->'row'->>'Note', '') AS note
+    FROM transactions t
+    JOIN accounts a USING (account_id_key)
+    WHERE t.description = 'Manual lot entry' {_where}
+    ORDER BY a.account_name, t.symbol, t.transaction_date
+""", _params)
+
+if manual_lots_rows:
+    st.divider()
+    st.subheader("Manage Manual Lots")
+
+    manual_lots_df = pd.DataFrame(manual_lots_rows)
+
+    display = manual_lots_df[["account_name", "symbol", "buy_date", "quantity", "price", "note"]].copy()
+    display["buy_date"] = display["buy_date"].astype(str)
+    display["price"]    = display["price"].apply(lambda x: f"${x:.4f}")
+    display["quantity"] = display["quantity"].apply(lambda x: f"{x:g}")
+    display.columns = ["Account", "Symbol", "Buy Date", "Qty", "Price", "Note"]
+    st.dataframe(display, use_container_width=True, hide_index=True)
+
+    lot_labels = [
+        f"{r['account_name']} · {r['symbol']} · {r['buy_date']} · {r['quantity']:g} shares @ ${r['price']:.4f}"
+        for r in manual_lots_rows
+    ]
+    edit_choice = st.selectbox("Select lot to edit or delete", ["— select —"] + lot_labels,
+                               key="manage_lot_select")
+
+    if edit_choice != "— select —":
+        lot = manual_lots_rows[lot_labels.index(edit_choice)]
+
+        with st.form("edit_manual_lot"):
+            st.markdown(f"**{lot['symbol']}** — {lot['account_name']}")
+            ec1, ec2 = st.columns(2)
+            with ec1:
+                edit_date  = st.date_input("Buy Date",
+                                           value=lot["buy_date"],
+                                           min_value=date(2000, 1, 1), max_value=date.today())
+                edit_qty   = st.number_input("Quantity (shares)",
+                                             value=float(lot["quantity"]),
+                                             min_value=0.0001, format="%.4f")
+            with ec2:
+                edit_price = st.number_input("Buy Price per share ($)",
+                                             value=float(lot["price"]),
+                                             min_value=0.0001, format="%.4f")
+                edit_note  = st.text_input("Note", value=str(lot["note"] or ""))
+
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                save_edit = st.form_submit_button("Save Changes", type="primary",
+                                                  use_container_width=True)
+            with sc2:
+                del_lot = st.form_submit_button("Delete Lot", type="secondary",
+                                                use_container_width=True)
+
+        if save_edit or del_lot:
+            from etrade_sync.sync.manual_lots import rewrite_manual_lots_file
+            from etrade_sync.sync.csv_import import import_csv
+            from etrade_sync.analytics.ledger import build_ledger
+            from etrade_sync.analytics.realized_pnl import build_realized_pnl
+            from etrade_sync.analytics.views import refresh_views
+            from etrade_sync.db import get_connection
+
+            with st.spinner("Updating and rebuilding pipeline…"):
+                # All manual lots for this account except the one being edited
+                remaining = [
+                    {
+                        "symbol":   r["symbol"],
+                        "buy_date": r["buy_date"],
+                        "quantity": float(r["quantity"]),
+                        "price":    float(r["price"]),
+                        "note":     r["note"],
+                    }
+                    for r in manual_lots_rows
+                    if r["account_id_key"] == lot["account_id_key"]
+                    and r["transaction_id"] != lot["transaction_id"]
+                ]
+
+                if save_edit:
+                    remaining.append({
+                        "symbol":   lot["symbol"],
+                        "buy_date": edit_date,
+                        "quantity": edit_qty,
+                        "price":    edit_price,
+                        "note":     edit_note,
+                    })
+
+                # Remove old transaction from DB
+                with get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("DELETE FROM transactions WHERE transaction_id = %s",
+                                    (lot["transaction_id"],))
+
+                # Rewrite CSV and re-import
+                acct_name = lot["account_name"] or lot["account_id"]
+                path = rewrite_manual_lots_file(acct_name, lot["account_id"], remaining)
+                if remaining:
+                    import_csv(str(path), lot["account_id_key"])
+
+                build_ledger(full_rebuild=True)
+                build_realized_pnl()
+                refresh_views()
+
+            action = "updated" if save_edit else "deleted"
+            st.success(f"Lot {action}. Pipeline rebuilt.")
+            st.rerun()

@@ -1,0 +1,4 @@
+Activity/Trade Date,Transaction Date,Settlement Date,Activity Type,Description,Symbol,Cusip,Quantity #,Price $,Amount $,Commission,Category,Note
+02/15/13,02/15/13,02/17/13,Bought,Manual lot entry,06051YAC4,,200.0,11.2878,-2257.56,0,,very old Etrade data
+11/30/12,11/30/12,12/02/12,Bought,Manual lot entry,PSLV,,300.0,13.2585,-3977.55,0,,very old Etrade data
+02/15/13,02/15/13,02/17/13,Bought,Manual lot entry,PSLV,,200.0,11.2878,-2257.56,0,,very old Etrade data

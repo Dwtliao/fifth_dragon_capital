@@ -76,8 +76,10 @@ def build_realized_pnl():
                     print(f"  WARNING: cannot determine split ratio for {key[1]} on {date} — skipping")
                 running_pos += qty
 
-    # FIFO matching
+    # FIFO matching — also tracks remaining buy queues for open lot extraction
     lots = []
+    remaining_queues = {}  # key → buy_queue after sell matching
+
     for key, key_sells in sells.items():
         account, symbol = key
         key_splits = splits.get(key, [])
@@ -118,6 +120,36 @@ def build_realized_pnl():
                 if b[3] <= 0:
                     buy_ptr += 1
 
+        remaining_queues[key] = buy_queue
+
+    # Open lots — collect all buy lots with remaining quantity.
+    # For keys with no sells at all, the full buy queue is open.
+    open_lot_rows = []
+    for key, buy_list in buys.items():
+        account, symbol = key
+        key_splits = splits.get(key, [])
+        queue = remaining_queues.get(key, [[b[0], b[1], b[2], b[3]] for b in buy_list])
+
+        for b in queue:
+            ledger_id, buy_date, orig_price, remaining_orig_qty = b
+            if remaining_orig_qty <= Decimal('0.0001'):
+                continue
+
+            # Apply all splits after buy date (no sell-date upper bound — open position)
+            adj_ratio = Decimal('1')
+            for split_date, ratio in key_splits:
+                if buy_date < split_date:
+                    adj_ratio *= ratio
+
+            adj_qty   = remaining_orig_qty * adj_ratio
+            adj_price = orig_price / adj_ratio
+            cost      = adj_qty * adj_price
+
+            open_lot_rows.append((
+                account, symbol, ledger_id, buy_date,
+                float(adj_price), float(adj_qty), float(cost),
+            ))
+
     with get_connection() as conn:
         with conn.cursor() as cur:
             # Preserve trade tags keyed by (account, symbol, buy_date, sell_date)
@@ -131,7 +163,7 @@ def build_realized_pnl():
             """)
             saved_tags = cur.fetchall()
 
-            cur.execute("TRUNCATE TABLE trade_tags, realized_gains")
+            cur.execute("TRUNCATE TABLE trade_tags, realized_gains, open_lots")
 
             if lots:
                 cur.executemany(
@@ -145,6 +177,17 @@ def build_realized_pnl():
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     lots,
+                )
+
+            if open_lot_rows:
+                cur.executemany(
+                    """
+                    INSERT INTO open_lots
+                        (account_id_key, symbol, buy_ledger_id, buy_date,
+                         buy_price, quantity, cost_basis)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    open_lot_rows,
                 )
 
             # Re-link saved tags to new realized_gains IDs
@@ -169,5 +212,5 @@ def build_realized_pnl():
             if saved_tags:
                 print(f"  realized_pnl: re-linked {relinked}/{len(saved_tags)} trade tag(s)")
 
-    print(f"  realized_pnl: {len(lots)} FIFO lot(s) matched")
+    print(f"  realized_pnl: {len(lots)} FIFO lot(s) matched, {len(open_lot_rows)} open lot(s) saved")
     return len(lots)

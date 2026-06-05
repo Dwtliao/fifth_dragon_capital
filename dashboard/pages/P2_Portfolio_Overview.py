@@ -246,3 +246,91 @@ if not positions_display.empty:
     st.dataframe(display, use_container_width=True, hide_index=True)
 else:
     st.info("No positions match the current filters.")
+
+
+# ── lot detail (symbols with multiple open buy lots) ──────────────────────────
+
+_lot_where = "AND ol.account_id_key = %(acct)s" if account_filter else ""
+
+lots_df = pd.DataFrame(query(f"""
+    SELECT
+        ol.account_id_key,
+        a.account_id,
+        ol.symbol,
+        ol.buy_date,
+        ol.buy_price::float                                         AS buy_price,
+        ol.quantity::float                                          AS quantity,
+        ol.cost_basis::float                                        AS cost_basis,
+        (p.market_value / NULLIF(p.quantity, 0))::float            AS current_price,
+        (ol.quantity * p.market_value / NULLIF(p.quantity, 0))::float AS current_value,
+        (ol.quantity * p.market_value / NULLIF(p.quantity, 0)
+            - ol.cost_basis)::float                                AS unrealized_pnl,
+        (CURRENT_DATE - ol.buy_date)                               AS days_held
+    FROM open_lots ol
+    JOIN accounts a USING (account_id_key)
+    JOIN (
+        SELECT account_id_key, symbol, market_value, quantity, security_type
+        FROM positions
+        WHERE fetched_at = (SELECT MAX(fetched_at) FROM positions)
+    ) p ON p.account_id_key = ol.account_id_key AND p.symbol = ol.symbol
+    WHERE p.security_type = 'EQ'  -- bonds use face-value quantities; exclude to avoid misleading numbers
+      {_lot_where}
+    ORDER BY ol.symbol, ol.buy_date
+""", _params))
+
+if not lots_df.empty:
+    lots_df["pnl_pct"] = (
+        lots_df["unrealized_pnl"] / lots_df["cost_basis"].replace(0, float("nan")) * 100
+    )
+
+    # Only symbols that have >1 lot across accounts (or within the selected account)
+    lot_counts = lots_df.groupby("symbol")["buy_date"].count()
+    multi_lot_symbols = lot_counts[lot_counts > 1].index.tolist()
+    multi_lots = lots_df[lots_df["symbol"].isin(multi_lot_symbols)].copy()
+
+    if not multi_lots.empty:
+        st.divider()
+        st.subheader("Position Lot Detail")
+        st.caption("Symbols with multiple purchase lots — buy prices are split-adjusted.")
+
+        for symbol in sorted(multi_lots["symbol"].unique()):
+            sym_lots = multi_lots[multi_lots["symbol"] == symbol].copy()
+            total_cost = sym_lots["cost_basis"].sum()
+            total_val  = sym_lots["current_value"].sum()
+            total_pnl  = sym_lots["unrealized_pnl"].sum()
+            total_pnl_pct = total_pnl / total_cost * 100 if total_cost else 0
+
+            label = (
+                f"{symbol}  —  {len(sym_lots)} lots  |  "
+                f"Cost ${total_cost:,.0f}  →  "
+                f"Value ${total_val:,.0f}  |  "
+                f"P/L ${total_pnl:+,.0f}  ({total_pnl_pct:+.1f}%)"
+            )
+            with st.expander(label):
+                show = sym_lots[[
+                    "account_id", "buy_date", "quantity",
+                    "buy_price", "cost_basis",
+                    "current_price", "current_value",
+                    "unrealized_pnl", "pnl_pct", "days_held",
+                ]].copy()
+
+                show["buy_date"]      = pd.to_datetime(show["buy_date"]).dt.strftime("%Y-%m-%d")
+                show["buy_price"]     = show["buy_price"].apply(lambda x: f"${x:,.4f}")
+                show["current_price"] = show["current_price"].apply(lambda x: f"${x:,.4f}")
+                show["quantity"]      = show["quantity"].apply(
+                    lambda x: f"{x:,.0f}" if x == int(x) else f"{x:,.4f}"
+                )
+                show["cost_basis"]    = show["cost_basis"].apply(lambda x: f"${x:,.0f}")
+                show["current_value"] = show["current_value"].apply(lambda x: f"${x:,.0f}")
+                show["unrealized_pnl"] = show["unrealized_pnl"].apply(lambda x: f"${x:+,.0f}")
+                show["pnl_pct"]       = show["pnl_pct"].apply(
+                    lambda x: f"{x:+.1f}%" if pd.notna(x) else "—"
+                )
+                show["days_held"]     = show["days_held"].apply(lambda x: f"{x.days}d" if pd.notna(x) else "—")
+
+                show.columns = [
+                    "Account", "Buy Date", "Qty", "Buy Price (adj)",
+                    "Cost Basis", "Current Price", "Current Value",
+                    "Unrealized P/L", "P/L %", "Days Held",
+                ]
+                st.dataframe(show, use_container_width=True, hide_index=True)

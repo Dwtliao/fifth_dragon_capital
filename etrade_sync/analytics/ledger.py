@@ -109,6 +109,7 @@ def build_ledger(full_rebuild=False):
                 # open_lots and realized_gains FK-reference ledger.id and are
                 # always fully rebuilt after build_ledger(), so clear them first.
                 cur.execute("TRUNCATE TABLE open_lots, realized_gains CASCADE")
+                print("  ledger: cleared open_lots + realized_gains (run build_realized_pnl to restore)")
                 cur.execute("DELETE FROM ledger WHERE source_table = 'transactions'")
 
             cur.execute(_CANONICAL_TRANSACTIONS_SQL)

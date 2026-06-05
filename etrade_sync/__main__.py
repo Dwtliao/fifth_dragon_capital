@@ -187,12 +187,16 @@ def main():
     elif args.command == "build-ledger":
         from etrade_sync.db import create_tables
         from etrade_sync.analytics.ledger import build_ledger
+        from etrade_sync.analytics.realized_pnl import build_realized_pnl
+        from etrade_sync.analytics.views import refresh_views
         from etrade_sync.analytics.sync_log import start_run, finish_run
         create_tables()
         log_id = start_run("build_ledger")
         try:
             count = build_ledger(full_rebuild=args.full_rebuild)
-            finish_run(log_id, "success", rows_synced={"ledger": count})
+            pnl_count = build_realized_pnl()
+            refresh_views()
+            finish_run(log_id, "success", rows_synced={"ledger": count, "realized_gains": pnl_count})
         except Exception as e:
             finish_run(log_id, "failed", error_msg=str(e))
             raise

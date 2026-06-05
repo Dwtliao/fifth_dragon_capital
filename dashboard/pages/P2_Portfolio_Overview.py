@@ -284,21 +284,23 @@ st.subheader("Positions")
 
 if not positions_display.empty:
     display = positions_display.copy()
-    display["market_value"]     = display["market_value"].apply(lambda x: f"${x:,.0f}")
-    display["cost_basis"]       = display["cost_basis"].apply(lambda x: f"${x:,.0f}")
-    display["unrealized_pnl"]   = display["unrealized_pnl"].apply(lambda x: f"${x:,.0f}")
-    display["pnl_pct"]          = display["pnl_pct"].apply(
-        lambda x: f"{x:.1f}%" if pd.notna(x) else "—"
-    )
-    display["pct_of_portfolio"] = display["pct_of_portfolio"].apply(lambda x: f"{x:.1f}%")
-    display["quantity"]         = display["quantity"].apply(
-        lambda x: f"{x:,.0f}" if x == int(x) else f"{x:,.4f}"
-    )
     display.columns = [
         "Symbol", "Sector", "Asset Class", "Vehicle Type", "Themes", "Quantity",
         "Cost Basis", "Market Value", "Unrealized P/L", "P/L %", "% Portfolio",
     ]
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    st.dataframe(
+        display,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Quantity":       st.column_config.NumberColumn(format="%.4g"),
+            "Cost Basis":     st.column_config.NumberColumn(format="$%.0f"),
+            "Market Value":   st.column_config.NumberColumn(format="$%.0f"),
+            "Unrealized P/L": st.column_config.NumberColumn(format="$%.0f"),
+            "P/L %":          st.column_config.NumberColumn(format="%.1f%%"),
+            "% Portfolio":    st.column_config.NumberColumn(format="%.1f%%"),
+        },
+    )
 else:
     st.info("No positions match the current filters.")
 
@@ -320,7 +322,9 @@ lots_df = pd.DataFrame(query(f"""
         (ol.quantity * p.market_value / NULLIF(p.quantity, 0))::float AS current_value,
         (ol.quantity * p.market_value / NULLIF(p.quantity, 0)
             - ol.cost_basis)::float                                AS unrealized_pnl,
-        (CURRENT_DATE - ol.buy_date)                               AS days_held
+        (CURRENT_DATE - ol.buy_date)                               AS days_held,
+        COALESCE(t.source_system, 'unknown')                       AS source_system,
+        ia.classification
     FROM open_lots ol
     JOIN accounts a USING (account_id_key)
     JOIN (
@@ -328,6 +332,15 @@ lots_df = pd.DataFrame(query(f"""
         FROM positions
         WHERE fetched_at = (SELECT MAX(fetched_at) FROM positions)
     ) p ON p.account_id_key = ol.account_id_key AND p.symbol = ol.symbol
+    JOIN ledger l ON l.id = ol.buy_ledger_id
+    LEFT JOIN transactions t ON t.transaction_id = l.source_id
+    LEFT JOIN (
+        SELECT DISTINCT ON (account_id_key, transaction_id)
+            account_id_key, transaction_id, classification
+        FROM transaction_ingest_audit
+        ORDER BY account_id_key, transaction_id, id
+    ) ia ON ia.account_id_key = t.account_id_key
+         AND ia.transaction_id = t.transaction_id
     WHERE p.security_type = 'EQ'  -- bonds use face-value quantities; exclude to avoid misleading numbers
       {_lot_where}
     ORDER BY ol.symbol, ol.buy_date
@@ -369,18 +382,29 @@ if not lots_df.empty:
             position_qty  = pos_qty.get(symbol, None)
             reconciled    = position_qty is None or abs(lot_total_qty - position_qty) < 0.01
 
+            # Provenance flag: only genuinely suspicious classifications.
+            # API lots with no audit record are benign (API sync doesn't write audit rows).
+            # Only flag cross_source_overlap or same_source_candidate.
+            _SUSPECT_CLASSES = {"cross_source_overlap", "same_source_candidate"}
+            suspect_mask  = sym_lots["classification"].isin(_SUSPECT_CLASSES)
+            has_suspect   = suspect_mask.any()
+
             total_cost = sym_lots["cost_basis"].sum()
             total_val  = sym_lots["current_value"].sum()
             total_pnl  = sym_lots["unrealized_pnl"].sum()
             total_pnl_pct = total_pnl / total_cost * 100 if total_cost else 0
 
-            warn = "" if reconciled else "  ⚠️ lot qty mismatch"
+            flags = ""
+            if not reconciled:
+                flags += "  ⚠️ qty mismatch"
+            if has_suspect:
+                flags += "  🔍 provenance"
             label = (
                 f"{symbol}  —  {len(sym_lots)} lots  |  "
                 f"Cost ${total_cost:,.0f}  →  "
                 f"Value ${total_val:,.0f}  |  "
                 f"P/L ${total_pnl:+,.0f}  ({total_pnl_pct:+.1f}%)"
-                f"{warn}"
+                f"{flags}"
             )
             with st.expander(label):
                 if not reconciled:
@@ -394,13 +418,35 @@ if not lots_df.empty:
                         "to check for duplicate fills.",
                         icon="⚠️",
                     )
+                if has_suspect:
+                    n = int(suspect_mask.sum())
+                    st.warning(
+                        f"{n} lot{'s' if n > 1 else ''} flagged for provenance review — "
+                        "see the Provenance column below. "
+                        "These lots have a **cross_source_overlap** or **same_source_candidate** "
+                        "classification, which may indicate a duplicate fill.",
+                        icon="🔍",
+                    )
+
+                def _provenance_label(row):
+                    c = row["classification"]
+                    s = row["source_system"]
+                    if c in _SUSPECT_CLASSES:
+                        return f"{s} · {c}"
+                    if c == "canonical":
+                        return f"{s} · canonical"
+                    # API lots with no audit record are normal — show source only
+                    return s or "unknown"
+
                 show = sym_lots[[
                     "account_id", "buy_date", "quantity",
                     "buy_price", "cost_basis",
                     "current_price", "current_value",
                     "unrealized_pnl", "pnl_pct", "days_held",
+                    "source_system", "classification",
                 ]].copy()
 
+                show["provenance"]    = sym_lots.apply(_provenance_label, axis=1)
                 show["buy_date"]      = pd.to_datetime(show["buy_date"]).dt.strftime("%Y-%m-%d")
                 show["buy_price"]     = show["buy_price"].apply(lambda x: f"${x:,.4f}")
                 show["current_price"] = show["current_price"].apply(lambda x: f"${x:,.4f}")
@@ -415,10 +461,16 @@ if not lots_df.empty:
                 )
                 show["days_held"]     = show["days_held"].apply(lambda x: f"{int(x)}d" if pd.notna(x) else "—")
 
+                show = show[[
+                    "account_id", "buy_date", "quantity",
+                    "buy_price", "cost_basis",
+                    "current_price", "current_value",
+                    "unrealized_pnl", "pnl_pct", "days_held", "provenance",
+                ]]
                 show.columns = [
                     "Account", "Buy Date", "Qty", "Buy Price (adj)",
                     "Cost Basis", "Current Price", "Current Value",
-                    "Unrealized P/L", "P/L %", "Days Held",
+                    "Unrealized P/L", "P/L %", "Days Held", "Provenance",
                 ]
                 st.dataframe(show, use_container_width=True, hide_index=True)
 

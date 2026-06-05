@@ -284,21 +284,23 @@ st.subheader("Positions")
 
 if not positions_display.empty:
     display = positions_display.copy()
-    display["market_value"]     = display["market_value"].apply(lambda x: f"${x:,.0f}")
-    display["cost_basis"]       = display["cost_basis"].apply(lambda x: f"${x:,.0f}")
-    display["unrealized_pnl"]   = display["unrealized_pnl"].apply(lambda x: f"${x:,.0f}")
-    display["pnl_pct"]          = display["pnl_pct"].apply(
-        lambda x: f"{x:.1f}%" if pd.notna(x) else "—"
-    )
-    display["pct_of_portfolio"] = display["pct_of_portfolio"].apply(lambda x: f"{x:.1f}%")
-    display["quantity"]         = display["quantity"].apply(
-        lambda x: f"{x:,.0f}" if x == int(x) else f"{x:,.4f}"
-    )
     display.columns = [
         "Symbol", "Sector", "Asset Class", "Vehicle Type", "Themes", "Quantity",
         "Cost Basis", "Market Value", "Unrealized P/L", "P/L %", "% Portfolio",
     ]
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    st.dataframe(
+        display,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Quantity":       st.column_config.NumberColumn(format="%.4g"),
+            "Cost Basis":     st.column_config.NumberColumn(format="$%.0f"),
+            "Market Value":   st.column_config.NumberColumn(format="$%.0f"),
+            "Unrealized P/L": st.column_config.NumberColumn(format="$%.0f"),
+            "P/L %":          st.column_config.NumberColumn(format="%.1f%%"),
+            "% Portfolio":    st.column_config.NumberColumn(format="%.1f%%"),
+        },
+    )
 else:
     st.info("No positions match the current filters.")
 

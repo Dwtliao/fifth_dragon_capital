@@ -216,8 +216,8 @@ def summary_table(df, label_col):
 
 col_l, col_m, col_r = st.columns(3)
 with col_l:
-    st.subheader("By Sector")
-    st.caption("Equity-style economic themes (Fixed Income & Cash excluded)")
+    st.subheader("By Sector (Risk Assets Only)")
+    st.caption("Cash & Fixed Income shown in Asset Class →")
     if not sector_chart_df.empty:
         st.altair_chart(donut_chart(sector_chart_df, "market_value", "sector", "Sector"),
                         use_container_width=True)

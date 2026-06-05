@@ -200,6 +200,7 @@ JOBS = {
     "seed-prices":        "Fetch SPY benchmark prices from yfinance",
     "seed-dates":         "Regenerate the dim_dates date spine",
     "reconcile":          "Compare ledger positions to latest API snapshot",
+    "cleanup-audit":      "Collapse duplicate transaction_ingest_audit rows (safe to run anytime)",
 }
 
 NEEDS_TOKEN = {"sync"}
@@ -238,6 +239,11 @@ elif job == "build-ledger":
     full_rebuild = st.checkbox("Full rebuild (truncate ledger before repopulating)")
     if full_rebuild:
         cmd_extra += ["--full-rebuild"]
+
+elif job == "cleanup-audit":
+    dry_run = st.checkbox("Dry run (inspect without deleting)", value=True)
+    if dry_run:
+        cmd_extra += ["--dry-run"]
 
 if run_btn:
     cmd = [PYTHON, "-m", "etrade_sync", job] + cmd_extra

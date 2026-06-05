@@ -1,0 +1,2 @@
+Activity/Trade Date,Transaction Date,Settlement Date,Activity Type,Description,Symbol,Cusip,Quantity #,Price $,Amount $,Commission,Category,Note
+02/13/13,02/13/13,02/15/13,Bought,Manual lot entry,PSLV,,100.0,11.83,-1183.00,0,,very old Etrade data not from API

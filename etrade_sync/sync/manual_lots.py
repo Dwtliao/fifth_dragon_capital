@@ -28,6 +28,47 @@ def _fmt_date(d: date) -> str:
     return d.strftime("%m/%d/%y")
 
 
+def rewrite_manual_lots_file(account_name: str, account_id: str, lots: list) -> Path:
+    """Rewrite the entire manual lots CSV for an account from a list of lot dicts.
+
+    Each dict must have: symbol, buy_date (date or ISO string), quantity, price, note.
+    Deletes the file if lots is empty.
+    """
+    MANUAL_LOTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = manual_lots_path(account_name, account_id)
+
+    if not lots:
+        path.unlink(missing_ok=True)
+        return path
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(_HEADER)
+        for lot in lots:
+            buy_date = lot["buy_date"]
+            if isinstance(buy_date, str):
+                buy_date = date.fromisoformat(buy_date)
+            settlement = buy_date + timedelta(days=2)
+            amount = -(lot["quantity"] * lot["price"])
+            w.writerow([
+                _fmt_date(buy_date),
+                _fmt_date(buy_date),
+                _fmt_date(settlement),
+                "Bought",
+                "Manual lot entry",
+                str(lot["symbol"]).upper().strip(),
+                "",
+                lot["quantity"],
+                lot["price"],
+                f"{amount:.2f}",
+                "0",
+                "",
+                str(lot.get("note") or "").strip(),
+            ])
+
+    return path
+
+
 def append_manual_lot(
     account_name: str,
     account_id: str,

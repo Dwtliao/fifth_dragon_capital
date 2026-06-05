@@ -382,8 +382,11 @@ if not lots_df.empty:
             position_qty  = pos_qty.get(symbol, None)
             reconciled    = position_qty is None or abs(lot_total_qty - position_qty) < 0.01
 
-            # Provenance flag: any lot that isn't cleanly canonical
-            suspect_mask  = sym_lots["classification"].isna() | (sym_lots["classification"] != "canonical")
+            # Provenance flag: only genuinely suspicious classifications.
+            # API lots with no audit record are benign (API sync doesn't write audit rows).
+            # Only flag cross_source_overlap or same_source_candidate.
+            _SUSPECT_CLASSES = {"cross_source_overlap", "same_source_candidate"}
+            suspect_mask  = sym_lots["classification"].isin(_SUSPECT_CLASSES)
             has_suspect   = suspect_mask.any()
 
             total_cost = sym_lots["cost_basis"].sum()
@@ -417,22 +420,23 @@ if not lots_df.empty:
                     )
                 if has_suspect:
                     n = int(suspect_mask.sum())
-                    st.info(
+                    st.warning(
                         f"{n} lot{'s' if n > 1 else ''} flagged for provenance review — "
                         "see the Provenance column below. "
-                        "**no audit record** = row predates the provenance layer (manual or early CSV import). "
-                        "Other non-canonical classifications may indicate a duplicate candidate.",
+                        "These lots have a **cross_source_overlap** or **same_source_candidate** "
+                        "classification, which may indicate a duplicate fill.",
                         icon="🔍",
                     )
 
                 def _provenance_label(row):
                     c = row["classification"]
                     s = row["source_system"]
+                    if c in _SUSPECT_CLASSES:
+                        return f"{s} · {c}"
                     if c == "canonical":
-                        return s
-                    if c is None or (isinstance(c, float) and pd.isna(c)):
-                        return "no audit record"
-                    return f"{s} · {c}"
+                        return f"{s} · canonical"
+                    # API lots with no audit record are normal — show source only
+                    return s or "unknown"
 
                 show = sym_lots[[
                     "account_id", "buy_date", "quantity",

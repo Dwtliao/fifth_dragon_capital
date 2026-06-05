@@ -45,7 +45,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 
 ---
 
-## Current State (as of 2026-06-05, updated)
+## Current State (as of 2026-06-05, updated 2x)
 
 ### ✅ Completed
 
@@ -56,6 +56,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 0 | Pipeline monitoring | sync_log table, triggered_by tracking (manual vs launchd) |
 | 0 | `migrate` command | Drop + recreate all materialized views + re-apply all SQL files. Run after any schema change. |
 | 0 | CSV transaction backfill | `import-csv` CLI command loads E*TRADE CSV exports into transactions. Source-aware dedup handles API/CSV overlaps. 2025–2026 history loaded for all 4 accounts and committed to git for portability. |
+| 0 | Transaction provenance layer (#36) | `transaction_identity.py` computes `source_payload_hash`, `canonical_fingerprint`, and `dedupe_signature` at ingest. `transaction_ingest_audit` table records every row's classification (canonical / cross_source_overlap / same_source_candidate). Atomic UPSERT on `(account_id_key, source_system, source_record_key)` — repeated syncs increment `observed_count` instead of appending rows. Legacy CSV:SHA1 IDs preserved for backward compatibility. `cleanup-audit` CLI command with `--dry-run` for maintenance. |
 | 1 | `ledger` table | Normalized event log, signed quantities, upsert-safe, source_line_id for future multi-leg |
 | 2 | `dim_symbols` | yfinance metadata: sector, industry, asset class, exchange |
 | 2 | `dim_sectors` | Canonical sector list with sort order — source of truth for sector dropdowns |
@@ -219,3 +220,5 @@ Same columns + `account_id_key`. Cumulative returns anchored to each account's f
 | CSV backfill dedup strategy? | Two-pass source-aware dedup in `build_ledger()`. Pass A (cross-source): removes CSV rows shadowed by an API row using `ROUND(price, 2)` to handle CSV 2dp vs API precision. Pass B (same-source): removes API rows E*TRADE returned twice under different IDs using exact price, so genuine same-day fills at similar-but-distinct prices are never collapsed. |
 | CSV files in git? | Yes — E*TRADE transaction CSVs contain no credentials and serve as portable transaction history. Committing them means a fresh clone can fully rebuild the pipeline without re-downloading from E*TRADE. Stored in `data/csv_exports/`. |
 | Bond positions in lot detail? | Excluded from Portfolio Overview lot detail. Bonds use face-value quantities (e.g. 15,000 = $15,000 face) and price-per-$100-face, making qty × price misleading without a bond-specific formula. |
+| Transaction dedup strategy? | Two-layer approach: (1) fingerprint layer in `transaction_identity.py` at ingest time — `dedupe_signature` uses 2dp-rounded price so CSV and API representations of the same fill hash identically; (2) source-aware SQL dedup in `build_ledger()` as a safety net. The fingerprint layer is the long-term path; the SQL dedup handles pre-fingerprint rows and edge cases. |
+| Audit trail growth? | `transaction_ingest_audit` uses upsert on `(account_id_key, source_system, source_record_key)` — one row per unique source record, `observed_count` increments on repeat syncs. `060_cleanup_transaction_ingest_audit.sql` collapses any historical duplicates and creates the unique index during schema bootstrap. `cleanup-audit --dry-run` available for inspection. |

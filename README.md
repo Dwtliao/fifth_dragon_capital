@@ -163,11 +163,12 @@ All tables are created automatically on first sync. Schema definitions live in `
 
 | Table | Description |
 |---|---|
-| `dim_symbols` | Ticker metadata: CUSIP, sector, industry, asset class, exchange (via yfinance) |
+| `dim_symbols` | Ticker metadata: CUSIP, sector, industry, asset class, vehicle_type, exchange (via yfinance) |
 | `dim_sectors` | Canonical sector list with sort order — source of truth for the sector dropdown in the dashboard |
-| `dim_symbol_overrides` | Manual sector/asset class overrides per symbol — takes precedence over yfinance in all views |
+| `dim_symbol_overrides` | Manual sector / asset_class / vehicle_type overrides per symbol — takes precedence over yfinance in all views |
 | `dim_dates` | Date spine 2013–2027: ISO week/year, NYSE trading day flag, fiscal period |
 | `dim_accounts` | SCD Type 2 account history: `account_sk` surrogate, `effective_from/to`, `is_current`. `dim_accounts_current` view for current-state queries. |
+| `symbol_exposure_tags` | Many-to-many thematic tags per symbol (Uranium, Precious Metals, Gold, Copper, etc.). A symbol can have multiple tags; values overlap intentionally. |
 
 ### Fact tables — `data_model/030_*.sql` – `032_*.sql`
 
@@ -184,7 +185,7 @@ All tables are created automatically on first sync. Schema definitions live in `
 | `mv_unrealized_pnl` | Materialized view: unrealized P/L from latest positions snapshot |
 | `realized_gains` | FIFO-matched buy/sell lots with split-adjusted cost basis, proceeds, realized P/L, short/long term |
 | `mv_portfolio_timeseries` | Daily portfolio value, returns, rolling metrics, drawdown — aggregated across all accounts |
-| `mv_allocations` | Current sector / asset class breakdown with override priority: `dim_symbol_overrides` > yfinance |
+| `mv_allocations` | Current sector / asset_class / vehicle_type breakdown with override priority: `dim_symbol_overrides` > yfinance. Includes `exposure_tags` array from `symbol_exposure_tags`. |
 | `market_prices` | SPY daily close prices via yfinance — used for benchmark comparison |
 | `mv_benchmark_comparison` | Portfolio return vs SPY: cumulative, rolling 30d, alpha — all-accounts |
 | `mv_portfolio_timeseries_by_account` | Same as `mv_portfolio_timeseries` but with `account_id_key` as a dimension |
@@ -218,9 +219,9 @@ streamlit run dashboard/app.py
 | Page | Description |
 |---|---|
 | Pipeline Status | Token freshness alert, job run history, table health, last sync times. **Run Jobs** panel covers all batch commands (sync, migrate, refresh-views, build-ledger, build-realized-pnl, seed-symbols, seed-prices, seed-dates, reconcile, cleanup-audit) with live output streaming. |
-| Portfolio Overview | Total account value, cash, invested capital, unrealized P/L. Account filter + position filters (symbol, sector, asset class). Sector and asset class donut charts with % and $ labels and summary tables. Full positions table. All KPIs and charts respond to active filters. |
+| Portfolio Overview | Total account value, cash, invested capital, unrealized P/L. Account filter + position filters (symbol, sector, asset class). Three-column donut layout: Sector (risk assets only), Asset Class, Vehicle Type — all with inside-arc % labels. Theme exposure bar chart (overlap note). Full positions table with Vehicle Type and Themes columns. All KPIs and charts respond to active filters. |
 | Performance | Equity curve vs SPY, drawdown, rolling 30d returns, rolling volatility. Account + Period + SPY toggle filters. Attribution drill-downs by Account (overlaid equity curves), Sector, and Asset Class (stacked area + unrealized P/L bar). Realized P/L by year with lot detail table. |
-| Symbol Admin (P9) | Manage sector and asset class overrides per symbol. Override wins over yfinance data in all views. Manage Sectors tab to add custom sectors. Saving an override auto-refreshes `mv_allocations`. |
+| Symbol Admin (P9) | Three tabs: **Symbol Overrides** — set sector, asset class, and vehicle type per symbol with notes; **Exposure Tags** — manage thematic tags (Uranium, Precious Metals, Copper, etc.) per symbol via multiselect; **Manage Sectors** — add custom sectors. All saves auto-refresh `mv_allocations`. |
 
 Trading History (#27), Risk & Exposure (#28), and Strategy Tags (#29) are in progress.
 

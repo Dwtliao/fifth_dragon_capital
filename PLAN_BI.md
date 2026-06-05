@@ -45,7 +45,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 
 ---
 
-## Current State (as of 2026-06-05, updated 2x)
+## Current State (as of 2026-06-05, updated 3x)
 
 ### ✅ Completed
 
@@ -72,16 +72,19 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 3 | `open_lots` | Remaining buy lots after FIFO matching, split-adjusted qty and price. Rebuilt alongside realized_gains. |
 | 3 | `mv_portfolio_timeseries` | Daily portfolio value, returns, volatility, drawdown — all accounts aggregated |
 | 3 | `mv_portfolio_timeseries_by_account` | Same as above with account_id_key as dimension — used by Performance page account filter |
-| 3 | `mv_allocations` | Sector / asset class breakdown with override priority: dim_symbol_overrides > yfinance |
+| 3 | `mv_allocations` | Sector / asset class / vehicle_type breakdown with override priority: dim_symbol_overrides > yfinance. Includes `exposure_tags` array from symbol_exposure_tags. |
 | 3 | `mv_attribution_timeseries` | Daily sector + asset class market value/P/L per account — attribution drill-downs |
 | 3 | `market_prices` | SPY benchmark price history via yfinance |
 | 3 | `mv_benchmark_comparison` | Portfolio return vs SPY, alpha, rolling comparison — all accounts |
 | 3 | `mv_benchmark_comparison_by_account` | Per-account portfolio vs SPY — used when account filter is active |
 | 4 | Pipeline Status page (P1) | Token alert, full job runner (all batch commands), live output, sync_log history |
-| 4 | Portfolio Overview page (P2) | Account + position filters, KPIs, sector/asset class donuts with labels + summary tables. Cash KPI uses `cash_available_for_invest` (correct for margin + IRA accounts). Position lot detail expander per multi-lot symbol with split-adjusted buy prices, cost basis, current value, P/L, days held, and quantity reconciliation warning. |
+| 4 | Portfolio Overview page (P2) | Account + position filters, KPIs, sector/asset class/vehicle-type donuts with labels + summary tables. Sector donut excludes Fixed Income/Cash (risk assets only). Theme exposure bar chart (horizontal, overlap note). Cash KPI uses `cash_available_for_invest` (correct for margin + IRA accounts). Position lot detail expander per multi-lot symbol with split-adjusted buy prices, cost basis, current value, P/L, days held, and quantity reconciliation warning. Themes column in positions table. |
 | 4 | Performance page (P3) | Equity curve, drawdown, rolling returns, attribution by account/sector/asset class, realized P/L |
 | 4 | Trading History page (P4) | P/L heatmap, cash flow/income charts, trade scatterplot, ledger explorer with active-filter display, strategy tag form |
-| 4 | Symbol Admin page (P9) | Sector/asset class override UI, manage sectors, auto-refreshes mv_allocations on save |
+| 4 | Symbol Admin page (P9) | Three tabs: Symbol Overrides (sector/asset class/vehicle_type per symbol, notes), Exposure Tags (many-to-many theme tags with multiselect + free-text), Manage Sectors. Saving auto-refreshes mv_allocations. |
+| 2 | `vehicle_type` column | Added to `dim_symbols` and `dim_symbol_overrides`. Three independent classification axes: sector (equity theme), asset_class (Equity/Fixed Income/Commodity/Cash), vehicle_type (Stock/ETF/Mutual Fund/Trust/CEF/Bond/CD). Seeds in 061_add_vehicle_type.sql. |
+| 2 | `symbol_exposure_tags` table | Many-to-many table: symbol → thematic tags (Uranium, Precious Metals, Gold, Silver, Copper, etc.). Tags are orthogonal to sector/asset_class and intentionally overlap across symbols. Schema in 052b, seeds in 062. |
+| 0 | Cross-source dedup fix | Narrowed `dedupe_payload` in `transaction_identity.py` to exclude `settlement_date`, `description`, `description2`, and `fee` — all of which differ systematically between CSV and API representations of the same trade. 063_reset_dedupe_signatures.sql resets all signatures for recompute. |
 
 ### Known Gaps / Open Issues
 
@@ -132,8 +135,10 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 ### Page 2: Portfolio Overview ✅ (done)
 - Global account filter + position filters (symbol, sector, asset class)
 - KPIs: total account value, invested MV, cash, unrealized P/L, P/L % — all respond to position filters
-- Sector and asset class donut charts with % + $ slice labels and summary tables below
-- Full positions table with P/L %
+- Three-column donut layout: Sector (risk assets only, excludes Fixed Income/Cash), Asset Class, Vehicle Type — all with inside-arc % labels
+- Theme exposure horizontal bar chart — overlap note shown (a symbol can carry multiple tags)
+- Full positions table with P/L %, Vehicle Type, and Themes columns
+- Position lot detail expander with quantity reconciliation warnings
 
 ### Page 3: Performance ✅ (done)
 - Global filters: Account | Period (YTD/1Y/3Y/All) | SPY toggle
@@ -145,11 +150,9 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 - Realized P/L by year with local year filter and lot detail expander
 
 ### Page 9: Symbol Admin ✅ (done)
-- Symbol table showing effective sector/asset class with source (override/yfinance/unknown)
-- Filter to "Unknown sector only" to quickly find gaps
-- Override form: set sector + asset class per symbol, with notes
-- Saving auto-refreshes mv_allocations
-- Manage Sectors tab: view canonical list, add custom sectors
+- **Symbol Overrides tab**: table showing effective sector/asset class/vehicle_type with source (override/yfinance/unknown). Filter to "Unknown sector only". Override form: set sector, asset class, vehicle type, and notes per symbol. Saving auto-refreshes mv_allocations.
+- **Exposure Tags tab**: table of symbol → tags. Form with multiselect (predefined tags + free-text new tag input). Tags saved and mv_allocations refreshed on submit.
+- **Manage Sectors tab**: view canonical sector list with sort order, add new sectors.
 
 ### Page 4: Trading History (#27)
 - Win rate, avg win/loss, profit factor
@@ -220,5 +223,5 @@ Same columns + `account_id_key`. Cumulative returns anchored to each account's f
 | CSV backfill dedup strategy? | Two-pass source-aware dedup in `build_ledger()`. Pass A (cross-source): removes CSV rows shadowed by an API row using `ROUND(price, 2)` to handle CSV 2dp vs API precision. Pass B (same-source): removes API rows E*TRADE returned twice under different IDs using exact price, so genuine same-day fills at similar-but-distinct prices are never collapsed. |
 | CSV files in git? | Yes — E*TRADE transaction CSVs contain no credentials and serve as portable transaction history. Committing them means a fresh clone can fully rebuild the pipeline without re-downloading from E*TRADE. Stored in `data/csv_exports/`. |
 | Bond positions in lot detail? | Excluded from Portfolio Overview lot detail. Bonds use face-value quantities (e.g. 15,000 = $15,000 face) and price-per-$100-face, making qty × price misleading without a bond-specific formula. |
-| Transaction dedup strategy? | Two-layer approach: (1) fingerprint layer in `transaction_identity.py` at ingest time — `dedupe_signature` uses 2dp-rounded price so CSV and API representations of the same fill hash identically; (2) source-aware SQL dedup in `build_ledger()` as a safety net. The fingerprint layer is the long-term path; the SQL dedup handles pre-fingerprint rows and edge cases. |
+| Transaction dedup strategy? | Two-layer approach: (1) fingerprint layer in `transaction_identity.py` at ingest time — `dedupe_payload` contains only the stable business-key fields (account, event_type, symbol, transaction_date, quantity, price, amount at 2dp). Excludes settlement_date (CSV uses T+2 synthetic; API returns actual), description/description2 (always differ between sources), and fee (0.0 vs 0 vs absent). `dedupe_signature` = SHA-256 of this payload, so CSV and API representations of the same fill hash identically. (2) The `_CANONICAL_TRANSACTIONS_SQL` CTE in `build_ledger()` partitions by dedupe_signature and prefers API > CSV — a safety net for any row that slips through fingerprinting. |
 | Audit trail growth? | `transaction_ingest_audit` uses upsert on `(account_id_key, source_system, source_record_key)` — one row per unique source record, `observed_count` increments on repeat syncs. `060_cleanup_transaction_ingest_audit.sql` collapses any historical duplicates and creates the unique index during schema bootstrap. `cleanup-audit --dry-run` available for inspection. |

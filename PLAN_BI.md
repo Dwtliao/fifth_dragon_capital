@@ -45,7 +45,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 
 ---
 
-## Current State (as of 2026-06-05, updated 3x)
+## Current State (as of 2026-06-05, updated 4x)
 
 ### ✅ Completed
 
@@ -85,6 +85,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 2 | `vehicle_type` column | Added to `dim_symbols` and `dim_symbol_overrides`. Three independent classification axes: sector (equity theme), asset_class (Equity/Fixed Income/Commodity/Cash), vehicle_type (Stock/ETF/Mutual Fund/Trust/CEF/Bond/CD). Seeds in 061_add_vehicle_type.sql. |
 | 2 | `symbol_exposure_tags` table | Many-to-many table: symbol → thematic tags (Uranium, Precious Metals, Gold, Silver, Copper, etc.). Tags are orthogonal to sector/asset_class and intentionally overlap across symbols. Schema in 052b, seeds in 062. |
 | 0 | Cross-source dedup fix | Narrowed `dedupe_payload` in `transaction_identity.py` to exclude `settlement_date`, `description`, `description2`, and `fee` — all of which differ systematically between CSV and API representations of the same trade. 063_reset_dedupe_signatures.sql resets all signatures for recompute. |
+| 4 | Lot provenance (#38) | Provenance column in Position Lot Detail showing source (api/csv) and classification per lot. `🔍` badge fires only for `cross_source_overlap` / `same_source_candidate` — API lots with no audit record show silently. Positions table columns are real numbers with column_config formatting (sortable, subtotals-ready). |
 
 ### Known Gaps / Open Issues
 
@@ -105,10 +106,11 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 | Order | Issue | Depends on | Notes |
 |---|---|---|---|
 | 1 | **#28** | #23, `dim_symbols` | Risk & Exposure — sector concentration, position sizing, exposure analysis |
-| 2 | **#29** | #27 | Strategy tags — depends on usable ledger explorer |
-| 3 | **#35** | none | OAuth re-auth UI in Pipeline Status — two-step Streamlit widget |
-| 4 | **#33** | none | Low-priority backfill for `dim_symbols.cusip` |
-| 5 | **#34** | none | Deferred design pass for options / multi-leg order mapping |
+| 2 | **#29 Pass 1** | #27 | `mv_strategy_performance` + P4 charts + taxonomy dropdown + empty state |
+| 3 | **#29 Pass 2** | Pass 1, definition of "capital deployed" | Capital deployed over time + P3 strategy breakout — deferred until Pass 1 proves useful |
+| 4 | **#35** | none | OAuth re-auth UI in Pipeline Status — two-step Streamlit widget |
+| 5 | **#33** | none | Low-priority backfill for `dim_symbols.cusip` |
+| 6 | **#34** | none | Deferred design pass for options / multi-leg order mapping |
 
 ### Completed
 
@@ -121,6 +123,7 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 | **#26** | ✅ Done | Performance — equity curve, drawdown, rolling returns, attribution, realized P/L |
 | **#27** | ✅ Done | Trading History — P/L heatmap, cash flow/income charts, trade scatterplot, ledger explorer, strategy tag form |
 | **#32** | ✅ Done | Split-adjusted FIFO cost basis |
+| **#38** | ✅ Done | Lot provenance display — Provenance column, smart flagging, sortable positions table, override migration fix |
 
 ---
 
@@ -137,8 +140,8 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 - KPIs: total account value, invested MV, cash, unrealized P/L, P/L % — all respond to position filters
 - Three-column donut layout: Sector (risk assets only, excludes Fixed Income/Cash), Asset Class, Vehicle Type — all with inside-arc % labels
 - Theme exposure horizontal bar chart — overlap note shown (a symbol can carry multiple tags)
-- Full positions table with P/L %, Vehicle Type, and Themes columns
-- Position lot detail expander with quantity reconciliation warnings
+- Positions table: real numeric columns with column_config formatting, click-to-sort on all headers, Vehicle Type and Themes columns
+- Position lot detail expander: quantity reconciliation warning, Provenance column (api/csv/classification), `🔍` badge only for genuine duplicate candidates
 
 ### Page 3: Performance ✅ (done)
 - Global filters: Account | Period (YTD/1Y/3Y/All) | SPY toggle
@@ -154,13 +157,14 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 - **Exposure Tags tab**: table of symbol → tags. Form with multiselect (predefined tags + free-text new tag input). Tags saved and mv_allocations refreshed on submit.
 - **Manage Sectors tab**: view canonical sector list with sort order, add new sectors.
 
-### Page 4: Trading History (#27)
+### Page 4: Trading History ✅ (done, #29 Pass 1 pending)
 - Win rate, avg win/loss, profit factor
 - Realized P/L by ticker and holding period bucket (<1w, 1w–1m, 1m–1y, >1y)
 - Monthly P/L heatmap (year × month grid)
 - Trade scatterplot: return % vs holding days
 - Searchable/filterable ledger explorer
-- Strategy tag form (#29)
+- Strategy tag form: free-text tag input per realized gain (persists across FIFO rebuilds via relinking)
+- **#29 Pass 1 pending:** `mv_strategy_performance` view + taxonomy dropdown + P/L by strategy, win rate, avg holding period charts + empty state
 
 ### Page 5: Risk & Exposure (#28)
 - Sector concentration bar chart (from mv_allocations)
@@ -225,3 +229,5 @@ Same columns + `account_id_key`. Cumulative returns anchored to each account's f
 | Bond positions in lot detail? | Excluded from Portfolio Overview lot detail. Bonds use face-value quantities (e.g. 15,000 = $15,000 face) and price-per-$100-face, making qty × price misleading without a bond-specific formula. |
 | Transaction dedup strategy? | Two-layer approach: (1) fingerprint layer in `transaction_identity.py` at ingest time — `dedupe_payload` contains only the stable business-key fields (account, event_type, symbol, transaction_date, quantity, price, amount at 2dp). Excludes settlement_date (CSV uses T+2 synthetic; API returns actual), description/description2 (always differ between sources), and fee (0.0 vs 0 vs absent). `dedupe_signature` = SHA-256 of this payload, so CSV and API representations of the same fill hash identically. (2) The `_CANONICAL_TRANSACTIONS_SQL` CTE in `build_ledger()` partitions by dedupe_signature and prefers API > CSV — a safety net for any row that slips through fingerprinting. |
 | Audit trail growth? | `transaction_ingest_audit` uses upsert on `(account_id_key, source_system, source_record_key)` — one row per unique source record, `observed_count` increments on repeat syncs. `060_cleanup_transaction_ingest_audit.sql` collapses any historical duplicates and creates the unique index during schema bootstrap. `cleanup-audit --dry-run` available for inspection. |
+| trade_tags schema (realized-gain vs generic)? | Keep the current `trade_tags(realized_gain_id → realized_gains.id)` model rather than the issue spec's generic `(source_table, source_id TEXT)`. The FK-enforced model is strongly typed and the relinking logic in `realized_pnl.py` already handles FIFO rebuilds correctly. The generic spec was written before `realized_gains` existed. |
+| #29 Pass 2 timing? | Capital deployed over time and P3 strategy breakout are deferred until Pass 1 (mv_strategy_performance + P4 charts) proves useful and the definition of "capital deployed" is nailed down. |

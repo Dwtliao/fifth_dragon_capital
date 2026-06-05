@@ -63,8 +63,8 @@ VALUES
     -- VIX futures ETF
     ('UVXY',      NULL,              'Equity',       'ETF',         'Short-term VIX futures ETF',      NOW())
 ON CONFLICT (symbol) DO UPDATE SET
-    sector       = EXCLUDED.sector,
-    asset_class  = EXCLUDED.asset_class,
-    vehicle_type = EXCLUDED.vehicle_type,
-    notes        = COALESCE(dim_symbol_overrides.notes, EXCLUDED.notes),
+    sector       = COALESCE(dim_symbol_overrides.sector,       EXCLUDED.sector),
+    asset_class  = COALESCE(dim_symbol_overrides.asset_class,  EXCLUDED.asset_class),
+    vehicle_type = COALESCE(dim_symbol_overrides.vehicle_type, EXCLUDED.vehicle_type),
+    notes        = COALESCE(dim_symbol_overrides.notes,        EXCLUDED.notes),
     updated_at   = NOW();

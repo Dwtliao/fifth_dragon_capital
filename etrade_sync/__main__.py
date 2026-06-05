@@ -53,6 +53,17 @@ def main():
     sub.add_parser("refresh-views", help="Refresh all materialized views")
     sub.add_parser("migrate", help="Drop + recreate all materialized views and re-apply all SQL files")
 
+    csv_p = sub.add_parser("import-csv", help="Import an E*TRADE CSV export into transactions")
+    csv_p.add_argument("file", help="Path to the E*TRADE CSV file")
+    csv_p.add_argument(
+        "--account", required=True, metavar="ACCOUNT_ID",
+        help="account_id_key or account_id (full or last-4 digits) to assign these transactions",
+    )
+    csv_p.add_argument(
+        "--rebuild", action="store_true",
+        help="Rebuild ledger, realized P&L, and refresh views after import",
+    )
+
     log_p = sub.add_parser("log-event", help="Write a pipeline event to sync_log (used by shell scripts)")
     log_p.add_argument("--job", required=True, help="Job name")
     log_p.add_argument("--status", required=True, choices=["token_stale", "failed"], help="Event status")
@@ -81,6 +92,57 @@ def main():
     if args.command == "auth":
         from etrade_sync.auth import run_auth_flow
         run_auth_flow()
+
+    # ----------------------------------------------------------- import-csv
+    elif args.command == "import-csv":
+        from etrade_sync.db import create_tables, get_connection
+        from etrade_sync.sync.csv_import import import_csv
+        create_tables()
+
+        # Resolve account_id_key from the --account argument:
+        # accept exact account_id_key, full account_id, or last-4 digits.
+        acct_arg = args.account.strip()
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT account_id_key, account_id, account_name
+                    FROM accounts
+                    WHERE account_id_key = %s
+                       OR account_id     = %s
+                       OR account_id LIKE %s
+                """, (acct_arg, acct_arg, f"%{acct_arg}"))
+                matches = cur.fetchall()
+
+        if not matches:
+            print(f"ERROR: no account found matching '{acct_arg}'")
+            print("Run 'python -m etrade_sync sync --only accounts' to populate accounts first.")
+            sys.exit(1)
+        if len(matches) > 1:
+            print(f"ERROR: '{acct_arg}' matches multiple accounts — be more specific:")
+            for key, aid, name in matches:
+                print(f"  {key}  {aid}  {name}")
+            sys.exit(1)
+
+        account_id_key, account_id, account_name = matches[0]
+        print(f"Importing into: {account_name} ({account_id})")
+
+        result = import_csv(args.file, account_id_key)
+        print(f"  inserted={result['inserted']}  skipped={result['skipped']}  errors={len(result['errors'])}")
+        for e in result["errors"]:
+            print(f"  ERROR: {e}")
+        if result["errors"]:
+            sys.exit(1)
+
+        if args.rebuild:
+            from etrade_sync.analytics.ledger import build_ledger
+            from etrade_sync.analytics.realized_pnl import build_realized_pnl
+            from etrade_sync.analytics.views import refresh_views
+            print(f"[{_ts()}] rebuilding ledger...")
+            build_ledger(full_rebuild=True)
+            print(f"[{_ts()}] rebuilding realized P&L...")
+            build_realized_pnl()
+            print(f"[{_ts()}] refreshing views...")
+            refresh_views()
 
     # ------------------------------------------------------------ log-event
     elif args.command == "log-event":

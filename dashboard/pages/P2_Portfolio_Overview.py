@@ -43,7 +43,7 @@ st.sidebar.markdown("**Filter Positions**")
 # ── fetch positions (account-filtered) ────────────────────────────────────────
 
 positions_raw = pd.DataFrame(query(f"""
-    SELECT account_id_key, symbol, sector, asset_class,
+    SELECT account_id_key, symbol, sector, asset_class, vehicle_type,
            quantity::float         AS quantity,
            cost_basis::float       AS cost_basis,
            market_value::float     AS market_value,
@@ -83,8 +83,11 @@ cost_filtered = filtered["cost_basis"].sum()
 upnl_filtered = filtered["unrealized_pnl"].sum()
 upnl_pct      = upnl_filtered / cost_filtered * 100 if cost_filtered else 0
 
+# Sector donut: exclude Fixed Income and Cash — they have no equity sector.
+# Those classes belong in the asset_class donut, not here.
 sector_chart_df = (
-    filtered.groupby("sector", as_index=False)
+    filtered[~filtered["asset_class"].isin(["Fixed Income", "Cash"])]
+    .groupby("sector", as_index=False)
     .agg(market_value=("market_value", "sum"), pct=("pct_of_portfolio", "sum"))
     .sort_values("market_value", ascending=False)
 )
@@ -93,10 +96,15 @@ asset_chart_df = (
     .agg(market_value=("market_value", "sum"), pct=("pct_of_portfolio", "sum"))
     .sort_values("market_value", ascending=False)
 )
+vehicle_chart_df = (
+    filtered.groupby("vehicle_type", as_index=False)
+    .agg(market_value=("market_value", "sum"), pct=("pct_of_portfolio", "sum"))
+    .sort_values("market_value", ascending=False)
+)
 
 positions_display = (
     filtered
-    .groupby(["symbol", "sector", "asset_class"], as_index=False)
+    .groupby(["symbol", "sector", "asset_class", "vehicle_type"], as_index=False)
     .agg(
         quantity      =("quantity",       "sum"),
         cost_basis    =("cost_basis",     "sum"),
@@ -206,20 +214,29 @@ def summary_table(df, label_col):
     st.dataframe(display, use_container_width=True, hide_index=True)
 
 
-col_l, col_r = st.columns(2)
+col_l, col_m, col_r = st.columns(3)
 with col_l:
     st.subheader("By Sector")
+    st.caption("Equity-style economic themes (Fixed Income & Cash excluded)")
     if not sector_chart_df.empty:
         st.altair_chart(donut_chart(sector_chart_df, "market_value", "sector", "Sector"),
                         use_container_width=True)
         summary_table(sector_chart_df, "sector")
 
-with col_r:
+with col_m:
     st.subheader("By Asset Class")
     if not asset_chart_df.empty:
         st.altair_chart(donut_chart(asset_chart_df, "market_value", "asset_class", "Asset Class"),
                         use_container_width=True)
         summary_table(asset_chart_df, "asset_class")
+
+with col_r:
+    st.subheader("By Vehicle Type")
+    st.caption("How each holding is structured (ETF, Stock, Bond, Trust…)")
+    if not vehicle_chart_df.empty:
+        st.altair_chart(donut_chart(vehicle_chart_df, "market_value", "vehicle_type", "Vehicle Type"),
+                        use_container_width=True)
+        summary_table(vehicle_chart_df, "vehicle_type")
 
 st.divider()
 
@@ -241,7 +258,7 @@ if not positions_display.empty:
         lambda x: f"{x:,.0f}" if x == int(x) else f"{x:,.4f}"
     )
     display.columns = [
-        "Symbol", "Sector", "Asset Class", "Quantity",
+        "Symbol", "Sector", "Asset Class", "Vehicle Type", "Quantity",
         "Cost Basis", "Market Value", "Unrealized P/L", "P/L %", "% Portfolio",
     ]
     st.dataframe(display, use_container_width=True, hide_index=True)

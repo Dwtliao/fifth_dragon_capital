@@ -20,14 +20,15 @@ portfolio_total AS (
 SELECT
     p.account_id_key,
     p.symbol,
-    COALESCE(o.sector,      s.sector,     'Unknown')            AS sector,
-    COALESCE(o.asset_class, s.asset_class, p.security_type, 'Unknown') AS asset_class,
+    COALESCE(o.sector,       s.sector,      'Unknown')                      AS sector,
+    COALESCE(o.asset_class,  s.asset_class, p.security_type, 'Unknown')     AS asset_class,
+    COALESCE(o.vehicle_type, s.vehicle_type, p.security_type, 'Unknown')    AS vehicle_type,
     p.security_type,
     p.quantity,
-    ROUND(p.total_cost::numeric, 2)                              AS cost_basis,
-    ROUND(p.market_value::numeric, 2)                            AS market_value,
-    p.market_value / NULLIF(pt.total_mv, 0) * 100                AS pct_of_portfolio,
-    ROUND((p.market_value - p.total_cost)::numeric, 2)           AS unrealized_pnl
+    ROUND(p.total_cost::numeric, 2)                                          AS cost_basis,
+    ROUND(p.market_value::numeric, 2)                                        AS market_value,
+    p.market_value / NULLIF(pt.total_mv, 0) * 100                            AS pct_of_portfolio,
+    ROUND((p.market_value - p.total_cost)::numeric, 2)                       AS unrealized_pnl
 FROM latest_positions p
 CROSS JOIN portfolio_total pt
 LEFT JOIN dim_symbols s          ON s.symbol = p.symbol

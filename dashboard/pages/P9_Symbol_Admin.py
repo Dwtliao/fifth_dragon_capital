@@ -24,18 +24,19 @@ def _refresh_mv():
         conn.close()
 
 
-def _upsert_override(symbol, sector, asset_class, notes):
+def _upsert_override(symbol, sector, asset_class, vehicle_type, notes):
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO dim_symbol_overrides (symbol, sector, asset_class, notes, updated_at)
-                VALUES (%s, %s, %s, %s, NOW())
+                INSERT INTO dim_symbol_overrides (symbol, sector, asset_class, vehicle_type, notes, updated_at)
+                VALUES (%s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (symbol) DO UPDATE SET
-                    sector      = EXCLUDED.sector,
-                    asset_class = EXCLUDED.asset_class,
-                    notes       = EXCLUDED.notes,
-                    updated_at  = NOW()
-            """, (symbol, sector or None, asset_class or None, notes or None))
+                    sector       = EXCLUDED.sector,
+                    asset_class  = EXCLUDED.asset_class,
+                    vehicle_type = EXCLUDED.vehicle_type,
+                    notes        = EXCLUDED.notes,
+                    updated_at   = NOW()
+            """, (symbol, sector or None, asset_class or None, vehicle_type or None, notes or None))
 
 
 def _delete_override(symbol):
@@ -64,11 +65,14 @@ symbols_df = pd.DataFrame(query("""
         COALESCE(ds.name, p.symbol)    AS name,
         o.sector                       AS override_sector,
         o.asset_class                  AS override_asset_class,
+        o.vehicle_type                 AS override_vehicle_type,
         ds.sector                      AS yf_sector,
         ds.asset_class                 AS yf_asset_class,
+        ds.vehicle_type                AS yf_vehicle_type,
         o.notes                        AS notes,
-        COALESCE(o.sector, ds.sector, 'Unknown')                           AS effective_sector,
-        COALESCE(o.asset_class, ds.asset_class, p.security_type, 'Unknown') AS effective_asset_class,
+        COALESCE(o.sector,       ds.sector,      'Unknown')                           AS effective_sector,
+        COALESCE(o.asset_class,  ds.asset_class, p.security_type, 'Unknown')          AS effective_asset_class,
+        COALESCE(o.vehicle_type, ds.vehicle_type, p.security_type, 'Unknown')         AS effective_vehicle_type,
         CASE
             WHEN o.symbol IS NOT NULL THEN 'override'
             WHEN ds.sector IS NOT NULL THEN 'yfinance'
@@ -117,17 +121,19 @@ with tab_symbols:
 
     st.dataframe(
         display_df[[
-            "symbol", "name", "effective_sector", "effective_asset_class",
+            "symbol", "name",
+            "effective_sector", "effective_asset_class", "effective_vehicle_type",
             "yf_sector", "override_sector", "source", "notes"
         ]].rename(columns={
-            "symbol":               "Symbol",
-            "name":                 "Name",
-            "effective_sector":     "Effective Sector",
-            "effective_asset_class":"Effective Asset Class",
-            "yf_sector":            "yfinance Sector",
-            "override_sector":      "Override Sector",
-            "source":               "Source",
-            "notes":                "Notes",
+            "symbol":                 "Symbol",
+            "name":                   "Name",
+            "effective_sector":       "Sector",
+            "effective_asset_class":  "Asset Class",
+            "effective_vehicle_type": "Vehicle Type",
+            "yf_sector":              "yfinance Sector",
+            "override_sector":        "Override Sector",
+            "source":                 "Source",
+            "notes":                  "Notes",
         }),
         use_container_width=True,
         hide_index=True,
@@ -136,28 +142,39 @@ with tab_symbols:
     st.divider()
     st.subheader("Set / Update Override")
 
-    all_symbols = sorted(symbols_df["symbol"].tolist())
-    asset_classes = ["Equity", "ETF", "Bond", "Future", "Currency", "Crypto", "Other"]
+    all_symbols   = sorted(symbols_df["symbol"].tolist())
+    asset_classes = ["Equity", "Fixed Income", "Commodity", "Cash", "Alternatives", "Other"]
+    vehicle_types = ["Stock", "ETF", "Mutual Fund", "Trust/CEF", "Bond/CD", "Other"]
+
+    # Pre-fill from existing override when a symbol is selected
+    def _current(col):
+        row = symbols_df[symbols_df["symbol"] == all_symbols[0]]
+        if not row.empty:
+            return row.iloc[0].get(col)
+        return None
 
     with st.form("override_form"):
-        col_sym, col_sec, col_ac = st.columns([2, 3, 3])
+        col_sym, col_sec, col_ac, col_vt = st.columns([2, 3, 2, 2])
         sel_symbol = col_sym.selectbox("Symbol", all_symbols)
         sel_sector = col_sec.selectbox("Sector", ["(clear override)"] + sectors)
         sel_ac     = col_ac.selectbox("Asset Class", ["(clear override)"] + asset_classes)
+        sel_vt     = col_vt.selectbox("Vehicle Type", ["(clear override)"] + vehicle_types)
         notes_in   = st.text_input("Notes (optional)", placeholder="e.g. Copper futures ETF")
 
         submitted = st.form_submit_button("Save Override")
 
     if submitted:
         sector_val = None if sel_sector == "(clear override)" else sel_sector
-        ac_val     = None if sel_ac == "(clear override)" else sel_ac
+        ac_val     = None if sel_ac     == "(clear override)" else sel_ac
+        vt_val     = None if sel_vt     == "(clear override)" else sel_vt
 
-        if sector_val is None and ac_val is None:
+        if sector_val is None and ac_val is None and vt_val is None:
             _delete_override(sel_symbol)
             msg = f"Override removed for **{sel_symbol}**."
         else:
-            _upsert_override(sel_symbol, sector_val, ac_val, notes_in)
-            msg = f"Override saved for **{sel_symbol}**: sector={sector_val or '—'}, asset_class={ac_val or '—'}."
+            _upsert_override(sel_symbol, sector_val, ac_val, vt_val, notes_in)
+            msg = (f"Override saved for **{sel_symbol}**: "
+                   f"sector={sector_val or '—'}, asset_class={ac_val or '—'}, vehicle_type={vt_val or '—'}.")
 
         _refresh_mv()
         st.success(msg + " mv_allocations refreshed.")

@@ -8,18 +8,34 @@ from etrade_sync.auth import load_tokens
 from etrade_sync.config import CONSUMER_KEY, CONSUMER_SECRET, DEV
 from etrade_sync.db import get_connection
 from etrade_sync.sync.accounts import _list_accounts
+from etrade_sync.transaction_identity import (
+    build_transaction_fingerprints,
+    record_ingest_audit,
+)
 
 UPSERT_SQL = """
     INSERT INTO transactions
         (account_id_key, transaction_id, transaction_date, transaction_type,
          description, description2, amount, symbol, quantity, price, fee,
-         settlement_date, raw)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+         settlement_date, source_system, source_record_key, source_payload_hash,
+         canonical_fingerprint, dedupe_signature, raw)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (transaction_id) DO UPDATE SET
         transaction_type = EXCLUDED.transaction_type,
         description      = EXCLUDED.description,
+        description2     = EXCLUDED.description2,
         amount           = EXCLUDED.amount,
+        transaction_date = EXCLUDED.transaction_date,
         symbol           = COALESCE(EXCLUDED.symbol, transactions.symbol),
+        quantity         = EXCLUDED.quantity,
+        price            = EXCLUDED.price,
+        fee              = EXCLUDED.fee,
+        settlement_date  = EXCLUDED.settlement_date,
+        source_system    = EXCLUDED.source_system,
+        source_record_key = EXCLUDED.source_record_key,
+        source_payload_hash = EXCLUDED.source_payload_hash,
+        canonical_fingerprint = EXCLUDED.canonical_fingerprint,
+        dedupe_signature = EXCLUDED.dedupe_signature,
         raw              = EXCLUDED.raw
 """
 
@@ -120,9 +136,26 @@ def sync_transactions(account_filter=None, only=None,
                         )
                         if symbol:
                             symbol = symbol.strip() or None
+                        identity = build_transaction_fingerprints(
+                            account_id_key=key,
+                            transaction_type=txn.get("transactionType"),
+                            amount=txn.get("amount"),
+                            symbol=symbol,
+                            transaction_date=_epoch_to_ts(txn.get("transactionDate")),
+                            settlement_date=_epoch_to_ts(brokerage.get("settlementDate")),
+                            quantity=brokerage.get("quantity") or None,
+                            price=brokerage.get("price") or None,
+                            fee=brokerage.get("fee") or None,
+                            description=txn.get("description"),
+                            description2=txn.get("description2"),
+                            source_payload=txn,
+                            source_payload_drop_keys=["transactionId"],
+                        )
+
+                        source_record_key = str(txn["transactionId"])
                         cur.execute(UPSERT_SQL, (
                             key,
-                            str(txn["transactionId"]),
+                            source_record_key,
                             _epoch_to_ts(txn.get("transactionDate")),
                             txn.get("transactionType"),
                             txn.get("description"),
@@ -133,8 +166,25 @@ def sync_transactions(account_filter=None, only=None,
                             brokerage.get("price") or None,
                             brokerage.get("fee") or None,
                             _epoch_to_ts(brokerage.get("settlementDate")),
+                            "api",
+                            source_record_key,
+                            identity["source_payload_hash"],
+                            identity["canonical_fingerprint"],
+                            identity["dedupe_signature"],
                             json.dumps(txn),
                         ))
+                        record_ingest_audit(
+                            cur,
+                            account_id_key=key,
+                            transaction_id=source_record_key,
+                            source_system="api",
+                            source_record_key=source_record_key,
+                            source_payload_hash=identity["source_payload_hash"],
+                            canonical_fingerprint=identity["canonical_fingerprint"],
+                            dedupe_signature=identity["dedupe_signature"],
+                            write_status="upserted",
+                            raw_payload=txn,
+                        )
                         acct_count += 1
 
                     if not body.get("moreTransactions"):

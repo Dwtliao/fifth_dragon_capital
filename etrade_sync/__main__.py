@@ -19,8 +19,8 @@ def _table_counts(conn):
     counts = {}
     with conn.cursor() as cur:
         for table in ("accounts", "balances", "positions", "transactions",
-                      "orders", "order_details", "ledger", "realized_gains",
-                      "market_prices"):
+                      "transaction_ingest_audit", "orders", "order_details",
+                      "ledger", "realized_gains", "market_prices"):
             try:
                 cur.execute(f"SELECT count(*) FROM {table}")
                 counts[table] = cur.fetchone()[0]
@@ -62,6 +62,12 @@ def main():
     csv_p.add_argument(
         "--rebuild", action="store_true",
         help="Rebuild ledger, realized P&L, and refresh views after import",
+    )
+
+    cleanup_p = sub.add_parser("cleanup-audit", help="Collapse duplicate transaction_ingest_audit rows")
+    cleanup_p.add_argument(
+        "--dry-run", action="store_true",
+        help="Report duplicate groups and rows to delete without mutating data",
     )
 
     log_p = sub.add_parser("log-event", help="Write a pipeline event to sync_log (used by shell scripts)")
@@ -143,6 +149,17 @@ def main():
             build_realized_pnl()
             print(f"[{_ts()}] refreshing views...")
             refresh_views()
+
+    # --------------------------------------------------------- cleanup-audit
+    elif args.command == "cleanup-audit":
+        from etrade_sync.maintenance import cleanup_transaction_ingest_audit
+        result = cleanup_transaction_ingest_audit(dry_run=args.dry_run)
+        print(
+            "duplicate_groups={duplicate_groups} rows_to_delete={rows_to_delete} "
+            "keepers_updated={keepers_updated} rows_deleted={rows_deleted} dry_run={dry_run}".format(
+                **result
+            )
+        )
 
     # ------------------------------------------------------------ log-event
     elif args.command == "log-event":

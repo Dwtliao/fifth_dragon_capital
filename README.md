@@ -114,6 +114,10 @@ python -m etrade_sync migrate
 # Compare ledger reconstructed positions to latest API snapshot
 python -m etrade_sync reconcile
 
+# Collapse duplicate transaction_ingest_audit rows (safe to run anytime)
+python -m etrade_sync cleanup-audit           # deletes duplicates
+python -m etrade_sync cleanup-audit --dry-run # preview blast radius without deleting
+
 # Seed symbol metadata (sector, industry, asset class) via yfinance
 python -m etrade_sync seed-symbols
 
@@ -213,7 +217,7 @@ streamlit run dashboard/app.py
 
 | Page | Description |
 |---|---|
-| Pipeline Status | Token freshness alert, job run history, table health, last sync times. **Run Jobs** panel covers all batch commands (sync, migrate, refresh-views, build-ledger, build-realized-pnl, seed-symbols, seed-prices, seed-dates, reconcile) with live output streaming. |
+| Pipeline Status | Token freshness alert, job run history, table health, last sync times. **Run Jobs** panel covers all batch commands (sync, migrate, refresh-views, build-ledger, build-realized-pnl, seed-symbols, seed-prices, seed-dates, reconcile, cleanup-audit) with live output streaming. |
 | Portfolio Overview | Total account value, cash, invested capital, unrealized P/L. Account filter + position filters (symbol, sector, asset class). Sector and asset class donut charts with % and $ labels and summary tables. Full positions table. All KPIs and charts respond to active filters. |
 | Performance | Equity curve vs SPY, drawdown, rolling 30d returns, rolling volatility. Account + Period + SPY toggle filters. Attribution drill-downs by Account (overlaid equity curves), Sector, and Asset Class (stacked area + unrealized P/L bar). Realized P/L by year with lot detail table. |
 | Symbol Admin (P9) | Manage sector and asset class overrides per symbol. Override wins over yfinance data in all views. Manage Sectors tab to add custom sectors. Saving an override auto-refreshes `mv_allocations`. |
@@ -275,7 +279,36 @@ Note: the E*TRADE sandbox orders endpoint is unreliable by design (intended for 
 
 ## Verification
 
+### Validate a full pipeline rebuild
+
+Run this sequence from the **Pipeline Status → Run Jobs** panel (or CLI) after any schema change, CSV import, or code update to confirm the analytics layer is clean end-to-end:
+
+| Step | Job | Option | Expected output |
+|---|---|---|---|
+| 1 | `cleanup-audit` | Dry run ✓ | `duplicate_groups: 0` — no audit rows to collapse |
+| 2 | `build-ledger` | — | `backfilled provenance for 0 row(s)` · `upserted 899 row(s)` (or your count) |
+| 3 | `build-realized-pnl` | — | FIFO lots matched, open lots saved |
+| 4 | `refresh-views` | — | All materialized views refresh without error |
+| 5 | `reconcile` | — | No unexpected discrepancies between ledger and API snapshot |
+
+If `build-ledger` reports `backfilled provenance for N row(s)` with N > 0, new legacy rows were found and fixed automatically — normal after importing old CSV data.
+
+If you run `build-ledger` without following it with `build-realized-pnl`, you will see:
+```
+ledger: cleared open_lots + realized_gains (run build_realized_pnl to restore)
+```
+This is expected — `open_lots` and `realized_gains` are intentionally cleared before the ledger is repopulated and must be rebuilt explicitly.
+
+### SQL spot checks
+
 ```sql
+-- Check for duplicate ledger rows (should always be 0)
+SELECT account_id_key, event_timestamp, event_type, symbol, quantity, COUNT(*)
+FROM ledger
+WHERE source_table = 'transactions'
+GROUP BY 1,2,3,4,5
+HAVING COUNT(*) > 1;
+
 -- Row counts across all tables
 SELECT 'accounts'       AS tbl, count(*) FROM accounts
 UNION ALL SELECT 'transactions', count(*) FROM transactions

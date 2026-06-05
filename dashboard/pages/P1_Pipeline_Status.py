@@ -141,6 +141,7 @@ counts = query("""
         ('balances',      (SELECT count(*) FROM balances)),
         ('positions',     (SELECT count(*) FROM positions)),
         ('transactions',  (SELECT count(*) FROM transactions)),
+        ('transaction_ingest_audit', (SELECT count(*) FROM transaction_ingest_audit)),
         ('orders',        (SELECT count(*) FROM orders)),
         ('order_details', (SELECT count(*) FROM order_details)),
         ('ledger',        (SELECT count(*) FROM ledger)),

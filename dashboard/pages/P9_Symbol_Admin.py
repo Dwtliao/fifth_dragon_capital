@@ -45,6 +45,31 @@ def _delete_override(symbol):
             cur.execute("DELETE FROM dim_symbol_overrides WHERE symbol = %s", (symbol,))
 
 
+def _get_exposure_tags():
+    return pd.DataFrame(query("""
+        SELECT t.symbol, array_agg(t.tag ORDER BY t.tag) AS tags
+        FROM symbol_exposure_tags t
+        GROUP BY t.symbol
+        ORDER BY t.symbol
+    """))
+
+
+def _get_all_tags():
+    rows = query("SELECT DISTINCT tag FROM symbol_exposure_tags ORDER BY tag")
+    return [r["tag"] for r in rows]
+
+
+def _set_exposure_tags(symbol, tags):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM symbol_exposure_tags WHERE symbol = %s", (symbol,))
+            for tag in tags:
+                cur.execute(
+                    "INSERT INTO symbol_exposure_tags (symbol, tag) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (symbol, tag.strip()),
+                )
+
+
 def _add_sector(sector):
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -88,7 +113,7 @@ symbols_df = pd.DataFrame(query("""
 
 # ── tab layout ────────────────────────────────────────────────────────────────
 
-tab_symbols, tab_sectors = st.tabs(["Symbol Overrides", "Manage Sectors"])
+tab_symbols, tab_exposure, tab_sectors = st.tabs(["Symbol Overrides", "Exposure Tags", "Manage Sectors"])
 
 
 # ══ Symbol Overrides tab ══════════════════════════════════════════════════════
@@ -178,6 +203,67 @@ with tab_symbols:
 
         _refresh_mv()
         st.success(msg + " mv_allocations refreshed.")
+        st.rerun()
+
+
+# ══ Exposure Tags tab ═════════════════════════════════════════════════════════
+with tab_exposure:
+
+    st.caption(
+        "Exposure tags are thematic labels (Uranium, Precious Metals, Copper, etc.) "
+        "that are orthogonal to sector and asset class. A symbol can have multiple tags. "
+        "Values in the Portfolio Overview theme chart overlap intentionally."
+    )
+
+    tags_df = _get_exposure_tags()
+    all_tags = _get_all_tags()
+
+    if not tags_df.empty:
+        display_tags = tags_df.copy()
+        display_tags["tags"] = display_tags["tags"].apply(lambda t: ", ".join(t) if t else "")
+        st.dataframe(
+            display_tags.rename(columns={"symbol": "Symbol", "tags": "Exposure Tags"}),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("No exposure tags defined yet.")
+
+    st.divider()
+    st.subheader("Set Tags for Symbol")
+
+    tag_symbols = sorted(symbols_df["symbol"].tolist())
+
+    with st.form("exposure_tags_form"):
+        sel_tag_symbol = st.selectbox("Symbol", tag_symbols, key="tag_sym")
+
+        current_tags = []
+        if not tags_df.empty:
+            row = tags_df[tags_df["symbol"] == sel_tag_symbol]
+            if not row.empty:
+                current_tags = row.iloc[0]["tags"] or []
+
+        sel_tags = st.multiselect(
+            "Exposure Tags",
+            options=sorted(set(all_tags + [
+                "Uranium", "Precious Metals", "Gold", "Silver", "Platinum",
+                "Broad Energy", "Copper", "Agriculture", "Volatility",
+                "Rare Earths", "Technology", "Healthcare",
+            ])),
+            default=current_tags,
+            help="Select all themes that apply. Values can overlap across symbols.",
+        )
+
+        new_tag = st.text_input("Add a new tag (if not in list above)", placeholder="e.g. Rare Earths")
+        tag_submitted = st.form_submit_button("Save Tags")
+
+    if tag_submitted:
+        final_tags = list(sel_tags)
+        if new_tag.strip():
+            final_tags.append(new_tag.strip())
+        _set_exposure_tags(sel_tag_symbol, final_tags)
+        _refresh_mv()
+        st.success(f"Tags saved for **{sel_tag_symbol}**: {', '.join(final_tags) or '(none)'}. mv_allocations refreshed.")
         st.rerun()
 
 

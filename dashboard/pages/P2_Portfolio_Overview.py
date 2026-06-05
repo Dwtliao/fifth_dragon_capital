@@ -44,6 +44,7 @@ st.sidebar.markdown("**Filter Positions**")
 
 positions_raw = pd.DataFrame(query(f"""
     SELECT account_id_key, symbol, sector, asset_class, vehicle_type,
+           COALESCE(array_to_string(exposure_tags, ', '), '') AS themes,
            quantity::float         AS quantity,
            cost_basis::float       AS cost_basis,
            market_value::float     AS market_value,
@@ -104,7 +105,7 @@ vehicle_chart_df = (
 
 positions_display = (
     filtered
-    .groupby(["symbol", "sector", "asset_class", "vehicle_type"], as_index=False)
+    .groupby(["symbol", "sector", "asset_class", "vehicle_type", "themes"], as_index=False)
     .agg(
         quantity      =("quantity",       "sum"),
         cost_basis    =("cost_basis",     "sum"),
@@ -240,6 +241,42 @@ with col_r:
 
 st.divider()
 
+# ── theme exposure chart ───────────────────────────────────────────────────────
+
+theme_rows = query(f"""
+    SELECT t.tag, ROUND(SUM(a.market_value)::numeric, 0) AS market_value
+    FROM mv_allocations a
+    JOIN symbol_exposure_tags t ON t.symbol = a.symbol
+    WHERE 1=1 {_where}
+    GROUP BY t.tag
+    ORDER BY SUM(a.market_value) DESC
+""", _params)
+
+if theme_rows:
+    import altair as alt
+    theme_df = pd.DataFrame(theme_rows)
+    theme_df["market_value"] = theme_df["market_value"].astype(float)
+
+    st.subheader("By Theme Exposure")
+    st.caption("Total market value per theme. Values overlap — a position can carry multiple themes.")
+
+    bar = (
+        alt.Chart(theme_df)
+        .mark_bar()
+        .encode(
+            x=alt.X("market_value:Q", title="Market Value ($)", axis=alt.Axis(format="$,.0f")),
+            y=alt.Y("tag:N", sort="-x", title=None),
+            tooltip=[
+                alt.Tooltip("tag:N",          title="Theme"),
+                alt.Tooltip("market_value:Q", title="Market Value", format="$,.0f"),
+            ],
+        )
+        .properties(height=max(150, len(theme_df) * 32))
+    )
+    st.altair_chart(bar, use_container_width=True)
+
+st.divider()
+
 
 # ── positions table ────────────────────────────────────────────────────────────
 
@@ -258,7 +295,7 @@ if not positions_display.empty:
         lambda x: f"{x:,.0f}" if x == int(x) else f"{x:,.4f}"
     )
     display.columns = [
-        "Symbol", "Sector", "Asset Class", "Vehicle Type", "Quantity",
+        "Symbol", "Sector", "Asset Class", "Vehicle Type", "Themes", "Quantity",
         "Cost Basis", "Market Value", "Unrealized P/L", "P/L %", "% Portfolio",
     ]
     st.dataframe(display, use_container_width=True, hide_index=True)

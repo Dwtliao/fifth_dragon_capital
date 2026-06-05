@@ -23,6 +23,11 @@ SELECT
     COALESCE(o.sector,       s.sector,      'Unknown')                      AS sector,
     COALESCE(o.asset_class,  s.asset_class, p.security_type, 'Unknown')     AS asset_class,
     COALESCE(o.vehicle_type, s.vehicle_type, p.security_type, 'Unknown')    AS vehicle_type,
+    COALESCE(
+        (SELECT array_agg(t.tag ORDER BY t.tag)
+         FROM symbol_exposure_tags t WHERE t.symbol = p.symbol),
+        ARRAY[]::text[]
+    )                                                                        AS exposure_tags,
     p.security_type,
     p.quantity,
     ROUND(p.total_cost::numeric, 2)                                          AS cost_basis,

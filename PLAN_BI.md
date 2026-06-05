@@ -45,7 +45,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 
 ---
 
-## Current State (as of 2026-06-03, updated)
+## Current State (as of 2026-06-05, updated)
 
 ### ✅ Completed
 
@@ -55,6 +55,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 0 | Scheduled sync (launchd) | Daily 6AM full sync, Sunday 7AM 30-day refresh, 10PM auth reminder |
 | 0 | Pipeline monitoring | sync_log table, triggered_by tracking (manual vs launchd) |
 | 0 | `migrate` command | Drop + recreate all materialized views + re-apply all SQL files. Run after any schema change. |
+| 0 | CSV transaction backfill | `import-csv` CLI command loads E*TRADE CSV exports into transactions. Source-aware dedup handles API/CSV overlaps. 2025–2026 history loaded for all 4 accounts and committed to git for portability. |
 | 1 | `ledger` table | Normalized event log, signed quantities, upsert-safe, source_line_id for future multi-leg |
 | 2 | `dim_symbols` | yfinance metadata: sector, industry, asset class, exchange |
 | 2 | `dim_sectors` | Canonical sector list with sort order — source of truth for sector dropdowns |
@@ -67,6 +68,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 2.5 | `reconciliation_log` | Ledger qty vs API positions snapshot, match/discrepancy/ledger_only/api_only |
 | 3 | `mv_unrealized_pnl` | Materialized view from latest positions snapshot |
 | 3 | `realized_gains` | Split-adjusted FIFO buy/sell lots, cost_basis, proceeds, realized_pnl, short/long term |
+| 3 | `open_lots` | Remaining buy lots after FIFO matching, split-adjusted qty and price. Rebuilt alongside realized_gains. |
 | 3 | `mv_portfolio_timeseries` | Daily portfolio value, returns, volatility, drawdown — all accounts aggregated |
 | 3 | `mv_portfolio_timeseries_by_account` | Same as above with account_id_key as dimension — used by Performance page account filter |
 | 3 | `mv_allocations` | Sector / asset class breakdown with override priority: dim_symbol_overrides > yfinance |
@@ -75,7 +77,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 3 | `mv_benchmark_comparison` | Portfolio return vs SPY, alpha, rolling comparison — all accounts |
 | 3 | `mv_benchmark_comparison_by_account` | Per-account portfolio vs SPY — used when account filter is active |
 | 4 | Pipeline Status page (P1) | Token alert, full job runner (all batch commands), live output, sync_log history |
-| 4 | Portfolio Overview page (P2) | Account + position filters, KPIs, sector/asset class donuts with labels + summary tables. Cash KPI uses `cash_available_for_invest` (correct for margin + IRA accounts). |
+| 4 | Portfolio Overview page (P2) | Account + position filters, KPIs, sector/asset class donuts with labels + summary tables. Cash KPI uses `cash_available_for_invest` (correct for margin + IRA accounts). Position lot detail expander per multi-lot symbol with split-adjusted buy prices, cost basis, current value, P/L, days held, and quantity reconciliation warning. |
 | 4 | Performance page (P3) | Equity curve, drawdown, rolling returns, attribution by account/sector/asset class, realized P/L |
 | 4 | Trading History page (P4) | P/L heatmap, cash flow/income charts, trade scatterplot, ledger explorer with active-filter display, strategy tag form |
 | 4 | Symbol Admin page (P9) | Sector/asset class override UI, manage sectors, auto-refreshes mv_allocations on save |
@@ -214,3 +216,6 @@ Same columns + `account_id_key`. Cumulative returns anchored to each account's f
 | Orders → ledger? | Deferred (#34) — stock fills covered by transactions; option/spread mapping needs separate design pass |
 | Cash KPI field? | Use `cash_available_for_invest` (`cashAvailableForInvestment` from E*TRADE API). `net_cash` includes margin buying power on margin accounts (wrong); `cash_balance` excludes money market funds on IRA accounts (wrong). `cash_available_for_invest` is correct for all account types. |
 | E*TRADE transaction history depth? | API returns ~2 months for IRA Rollover despite requesting 2-year lookback. This is an E*TRADE API limitation, not a code bug. History available via CSV export only. |
+| CSV backfill dedup strategy? | Two-pass source-aware dedup in `build_ledger()`. Pass A (cross-source): removes CSV rows shadowed by an API row using `ROUND(price, 2)` to handle CSV 2dp vs API precision. Pass B (same-source): removes API rows E*TRADE returned twice under different IDs using exact price, so genuine same-day fills at similar-but-distinct prices are never collapsed. |
+| CSV files in git? | Yes — E*TRADE transaction CSVs contain no credentials and serve as portable transaction history. Committing them means a fresh clone can fully rebuild the pipeline without re-downloading from E*TRADE. Stored in `data/csv_exports/`. |
+| Bond positions in lot detail? | Excluded from Portfolio Overview lot detail. Bonds use face-value quantities (e.g. 15,000 = $15,000 face) and price-per-$100-face, making qty × price misleading without a bond-specific formula. |

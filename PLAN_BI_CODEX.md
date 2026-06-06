@@ -81,6 +81,28 @@ and what should be tackled next.
   - correlation clusters
   - historical risk trend
 
+## Future Risk Page Redesign Note
+
+- The mockup direction is strong but should be treated as a future redesign,
+  not a same-day patch.
+- Future look-and-feel direction:
+  - premium wealth-management feel rather than brokerage reporting
+  - dark, polished dashboard presentation
+  - top-level vulnerability strip with concise cards
+  - diagnosis-oriented framing instead of raw allocation charts
+- Suggested future strip content:
+  - Largest position
+  - Cash reserve
+  - Diversification score
+  - No leverage detected
+  - Intentional commodity tilt
+- Suggested future layout:
+  - vulnerabilities strip at top
+  - concentration / exposure bars beneath
+  - sizing table and loss watch below
+- Keep this as a later redesign pass so the current implementation can stay
+  incremental and low-risk.
+
 ## Absolute-Weight Rule
 
 - For display percentages on allocation/risk pages, use absolute market value

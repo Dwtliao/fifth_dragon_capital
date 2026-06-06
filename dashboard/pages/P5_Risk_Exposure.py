@@ -82,34 +82,45 @@ alloc["pct_of_risk_assets"] = alloc["market_value"] / risk_mv * 100 if risk_mv e
 alloc.loc[alloc["asset_class"].isin(_EXCLUDE_CLASSES), "pct_of_risk_assets"] = 0
 
 
-# ── Section 1: Concentration Risk ─────────────────────────────────────────────
+# ── portfolio snapshot strip ───────────────────────────────────────────────────
 
-st.header("Concentration Risk")
-
-risk_alloc = alloc[~alloc["asset_class"].isin(_EXCLUDE_CLASSES)].copy()
+risk_alloc  = alloc[~alloc["asset_class"].isin(_EXCLUDE_CLASSES)].copy()
 risk_sorted = risk_alloc.sort_values("pct_of_risk_assets", ascending=False)
 
 largest  = risk_sorted.iloc[0] if not risk_sorted.empty else None
 top3_pct = risk_sorted.head(3)["pct_of_risk_assets"].sum()
-port_risk_pct = alloc.loc[~alloc["asset_class"].isin(_EXCLUDE_CLASSES), "pct_of_portfolio"].sum()
+cash_pct  = alloc.loc[alloc["asset_class"] == "Cash",      "pct_of_portfolio"].sum()
+comm_pct  = alloc.loc[alloc["asset_class"] == "Commodity", "pct_of_portfolio"].sum()
 
-k1, k2, k3 = st.columns(3)
+s1, s2, s3, s4 = st.columns(4)
 if largest is not None:
-    k1.metric(
-        "Largest Risk Position",
+    s1.metric(
+        "Largest Position",
         f"{largest['symbol']}  {largest['pct_of_risk_assets']:.1f}%",
-        help="Symbol with highest % of risk assets (excl. Cash & Fixed Income)",
+        help="Largest single holding as % of risk assets (excl. Cash & Fixed Income)",
     )
-k2.metric(
-    "Top 3 Risk Positions",
+s2.metric(
+    "Top 3 Concentration",
     f"{top3_pct:.1f}%",
     help=f"% of risk assets — {', '.join(risk_sorted.head(3)['symbol'].tolist())}",
 )
-k3.metric(
-    "Risk Asset Exposure",
-    f"{port_risk_pct:.1f}%",
-    help="% of total portfolio in risk assets (portfolio exposure denominator)",
+s3.metric(
+    "Cash Reserve",
+    f"{cash_pct:.1f}%",
+    help="Cash & equivalents as % of total portfolio",
 )
+s4.metric(
+    "Commodity Tilt",
+    f"{comm_pct:.1f}%",
+    help="Commodity positions as % of total portfolio",
+)
+
+st.divider()
+
+
+# ── Section 1: Concentration Risk ─────────────────────────────────────────────
+
+st.header("Concentration Risk")
 
 st.divider()
 
@@ -184,17 +195,17 @@ st.divider()
 # ── thematic exposure callout ─────────────────────────────────────────────────
 
 st.subheader("Thematic Exposure")
-st.caption("Market value grouped by economic theme — portfolio exposure denominator. Values may overlap.")
+st.caption("% of risk assets (excl. Cash & Fixed Income). Values may overlap — a position can carry multiple tags.")
 
 CALLOUT_TAGS = ["Precious Metals", "Uranium", "Broad Energy", "Copper", "Agriculture", "Volatility"]
 
 themes_raw = query(f"""
     SELECT t.tag,
-           SUM(a.market_value)::float     AS market_value,
-           SUM(a.pct_of_portfolio)::float AS pct_of_portfolio
+           SUM(a.market_value)::float AS market_value
     FROM mv_allocations a
     JOIN symbol_exposure_tags t ON t.symbol = a.symbol
     WHERE t.tag = ANY(%(tags)s)
+      AND a.asset_class NOT IN ('Cash', 'Fixed Income')
       {'AND a.account_id_key = %(acct)s' if account_filter else ''}
     GROUP BY t.tag
     ORDER BY market_value DESC
@@ -204,11 +215,12 @@ if not themes_raw:
     st.info("No thematic exposure tags defined. Add tags in Symbol Admin → Exposure Tags.")
 else:
     themes_df = pd.DataFrame(themes_raw)
+    themes_df["pct_of_risk_assets"] = themes_df["market_value"] / risk_mv * 100 if risk_mv else 0
     cols = st.columns(len(themes_df))
     for col, (_, row) in zip(cols, themes_df.iterrows()):
         col.metric(
             row["tag"],
-            f"{row['pct_of_portfolio']:.1f}%",
+            f"{row['pct_of_risk_assets']:.1f}%",
             f"${row['market_value']:,.0f}",
             delta_color="off",
         )

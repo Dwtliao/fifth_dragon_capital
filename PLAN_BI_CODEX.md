@@ -51,6 +51,44 @@ and what should be tackled next.
 - For `#28`, focus on sector concentration, position sizing, largest losing
   trades, holding-period breakdown, and options exposure.
 
+## Risk Page Notes
+
+- The page should feel like portfolio diagnosis, not just allocation reporting.
+- Display percentages in `#28` using absolute exposure where it improves clarity,
+  so holdings like cash equivalents and hedges do not collapse to misleading
+  near-zero values.
+- Show both:
+  - share of total portfolio
+  - share of invested assets
+- Preferred sections for the first useful version:
+  - Top KPI strip
+  - Vulnerabilities
+  - Concentration / Exposure
+  - Correlated Holdings
+  - Stress Scenarios later
+- Suggested vulnerability examples:
+  - largest position exceeds threshold
+  - precious metals concentration
+  - commodity-heavy exposure
+  - no leverage detected
+  - cash reserve above target
+- Suggested interpretation-first metrics:
+  - diversification score
+  - invested capital / risk-on allocation
+  - exposure relative to invested capital
+- Future additions to revisit later:
+  - scenario analysis
+  - correlation clusters
+  - historical risk trend
+
+## Absolute-Weight Rule
+
+- For display percentages on allocation/risk pages, use absolute market value
+  where the intention is to show exposure magnitude.
+- Keep a separate signed value only when the sign itself is meaningful.
+- If a visible table or chart is meant to sum to 100%, recompute it from the
+  currently displayed rows and add a warning if it does not reconcile.
+
 ## Working Rule
 
 - Read the issue first, then inspect current `main`, then plan the smallest

@@ -86,6 +86,8 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 2 | `symbol_exposure_tags` table | Many-to-many table: symbol → thematic tags (Uranium, Precious Metals, Gold, Silver, Copper, etc.). Tags are orthogonal to sector/asset_class and intentionally overlap across symbols. Schema in 052b, seeds in 062. |
 | 0 | Cross-source dedup fix | Narrowed `dedupe_payload` in `transaction_identity.py` to exclude `settlement_date`, `description`, `description2`, and `fee` — all of which differ systematically between CSV and API representations of the same trade. 063_reset_dedupe_signatures.sql resets all signatures for recompute. |
 | 4 | Lot provenance (#38) | Provenance column in Position Lot Detail showing source (api/csv) and classification per lot. `🔍` badge fires only for `cross_source_overlap` / `same_source_candidate` — API lots with no audit record show silently. Positions table columns are real numbers with column_config formatting (sortable, subtotals-ready). |
+| 4 | P2 column swap fix | `% Portfolio` and `P/L %` columns were transposed in positions table rename — IUSXX showed 0% because pnl_pct (≈0 for money market) was labeled "% Portfolio". Fixed column order. |
+| 4 | Risk & Exposure page (#28/#39) | P5 complete. See Page 5 spec below. |
 
 ### Known Gaps / Open Issues
 
@@ -105,8 +107,7 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 
 | Order | Issue | Depends on | Notes |
 |---|---|---|---|
-| 1 | **#28** | #23, `dim_symbols` | Risk & Exposure — sector concentration, position sizing, exposure analysis |
-| 2 | **#29 Pass 1** | #27 | `mv_strategy_performance` + P4 charts + taxonomy dropdown + empty state |
+| 1 | **#29 Pass 1** | #27 | `mv_strategy_performance` + P4 charts + taxonomy dropdown + empty state |
 | 3 | **#29 Pass 2** | Pass 1, definition of "capital deployed" | Capital deployed over time + P3 strategy breakout — deferred until Pass 1 proves useful |
 | 4 | **#35** | none | OAuth re-auth UI in Pipeline Status — two-step Streamlit widget |
 | 5 | **#33** | none | Low-priority backfill for `dim_symbols.cusip` |
@@ -124,6 +125,7 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 | **#27** | ✅ Done | Trading History — P/L heatmap, cash flow/income charts, trade scatterplot, ledger explorer, strategy tag form |
 | **#32** | ✅ Done | Split-adjusted FIFO cost basis |
 | **#38** | ✅ Done | Lot provenance display — Provenance column, smart flagging, sortable positions table, override migration fix |
+| **#28** | ✅ Done | Risk & Exposure page (P5) — see Page 5 spec |
 
 ---
 
@@ -166,12 +168,20 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 - Strategy tag form: free-text tag input per realized gain (persists across FIFO rebuilds via relinking)
 - **#29 Pass 1 pending:** `mv_strategy_performance` view + taxonomy dropdown + P/L by strategy, win rate, avg holding period charts + empty state
 
-### Page 5: Risk & Exposure (#28)
-- Sector concentration bar chart (from mv_allocations)
-- Asset class breakdown
-- Largest losing positions / trades
-- Short-term vs long-term holding breakdown
-- Position sizing as % of portfolio
+### Page 5: Risk & Exposure ✅ (done, #28/#39)
+- **Snapshot strip (4 KPIs):** Largest Position, Top 3 Concentration, Cash Reserve, Commodity Tilt
+- **Two-denominator framework:** portfolio exposure (total MV incl. Cash+FI) vs risk concentration (risk asset MV only, excl. Cash+FI). Sector chart, position sizing, and thematic callout all use risk-asset denominator. Asset class breakdown and % Portfolio column use portfolio denominator.
+- **Section 1 — Concentration Risk:** sector bar chart (% of risk assets), asset class bar chart (% of portfolio), thematic callout tiles (% of risk assets)
+- **Section 2 — Position Sizing:** risk assets only, sidebar-adjustable thresholds (default 🟡≥10% / 🔴≥20%), Recompute button, `% Risk Assets` column
+- **Section 3 — Unrealized Loss Watch:** positions underwater, total loss KPI, count KPI, red bar chart, detail table. Cash excluded; Fixed Income included.
+- **Section 4 — Realized P/L Summary:** all-time (no date filter). Total P/L, trade count, win rate KPIs. P/L by year bar chart (green/red). Per-symbol summary table.
+- **Section 5 — Holding Period Risk:** open equity lots only (bonds excluded). Value-weighted avg holding days, % long-term KPIs. Bucket bar chart + summary table.
+- **Long-term roadmap:** target dashboard in memory (project_p5_roadmap.md) — Risk Capacity gauge, diversification score, scatter plot. Deferred until P5 proves useful.
+
+**Key design decisions:**
+- `pct_of_portfolio` = portfolio exposure denominator (for allocation/net-worth views)
+- `pct_of_risk_assets` = risk concentration denominator (for position sizing/sector concentration)
+- Threshold inputs stored in `st.session_state.applied_thresholds` — only update on Recompute button press
 
 ---
 

@@ -33,3 +33,17 @@ def scalar(sql, params=None):
             cur.execute(sql, params or ())
             row = cur.fetchone()
             return row[0] if row else None
+
+
+def execute(sql, params=None):
+    """Run an INSERT/UPDATE/DELETE statement."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, params or ())
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

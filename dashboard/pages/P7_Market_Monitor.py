@@ -46,7 +46,7 @@ GROUPS = {
     ],
 }
 
-COLS = 4  # charts per row
+COLS = 3  # charts per row
 
 
 @st.cache_data(ttl=300)
@@ -60,7 +60,7 @@ def fetch_ticker(ticker: str) -> tuple[pd.DataFrame, float | None]:
     today = df["Datetime"].dt.date.max()
     prev_closes = df[df["Datetime"].dt.date < today]["Close"]
     prev_close = float(prev_closes.iloc[-1]) if not prev_closes.empty else None
-    today_df = df[df["Datetime"].dt.date == today][["Datetime", "Close"]].copy()
+    today_df = df[df["Datetime"].dt.date == today][["Datetime", "Open", "High", "Low", "Close", "Volume"]].copy()
     return today_df, prev_close
 
 
@@ -81,30 +81,65 @@ def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close:
         line_color = "#888888"
         subtitle = f"{price:,.2f}"
 
-    chart = (
+    today_df["color"] = (today_df["Close"] >= today_df["Open"]).map({True: "up", False: "down"})
+
+    base = alt.Chart(today_df).encode(
+        x=alt.X("Datetime:T", title=None,
+                axis=alt.Axis(format="%H:%M", labelAngle=-45, tickCount=6)),
+        color=alt.Color(
+            "color:N",
+            scale=alt.Scale(domain=["up", "down"], range=["#4CAF50", "#ef5350"]),
+            legend=None,
+        ),
+        tooltip=[
+            alt.Tooltip("Datetime:T", title="Time",  format="%H:%M"),
+            alt.Tooltip("Open:Q",     title="Open",  format=",.2f"),
+            alt.Tooltip("High:Q",     title="High",  format=",.2f"),
+            alt.Tooltip("Low:Q",      title="Low",   format=",.2f"),
+            alt.Tooltip("Close:Q",    title="Close", format=",.2f"),
+        ],
+    )
+
+    wicks = base.mark_rule(strokeWidth=1).encode(
+        y=alt.Y("Low:Q",  title=None, scale=alt.Scale(zero=False), axis=alt.Axis(format=",.2f")),
+        y2=alt.Y2("High:Q"),
+    )
+    candles = base.mark_bar(size=5, stroke=None, opacity=1.0).encode(
+        y=alt.Y("Open:Q",  scale=alt.Scale(zero=False), axis=alt.Axis(format=",.2f")),
+        y2=alt.Y2("Close:Q"),
+    )
+
+    candle_chart = (wicks + candles).properties(
+        title=alt.TitleParams(
+            text=f"{label}  ({ticker})",
+            subtitle=subtitle,
+            fontSize=13,
+            subtitleFontSize=11,
+            subtitleColor=line_color,
+        ),
+        height=240,
+    )
+
+    volume_chart = (
         alt.Chart(today_df)
-        .mark_line(color=line_color, strokeWidth=1.5)
+        .mark_bar(size=5, stroke=None, opacity=0.7)
         .encode(
-            x=alt.X("Datetime:T", title=None,
-                    axis=alt.Axis(format="%H:%M", labelAngle=-45, tickCount=6)),
-            y=alt.Y("Close:Q", title=None, scale=alt.Scale(zero=False),
-                    axis=alt.Axis(format=",.2f")),
+            x=alt.X("Datetime:T", title=None, axis=alt.Axis(format="%H:%M", labelAngle=-45, tickCount=6)),
+            y=alt.Y("Volume:Q",   title=None, axis=alt.Axis(format="~s", tickCount=3)),
+            color=alt.Color(
+                "color:N",
+                scale=alt.Scale(domain=["up", "down"], range=["#4CAF50", "#ef5350"]),
+                legend=None,
+            ),
             tooltip=[
-                alt.Tooltip("Datetime:T", title="Time",  format="%H:%M"),
-                alt.Tooltip("Close:Q",    title="Price", format=",.2f"),
+                alt.Tooltip("Datetime:T", title="Time",   format="%H:%M"),
+                alt.Tooltip("Volume:Q",   title="Volume", format=","),
             ],
         )
-        .properties(
-            title=alt.TitleParams(
-                text=f"{label}  ({ticker})",
-                subtitle=subtitle,
-                fontSize=13,
-                subtitleFontSize=11,
-                subtitleColor=line_color,
-            ),
-            height=150,
-        )
+        .properties(height=60)
     )
+
+    chart = alt.vconcat(candle_chart, volume_chart, spacing=4).resolve_scale(x="shared")
     st.altair_chart(chart, use_container_width=True)
 
 

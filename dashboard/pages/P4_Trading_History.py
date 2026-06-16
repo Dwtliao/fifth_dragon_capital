@@ -274,30 +274,26 @@ with tab_trades:
             alt.Tooltip("term:N",         title="Term"),
         ]
 
-        sc1, sc2 = st.columns(2)
+        st.subheader("Return % vs Holding Days")
+        st.altair_chart(
+            alt.Chart(scatter_df).mark_circle(opacity=0.7).encode(
+                x=alt.X("holding_days:Q", title="Holding Days"),
+                y=alt.Y("pnl_pct:Q",      title="Return %"),
+                color=_color, size=_size, tooltip=_common_tooltip,
+            ).properties(height=320) + _zero_rule,
+            use_container_width=True,
+        )
 
-        with sc1:
-            st.subheader("Return % vs Holding Days")
-            st.altair_chart(
-                alt.Chart(scatter_df).mark_circle(opacity=0.7).encode(
-                    x=alt.X("holding_days:Q", title="Holding Days"),
-                    y=alt.Y("pnl_pct:Q",      title="Return %"),
-                    color=_color, size=_size, tooltip=_common_tooltip,
-                ).properties(height=300) + _zero_rule,
-                use_container_width=True,
-            )
-
-        with sc2:
-            st.subheader("Return % vs Trade Date")
-            st.altair_chart(
-                alt.Chart(scatter_df).mark_circle(opacity=0.7).encode(
-                    x=alt.X("sell_date:T", title="Sell Date",
-                            axis=alt.Axis(format="%b %Y", labelAngle=-45)),
-                    y=alt.Y("pnl_pct:Q",  title="Return %"),
-                    color=_color, size=_size, tooltip=_common_tooltip,
-                ).properties(height=300) + _zero_rule,
-                use_container_width=True,
-            )
+        st.subheader("Return % vs Trade Date")
+        st.altair_chart(
+            alt.Chart(scatter_df).mark_circle(opacity=0.7).encode(
+                x=alt.X("sell_date:T", title="Sell Date",
+                        axis=alt.Axis(format="%b %Y", labelAngle=-45)),
+                y=alt.Y("pnl_pct:Q",  title="Return %"),
+                color=_color, size=_size, tooltip=_common_tooltip,
+            ).properties(height=320) + _zero_rule,
+            use_container_width=True,
+        )
 
         st.divider()
 

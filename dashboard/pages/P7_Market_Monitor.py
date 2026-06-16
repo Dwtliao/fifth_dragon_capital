@@ -39,10 +39,18 @@ GROUPS = {
         ("UVXY", "UVXY"),
         ("VIXY", "VIXY"),
     ],
-    "Volatility & Rates": [
-        ("VIX",       "^VIX"),
-        ("VVIX",      "^VVIX"),
-        ("10Y Yield", "^TNX"),
+    "Volatility, Rates & Bond Futures": [
+        ("VIX",           "^VIX"),
+        ("VVIX",          "^VVIX"),
+        ("10Y Yield",     "^TNX"),
+        ("10Y Note Fut.", "ZN=F"),
+        ("30Y Bond Fut.", "ZB=F"),
+    ],
+    "Defensive Sectors": [
+        ("VHT Healthcare", "VHT"),
+        ("XLV Healthcare", "XLV"),
+        ("XLP Cons. Staples", "XLP"),
+        ("XLU Utilities",  "XLU"),
     ],
 }
 

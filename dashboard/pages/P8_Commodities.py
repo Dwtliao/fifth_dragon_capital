@@ -72,7 +72,7 @@ GROUPS = {
     ],
 }
 
-COLS = 3
+COLS = 2
 
 # ── period / interval config ───────────────────────────────────────────────────
 
@@ -126,7 +126,8 @@ def _chart(label: str, ticker: str, df: pd.DataFrame, prev_close: float | None, 
         legend=None,
     )
     _x = alt.X("Datetime:T", title=None,
-                axis=alt.Axis(format=x_fmt, labelAngle=-45, tickCount=6))
+                axis=alt.Axis(format=x_fmt, labelAngle=-45, tickCount=6),
+                scale=alt.Scale(padding=10))
     _tooltip = [
         alt.Tooltip("Datetime:T", title="Time",   format=x_fmt),
         alt.Tooltip("Open:Q",     title="Open",   format=",.3f"),
@@ -163,7 +164,8 @@ def _chart(label: str, ticker: str, df: pd.DataFrame, prev_close: float | None, 
         .mark_bar(size=5, stroke=None, opacity=0.7)
         .encode(
             x=alt.X("Datetime:T", title=None,
-                    axis=alt.Axis(format=x_fmt, labelAngle=-45, tickCount=6)),
+                    axis=alt.Axis(format=x_fmt, labelAngle=-45, tickCount=6),
+                    scale=alt.Scale(padding=10)),
             y=alt.Y("Volume:Q", title=None,
                     axis=alt.Axis(format="~s", tickCount=3)),
             color=_color_scale,

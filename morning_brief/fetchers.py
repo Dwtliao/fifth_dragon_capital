@@ -37,7 +37,7 @@ COMMODITIES = {
     "Silver":  "SI=F",
     "Oil WTI": "CL=F",
     "Copper":  "HG=F",
-    "Uranium": "UX=F",   # front-month uranium futures (may be illiquid; fallback to URA)
+    "Uranium (URA)": "URA",
 }
 
 CURRENCIES = {

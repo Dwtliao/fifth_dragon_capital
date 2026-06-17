@@ -32,8 +32,15 @@ cp .env.example .env
 # Edit .env and fill in your credentials:
 #   ETRADE_CONSUMER_KEY=...
 #   ETRADE_CONSUMER_SECRET=...
-#   ETRADE_DEV=true          # false for production
+#   ETRADE_DEV=true                     # false for production
 #   DATABASE_URL=postgresql://postgres@localhost:5432/yourdb
+#
+# Optional — enables email notifications for price alerts:
+#   ALERT_SMTP_HOST=smtp.gmail.com
+#   ALERT_SMTP_PORT=587
+#   ALERT_SMTP_USER=you@gmail.com
+#   ALERT_SMTP_PASS=your_app_password
+#   ALERT_EMAIL_TO=you@gmail.com
 ```
 
 ---
@@ -192,6 +199,19 @@ All tables are created automatically on first sync. Schema definitions live in `
 | `mv_attribution_timeseries` | Daily sector + asset class market value and P/L per account — used for attribution drill-downs |
 | `mv_benchmark_comparison_by_account` | Portfolio vs SPY cumulative/rolling comparison per account |
 
+### Physical metals tables — `data_model/064_*.sql`
+
+| Table | Description |
+|---|---|
+| `physical_holdings_pm` | Physical precious metals lots: account_name, location, metal, weight_oz, purchase_price, purchase_date, description. No FK to E*TRADE schema. |
+| `physical_prices_pm` | Manual daily spot closes per metal (gold, silver, platinum, palladium) — pre-filled from yfinance on P6 load. |
+
+### Alerts table — `data_model/065_*.sql`
+
+| Table | Description |
+|---|---|
+| `price_alerts` | User-defined price level alerts: ticker (yfinance format), condition (above/below), threshold, enabled, triggered state, last_fired_at. Managed via P7 dashboard UI. |
+
 ---
 
 ## Sync Behavior
@@ -218,12 +238,59 @@ streamlit run dashboard/app.py
 
 | Page | Description |
 |---|---|
-| Pipeline Status | Token freshness alert, job run history, table health, last sync times. **Run Jobs** panel covers all batch commands (sync, migrate, refresh-views, build-ledger, build-realized-pnl, seed-symbols, seed-prices, seed-dates, reconcile, cleanup-audit) with live output streaming. |
-| Portfolio Overview | Total account value, cash, invested capital, unrealized P/L. Account filter + position filters (symbol, sector, asset class). Three-column donut layout: Sector (risk assets only), Asset Class, Vehicle Type — all with inside-arc % labels. Theme exposure bar chart (overlap note). Full positions table with Vehicle Type and Themes columns. All KPIs and charts respond to active filters. |
-| Performance | Equity curve vs SPY, drawdown, rolling 30d returns, rolling volatility. Account + Period + SPY toggle filters. Attribution drill-downs by Account (overlaid equity curves), Sector, and Asset Class (stacked area + unrealized P/L bar). Realized P/L by year with lot detail table. |
-| Symbol Admin (P9) | Three tabs: **Symbol Overrides** — set sector, asset class, and vehicle type per symbol with notes; **Exposure Tags** — manage thematic tags (Uranium, Precious Metals, Copper, etc.) per symbol via multiselect; **Manage Sectors** — add custom sectors. All saves auto-refresh `mv_allocations`. |
+| P1 Pipeline Status | Token freshness alert, job run history, table health, last sync times. **Run Jobs** panel covers all batch commands (sync, migrate, refresh-views, build-ledger, build-realized-pnl, seed-symbols, seed-prices, seed-dates, reconcile, cleanup-audit) with live output streaming. |
+| P2 Portfolio Overview | Total account value, cash, invested capital, unrealized P/L. **Live Quotes** button fetches real-time prices from E*TRADE API (overrides snapshot market values for the session). Account filter + position filters (symbol, sector, asset class). Three-column donut layout: Sector, Asset Class, Vehicle Type. Theme exposure bar chart. Full positions table with color-coded P/L columns. Lot detail expander for multi-lot positions. |
+| P3 Performance | Equity curve vs SPY, drawdown, rolling 30d returns, rolling volatility. Account + Period + SPY toggle filters. Attribution drill-downs by Account, Sector, and Asset Class. Realized P/L by year with lot detail table. |
+| P4 Trading History | Monthly P/L heatmap, cash flow and income charts. Trades tab: KPI strip, Return % vs Holding Days scatter, Return % vs Trade Date scatter, closed trades table, trade tagging form. Ledger tab: full event log with type and period filters. |
+| P5 Risk & Exposure | Concentration risk (sector + asset class bar charts, thematic exposure callout). Position sizing with configurable overweight/concentrated thresholds. Unrealized loss watch. Realized P/L summary with by-year chart. Holding period risk bucketed by days held. |
+| P6 Physical Metals | Physical precious metals tracker — fully separate from E*TRADE data. Spot prices auto-fetched via yfinance (GC=F, SI=F, PL=F, PA=F) with manual override. Holdings table with live spot value and unrealized G/L. Add/delete holdings form. Stores to `physical_holdings_pm` and `physical_prices_pm`. |
+| P7 Market Monitor | Intraday candlestick + volume charts for US indices, global indices, ETFs, volatility/rates/bond futures, and defensive sectors. Auto-refresh via `st.fragment(run_every=...)`. Price alerts management — add/edit/delete alert levels, status board (🟢 Armed / 🔴 Triggered / ⚫ Disabled). |
+| P8 Commodities | Candlestick + volume charts with period selector (Intraday / 5D / 1M / 3M / 6M) for precious metals futures, energy futures, metals & miners, uranium, copper, and agriculture. Auto-refresh on intraday only. |
+| P9 Symbol Admin | Three tabs: **Symbol Overrides** — set sector, asset class, and vehicle type per symbol; **Exposure Tags** — manage thematic tags per symbol via multiselect; **Manage Sectors** — add custom sectors. All saves auto-refresh `mv_allocations`. |
 
-Trading History (#27), Risk & Exposure (#28), and Strategy Tags (#29) are in progress.
+---
+
+## Price Alerts
+
+User-defined price level alerts — polled via yfinance, notified by email. Alerts fire once on threshold crossing and re-arm when price moves back (no spam).
+
+### Manage alerts
+Add, enable/disable, and delete alerts from the **P7 Market Monitor** dashboard (Price Alerts section at the bottom of the page).
+
+### Run the poller
+
+```bash
+# Poll every 5 minutes indefinitely (recommended: run in a terminal or via launchd)
+python -m alerts.poller
+
+# Single poll and exit (for cron)
+python -m alerts.poller --once
+
+# Custom interval (seconds)
+python -m alerts.poller --interval 180
+```
+
+### Email notifications
+
+Add these to `.env` to enable email alerts (all optional — alerts still log to console without them):
+
+```
+ALERT_SMTP_HOST=smtp.gmail.com
+ALERT_SMTP_PORT=587
+ALERT_SMTP_USER=you@gmail.com
+ALERT_SMTP_PASS=your_app_password
+ALERT_EMAIL_TO=you@gmail.com
+```
+
+For Gmail, use an [App Password](https://myaccount.google.com/apppasswords) rather than your account password.
+
+---
+
+## Live Quotes (E*TRADE API)
+
+P2 Portfolio Overview supports real-time price quotes fetched directly from E*TRADE. Click **Fetch Live Quotes** in the P2 sidebar to override snapshot market values with live prices for your session. Results are stored in session state — no automatic polling.
+
+Requires a valid OAuth token (`python -m etrade_sync auth`). Tokens expire at midnight ET.
 
 ---
 

@@ -1,3 +1,4 @@
+import subprocess
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -8,9 +9,99 @@ import streamlit as st
 import yfinance as yf
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from dashboard.db import query, execute
 
 st.set_page_config(page_title="Market Monitor — Fifth Dragon Capital", layout="wide")
 st.title("Market Monitor")
+
+
+# ── Price Alerts ───────────────────────────────────────────────────────────────
+
+st.header("Price Alerts")
+st.caption("Alerts fire once when the threshold is crossed, then re-arm when price moves back. Run `python -m alerts.poller` to start the background poller.")
+
+alerts = query("SELECT id, ticker, label, condition, threshold::float, enabled, triggered, last_fired_at FROM price_alerts ORDER BY id")
+
+if alerts:
+    def _status(a):
+        if not a["enabled"]:
+            return "⚫ Disabled"
+        if a["triggered"]:
+            return "🔴 Triggered"
+        return "🟢 Armed"
+
+    df = pd.DataFrame([{
+        "ID":         a["id"],
+        "Ticker":     a["ticker"],
+        "Label":      a["label"] or "—",
+        "Condition":  f"{'>' if a['condition'] == 'above' else '<'} {a['threshold']:,.2f}",
+        "Status":     _status(a),
+        "Last Fired": a["last_fired_at"].strftime("%Y-%m-%d %H:%M") if a["last_fired_at"] else "—",
+    } for a in alerts])
+    st.dataframe(df, use_container_width=True, hide_index=True)
+else:
+    st.info("No alerts defined yet. Add one below.")
+
+st.divider()
+
+col_add, col_manage = st.columns(2)
+
+with col_add:
+    st.subheader("Add Alert")
+    with st.form("add_alert_form"):
+        a1, a2 = st.columns(2)
+        ticker_in    = a1.text_input("Ticker", placeholder="e.g. ^VIX, VIXY, NQ=F")
+        label_in     = a2.text_input("Label (optional)", placeholder="e.g. VIX Fear Spike")
+        a3, a4 = st.columns(2)
+        condition_in = a3.selectbox("Condition", ["above", "below"])
+        threshold_in = a4.number_input("Threshold", min_value=0.0, step=0.01, format="%.2f")
+        if st.form_submit_button("Add Alert", type="primary"):
+            if not ticker_in.strip():
+                st.error("Ticker is required.")
+            else:
+                execute("""
+                    INSERT INTO price_alerts (ticker, label, condition, threshold)
+                    VALUES (%s, %s, %s, %s)
+                """, (ticker_in.strip().upper(), label_in.strip() or None, condition_in, threshold_in))
+                st.success(f"Alert added: {ticker_in.strip().upper()} {condition_in} {threshold_in:,.2f}")
+                st.rerun()
+
+with col_manage:
+    st.subheader("Manage Alerts")
+    if alerts:
+        options = {
+            f"#{a['id']} {a['ticker']} {'>' if a['condition'] == 'above' else '<'} {a['threshold']:,.2f}  {a['label'] or ''}".strip(): a
+            for a in alerts
+        }
+        chosen_label = st.selectbox("Select alert", list(options.keys()))
+        chosen = options[chosen_label]
+
+        new_threshold = st.number_input(
+            "Adjust threshold", value=chosen["threshold"],
+            min_value=0.0, step=0.01, format="%.2f", key="manage_threshold"
+        )
+        m1, m2, m3, m4 = st.columns(4)
+        if m1.button("Save", use_container_width=True, type="primary"):
+            execute("UPDATE price_alerts SET threshold = %s, triggered = FALSE WHERE id = %s",
+                    (new_threshold, chosen["id"]))
+            st.success(f"Threshold updated to {new_threshold:,.2f} and re-armed.")
+            st.rerun()
+        if m2.button("Enable" if not chosen["enabled"] else "Disable", use_container_width=True):
+            execute("UPDATE price_alerts SET enabled = %s WHERE id = %s", (not chosen["enabled"], chosen["id"]))
+            st.rerun()
+        if m3.button("Re-arm", use_container_width=True, help="Reset triggered state so alert can fire again"):
+            execute("UPDATE price_alerts SET triggered = FALSE WHERE id = %s", (chosen["id"],))
+            st.success("Alert re-armed.")
+            st.rerun()
+        if m4.button("Delete", use_container_width=True, type="secondary"):
+            execute("DELETE FROM price_alerts WHERE id = %s", (chosen["id"],))
+            st.success("Alert deleted.")
+            st.rerun()
+    else:
+        st.caption("No alerts to manage.")
+
+st.divider()
+
 
 GROUPS = {
     "US Indices": [
@@ -157,6 +248,21 @@ st.sidebar.markdown("**Auto-Refresh**")
 INTERVALS = {"Off": None, "5 min": "5m", "10 min": "10m", "15 min": "15m"}
 choice   = st.sidebar.selectbox("Interval", list(INTERVALS.keys()), index=2)
 run_every = INTERVALS[choice]
+
+st.sidebar.divider()
+st.sidebar.markdown("**Price Alerts**")
+if st.sidebar.button("▶ Run Alert Poll", use_container_width=True, type="primary"):
+    venv_python  = sys.executable
+    project_root = str(Path(__file__).parent.parent.parent)
+    with st.sidebar:
+        with st.spinner("Polling…"):
+            result = subprocess.run(
+                [venv_python, "-m", "alerts.poller", "--once"],
+                capture_output=True, text=True, cwd=project_root,
+            )
+    output = result.stdout + (result.stderr if result.returncode != 0 else "")
+    st.sidebar.code(output.strip() or "No output.", language=None)
+    st.rerun()
 
 # ── market data fragment (auto-refreshes independently) ───────────────────────
 

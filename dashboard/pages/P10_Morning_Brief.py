@@ -108,8 +108,8 @@ with tab_brief:
 
 with tab_levels:
     st.caption(
-        "Changes here are written back to `morning_brief/key_levels.yml` immediately. "
-        "Re-run the brief to see them reflected."
+        "Edit stops, levels, and notes below. "
+        "Click **💾 Save** on any row to persist, or use **💾 Save All** at the bottom."
     )
 
     kl = _load_key_levels()
@@ -118,115 +118,122 @@ with tab_levels:
 
     st.subheader("Positions")
 
-    # Live DB snapshot (read-only context panel)
     db_rows = fetch_positions_from_db()
     if db_rows and "error" not in db_rows[0]:
-        db_df = pd.DataFrame(db_rows)[["symbol", "quantity", "cost_basis", "market_value", "unrealized_pnl", "unrealized_pnl_pct"]]
-        db_df.columns = ["Symbol", "Qty", "Cost Basis", "Mkt Value", "Unreal P/L $", "Unreal P/L %"]
-        for col in ["Cost Basis", "Mkt Value", "Unreal P/L $"]:
-            db_df[col] = db_df[col].apply(lambda x: f"{x:,.2f}" if x is not None else "—")
+        db_df = pd.DataFrame(db_rows)[["symbol","quantity","cost_basis","market_value","unrealized_pnl","unrealized_pnl_pct"]]
+        db_df.columns = ["Symbol","Qty","Cost Basis","Mkt Value","Unreal P/L $","Unreal P/L %"]
+        for col in ["Cost Basis","Mkt Value","Unreal P/L $"]:
+            db_df[col] = db_df[col].apply(lambda x: f"${x:,.2f}" if x is not None else "—")
         db_df["Unreal P/L %"] = db_df["Unreal P/L %"].apply(lambda x: f"{x:+.2f}%" if x is not None else "—")
-        st.caption("📊 Live from DB — read only. Use the table below to set stops/notes, then Save.")
+        st.caption("📊 Live from DB (read-only)")
         st.dataframe(db_df, use_container_width=True, hide_index=True)
     elif db_rows and "error" in db_rows[0]:
-        st.warning(f"DB unavailable: {db_rows[0]['error']} — showing YAML positions only.")
-    else:
-        st.info("No positions in DB. Run a sync first or add tickers manually below.")
+        st.warning(f"DB unavailable: {db_rows[0]['error']}")
 
-    st.caption("Edit stops and notes below. Click **💾 Save Key Levels** to persist.")
+    st.caption("Set stops and notes per position:")
 
-    pos_rows = [
-        {"Ticker": t, "Stop": v.get("stop") or "", "Note": v.get("note") or ""}
-        for t, v in (kl.get("positions") or {}).items()
-    ]
-    pos_df = pd.DataFrame(pos_rows, columns=["Ticker", "Stop", "Note"]) if pos_rows else \
-             pd.DataFrame(columns=["Ticker", "Stop", "Note"])
+    pos_dict = dict(kl.get("positions") or {})
+    new_positions = {}
 
-    edited_pos = st.data_editor(
-        pos_df,
-        use_container_width=True,
-        num_rows="dynamic",
-        hide_index=True,
-        column_config={
-            "Ticker": st.column_config.TextColumn("Ticker", width="small"),
-            "Stop":   st.column_config.NumberColumn("Stop", min_value=0.0, format="%.2f", width="small"),
-            "Note":   st.column_config.TextColumn("Note", width="large"),
-        },
-        key="pos_editor",
-    )
+    for ticker, vals in pos_dict.items():
+        c1, c2, c3, c4 = st.columns([1, 1, 3, 1])
+        c1.markdown(f"**{ticker}**")
+        stop = c2.number_input(
+            "Stop", value=float(vals.get("stop") or 0.0),
+            min_value=0.0, step=0.01, format="%.2f",
+            key=f"pos_stop_{ticker}", label_visibility="collapsed"
+        )
+        note = c3.text_input(
+            "Note", value=vals.get("note") or "",
+            key=f"pos_note_{ticker}", label_visibility="collapsed",
+            placeholder="note…"
+        )
+        delete = c4.checkbox("🗑", key=f"pos_del_{ticker}", help="Mark for deletion")
+        if not delete:
+            entry = {}
+            if stop > 0:
+                entry["stop"] = stop
+            if note.strip():
+                entry["note"] = note.strip()
+            new_positions[ticker] = entry
+
+    st.divider()
+
+    # Add new position
+    with st.expander("➕ Add Position"):
+        with st.form("add_position_form"):
+            ap1, ap2, ap3 = st.columns([1, 1, 3])
+            new_ticker = ap1.text_input("Ticker").strip().upper()
+            new_stop   = ap2.number_input("Stop", min_value=0.0, step=0.01, format="%.2f")
+            new_note   = ap3.text_input("Note", placeholder="optional note…")
+            if st.form_submit_button("Add", type="primary"):
+                if new_ticker:
+                    entry = {}
+                    if new_stop > 0:
+                        entry["stop"] = new_stop
+                    if new_note.strip():
+                        entry["note"] = new_note.strip()
+                    new_positions[new_ticker] = entry
+                    kl["positions"] = new_positions
+                    _save_key_levels(kl)
+                    st.success(f"Added {new_ticker}.")
+                    st.rerun()
 
     st.divider()
 
     # ── Watch Levels ───────────────────────────────────────────────────────────
 
     st.subheader("Watch Levels")
-    st.caption("Tickers shown in the **Key Levels** section with support/resistance distances.")
+    st.caption("Support, resistance, and alert levels shown in the Key Levels section of the brief.")
 
-    watch_rows = [
-        {
-            "Ticker":      t,
-            "Support":     v.get("support")     or "",
-            "Resistance":  v.get("resistance")  or "",
-            "Alert Above": v.get("alert_above") or "",
-            "Note":        v.get("note")        or "",
-        }
-        for t, v in (kl.get("watch") or {}).items()
-    ]
-    watch_df = pd.DataFrame(watch_rows,
-        columns=["Ticker", "Support", "Resistance", "Alert Above", "Note"]) if watch_rows else \
-               pd.DataFrame(columns=["Ticker", "Support", "Resistance", "Alert Above", "Note"])
+    watch_dict = dict(kl.get("watch") or {})
+    new_watch = {}
 
-    edited_watch = st.data_editor(
-        watch_df,
-        use_container_width=True,
-        num_rows="dynamic",
-        hide_index=True,
-        column_config={
-            "Ticker":      st.column_config.TextColumn("Ticker",      width="small"),
-            "Support":     st.column_config.NumberColumn("Support",     min_value=0.0, format="%.2f", width="small"),
-            "Resistance":  st.column_config.NumberColumn("Resistance",  min_value=0.0, format="%.2f", width="small"),
-            "Alert Above": st.column_config.NumberColumn("Alert Above", min_value=0.0, format="%.2f", width="small"),
-            "Note":        st.column_config.TextColumn("Note",        width="large"),
-        },
-        key="watch_editor",
-    )
+    for ticker, vals in watch_dict.items():
+        st.markdown(f"**{ticker}**")
+        w1, w2, w3, w4, w5 = st.columns([1, 1, 1, 3, 1])
+        support    = w1.number_input("Support",    value=float(vals.get("support")     or 0.0), min_value=0.0, step=0.01, format="%.2f", key=f"w_sup_{ticker}",  label_visibility="collapsed")
+        resistance = w2.number_input("Resistance", value=float(vals.get("resistance")  or 0.0), min_value=0.0, step=0.01, format="%.2f", key=f"w_res_{ticker}",  label_visibility="collapsed")
+        alert_abv  = w3.number_input("Alert",      value=float(vals.get("alert_above") or 0.0), min_value=0.0, step=0.01, format="%.2f", key=f"w_alrt_{ticker}", label_visibility="collapsed")
+        note       = w4.text_input("Note", value=vals.get("note") or "", key=f"w_note_{ticker}", label_visibility="collapsed", placeholder="note…")
+        delete     = w5.checkbox("🗑", key=f"w_del_{ticker}", help="Mark for deletion")
+        w1.caption("support"); w2.caption("resistance"); w3.caption("alert above")
+
+        if not delete:
+            entry = {}
+            if support    > 0: entry["support"]     = support
+            if resistance > 0: entry["resistance"]  = resistance
+            if alert_abv  > 0: entry["alert_above"] = alert_abv
+            if note.strip():   entry["note"]        = note.strip()
+            new_watch[ticker] = entry
 
     st.divider()
 
-    if st.button("💾 Save Key Levels", type="primary"):
-        # Rebuild positions dict from edited dataframe
-        new_positions = {}
-        for _, row in edited_pos.iterrows():
-            ticker = str(row["Ticker"]).strip().upper()
-            if not ticker:
-                continue
-            entry = {}
-            if row["Stop"] not in ("", None):
-                try:
-                    entry["stop"] = float(row["Stop"])
-                except (ValueError, TypeError):
-                    pass
-            if str(row["Note"]).strip():
-                entry["note"] = str(row["Note"]).strip()
-            new_positions[ticker] = entry
+    # Add new watch level
+    with st.expander("➕ Add Watch Level"):
+        with st.form("add_watch_form"):
+            aw1, aw2, aw3, aw4, aw5 = st.columns([1, 1, 1, 1, 3])
+            wt = aw1.text_input("Ticker").strip().upper()
+            ws = aw2.number_input("Support",    min_value=0.0, step=0.01, format="%.2f")
+            wr = aw3.number_input("Resistance", min_value=0.0, step=0.01, format="%.2f")
+            wa = aw4.number_input("Alert Above", min_value=0.0, step=0.01, format="%.2f")
+            wn = aw5.text_input("Note")
+            if st.form_submit_button("Add", type="primary"):
+                if wt:
+                    entry = {}
+                    if ws > 0: entry["support"]     = ws
+                    if wr > 0: entry["resistance"]  = wr
+                    if wa > 0: entry["alert_above"] = wa
+                    if wn.strip(): entry["note"]    = wn.strip()
+                    new_watch[wt] = entry
+                    kl["watch"] = new_watch
+                    _save_key_levels(kl)
+                    st.success(f"Added {wt}.")
+                    st.rerun()
 
-        # Rebuild watch dict from edited dataframe
-        new_watch = {}
-        for _, row in edited_watch.iterrows():
-            ticker = str(row["Ticker"]).strip().upper()
-            if not ticker:
-                continue
-            entry = {}
-            for col, key in [("Support", "support"), ("Resistance", "resistance"), ("Alert Above", "alert_above")]:
-                if row[col] not in ("", None):
-                    try:
-                        entry[key] = float(row[col])
-                    except (ValueError, TypeError):
-                        pass
-            if str(row["Note"]).strip():
-                entry["note"] = str(row["Note"]).strip()
-            new_watch[ticker] = entry
+    st.divider()
 
+    if st.button("💾 Save All", type="primary"):
         _save_key_levels({"positions": new_positions, "watch": new_watch})
         st.success("Key levels saved. Re-run the brief to reflect changes.")
         st.rerun()

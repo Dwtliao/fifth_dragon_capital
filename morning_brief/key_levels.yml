@@ -1,46 +1,32 @@
-# key_levels.yml — user-defined stops, resistance, and watch levels
-# Edit this file to keep your levels current. morning_brief.py reads it at run time.
-#
-# Supported fields per ticker:
-#   stop:        hard stop loss level (alerts if price within 3%)
-#   support:     key support level to watch
-#   resistance:  key resistance level to watch
-#   note:        free-text comment shown in brief
-
 positions:
   URNM:
-    note: "uranium ETF — hold, no hard stop set"
-
+    stop: 54.95
+    note: uranium ETF — hold, no hard stop set
   UEC:
-    stop: 10.50
-    note: "uranium miner, stop intact"
-
+    stop: 10.5
+    note: uranium miner, stop intact
   UUUU:
-    note: "trimmed position, hold remainder"
-
+    stop: 14.0
+    note: trimmed position, hold remainder
   VIXY:
-    note: "vol hedge — exit after FOMC / event catalyst"
-
+    stop: 21.51
+    note: vol hedge — exit after FOMC / event catalyst
 watch:
   NQ:
-    support: 29500
-    resistance: 30500
-    note: "scene of the crime — pre-selloff range"
-
+    support: 29500.0
+    resistance: 30500.0
+    note: scene of the crime — pre-selloff range
   GC:
-    support: 4200
-    resistance: 4489
-    note: "gold — harmonic D at 4042, watching 4489 next"
-
+    support: 4200.0
+    resistance: 4489.0
+    note: gold — harmonic D at 4042, watching 4489 next
   VIX:
     alert_above: 18.0
-    note: "complacency zone below 18"
-
+    note: complacency zone below 18
   FNV:
-    resistance: 232.10
-    note: "50 SMA on TSX — needs volume to break"
-
+    resistance: 232.1
+    note: 50 SMA on TSX — needs volume to break
   DXY:
     support: 99.0
     resistance: 102.5
-    note: "dollar index — inverse gold/commodities signal"
+    note: dollar index — inverse gold/commodities signal

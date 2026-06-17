@@ -1,0 +1,224 @@
+import datetime
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from dotenv import load_dotenv
+from morning_brief.fetchers import (
+    fetch_positions_from_db, sync_positions_from_db,
+    load_key_levels_from_db, save_key_levels_to_db,
+)
+
+st.set_page_config(page_title="Morning Brief — Fifth Dragon Capital", layout="wide")
+st.title("Morning Brief")
+
+PROJECT_ROOT  = Path(__file__).parent.parent.parent
+DEFAULT_DIARY = Path.home() / "Library/CloudStorage/Dropbox/Etrade/trading_diary"
+
+load_dotenv(PROJECT_ROOT / ".env")
+diary      = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
+brief_path = diary / "morning_brief.md"
+
+
+def _run_brief() -> str:
+    result = subprocess.run(
+        [sys.executable, "-m", "morning_brief.brief"],
+        capture_output=True, text=True, cwd=str(PROJECT_ROOT),
+    )
+    return result.stdout + result.stderr
+
+
+# ── sidebar ────────────────────────────────────────────────────────────────────
+
+st.sidebar.markdown("**Generate Brief**")
+if st.sidebar.button("▶ Run Morning Brief", type="primary", use_container_width=True):
+    with st.spinner("Fetching market data…"):
+        output = _run_brief()
+    st.sidebar.code(output.strip(), language=None)
+    st.rerun()
+
+st.sidebar.divider()
+st.sidebar.markdown("**Positions**")
+if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
+                     help="Adds new holdings from E*TRADE DB; removes closed positions that have no stop/note set"):
+    try:
+        kl = load_key_levels_from_db()
+        updated, added, removed = sync_positions_from_db(kl)
+        save_key_levels_to_db(updated)
+        msgs = []
+        if added:
+            msgs.append(f"Added: {', '.join(added)}")
+        if removed:
+            msgs.append(f"Removed: {', '.join(removed)}")
+        if not added and not removed:
+            msgs.append("Already in sync — no changes.")
+        st.sidebar.success("\n".join(msgs))
+        st.rerun()
+    except RuntimeError as e:
+        st.sidebar.error(str(e))
+    except Exception as e:
+        st.sidebar.error(f"Sync failed: {e}")
+
+st.sidebar.divider()
+if brief_path.exists():
+    mtime = brief_path.stat().st_mtime
+    st.sidebar.caption(
+        f"Last generated:\n{datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')}"
+    )
+
+# ── tabs ───────────────────────────────────────────────────────────────────────
+
+tab_brief, tab_levels = st.tabs(["📋 Brief", "🔑 Key Levels"])
+
+
+# ══ Tab 1: Brief ══════════════════════════════════════════════════════════════
+
+with tab_brief:
+    if not brief_path.exists():
+        st.info(
+            f"No brief found at `{brief_path}`. "
+            "Click **▶ Run Morning Brief** in the sidebar to generate one."
+        )
+    else:
+        content = brief_path.read_text(encoding="utf-8")
+        st.markdown(content)
+
+
+# ══ Tab 2: Key Levels ═════════════════════════════════════════════════════════
+
+with tab_levels:
+    st.caption(
+        "Edit stops, levels, and notes below. "
+        "Click **💾 Save** on any row to persist, or use **💾 Save All** at the bottom."
+    )
+
+    kl = load_key_levels_from_db()
+
+    # ── Positions ──────────────────────────────────────────────────────────────
+
+    st.subheader("Positions")
+
+    db_rows = fetch_positions_from_db()
+    if db_rows and "error" not in db_rows[0]:
+        db_df = pd.DataFrame(db_rows)[["symbol","quantity","cost_basis","market_value","unrealized_pnl","unrealized_pnl_pct"]]
+        db_df.columns = ["Symbol","Qty","Cost Basis","Mkt Value","Unreal P/L $","Unreal P/L %"]
+        for col in ["Cost Basis","Mkt Value","Unreal P/L $"]:
+            db_df[col] = db_df[col].apply(lambda x: f"${x:,.2f}" if x is not None else "—")
+        db_df["Unreal P/L %"] = db_df["Unreal P/L %"].apply(lambda x: f"{x:+.2f}%" if x is not None else "—")
+        st.caption("📊 Last E*TRADE sync snapshot (read-only) — brief uses real-time E*TRADE quotes when token is valid")
+        st.dataframe(db_df, use_container_width=True, hide_index=True)
+    elif db_rows and "error" in db_rows[0]:
+        st.warning(f"DB unavailable: {db_rows[0]['error']}")
+
+    st.caption("Set stops and notes per position:")
+
+    pos_dict = dict(kl.get("positions") or {})
+    new_positions = {}
+
+    for ticker, vals in pos_dict.items():
+        c1, c2, c3, c4 = st.columns([1, 1, 3, 1])
+        c1.markdown(f"**{ticker}**")
+        stop = c2.number_input(
+            "Stop", value=float(vals.get("stop") or 0.0),
+            min_value=0.0, step=0.01, format="%.2f",
+            key=f"pos_stop_{ticker}", label_visibility="collapsed"
+        )
+        note = c3.text_input(
+            "Note", value=vals.get("note") or "",
+            key=f"pos_note_{ticker}", label_visibility="collapsed",
+            placeholder="note…"
+        )
+        delete = c4.checkbox("🗑", key=f"pos_del_{ticker}", help="Mark for deletion")
+        if not delete:
+            entry = {}
+            if stop > 0:
+                entry["stop"] = stop
+            if note.strip():
+                entry["note"] = note.strip()
+            new_positions[ticker] = entry
+
+    st.divider()
+
+    # Add new position
+    with st.expander("➕ Add Position"):
+        with st.form("add_position_form"):
+            ap1, ap2, ap3 = st.columns([1, 1, 3])
+            new_ticker = ap1.text_input("Ticker").strip().upper()
+            new_stop   = ap2.number_input("Stop", min_value=0.0, step=0.01, format="%.2f")
+            new_note   = ap3.text_input("Note", placeholder="optional note…")
+            if st.form_submit_button("Add", type="primary"):
+                if new_ticker:
+                    entry = {}
+                    if new_stop > 0:
+                        entry["stop"] = new_stop
+                    if new_note.strip():
+                        entry["note"] = new_note.strip()
+                    new_positions[new_ticker] = entry
+                    kl["positions"] = new_positions
+                    save_key_levels_to_db(kl)
+                    st.success(f"Added {new_ticker}.")
+                    st.rerun()
+
+    st.divider()
+
+    # ── Watch Levels ───────────────────────────────────────────────────────────
+
+    st.subheader("Watch Levels")
+    st.caption("Support, resistance, and alert levels shown in the Key Levels section of the brief.")
+
+    watch_dict = dict(kl.get("watch") or {})
+    new_watch = {}
+
+    for ticker, vals in watch_dict.items():
+        st.markdown(f"**{ticker}**")
+        w1, w2, w3, w4, w5 = st.columns([1, 1, 1, 3, 1])
+        support    = w1.number_input("Support",    value=float(vals.get("support")     or 0.0), min_value=0.0, step=0.01, format="%.2f", key=f"w_sup_{ticker}",  label_visibility="collapsed")
+        resistance = w2.number_input("Resistance", value=float(vals.get("resistance")  or 0.0), min_value=0.0, step=0.01, format="%.2f", key=f"w_res_{ticker}",  label_visibility="collapsed")
+        alert_abv  = w3.number_input("Alert",      value=float(vals.get("alert_above") or 0.0), min_value=0.0, step=0.01, format="%.2f", key=f"w_alrt_{ticker}", label_visibility="collapsed")
+        note       = w4.text_input("Note", value=vals.get("note") or "", key=f"w_note_{ticker}", label_visibility="collapsed", placeholder="note…")
+        delete     = w5.checkbox("🗑", key=f"w_del_{ticker}", help="Mark for deletion")
+        w1.caption("support"); w2.caption("resistance"); w3.caption("alert above")
+
+        if not delete:
+            entry = {}
+            if support    > 0: entry["support"]     = support
+            if resistance > 0: entry["resistance"]  = resistance
+            if alert_abv  > 0: entry["alert_above"] = alert_abv
+            if note.strip():   entry["note"]        = note.strip()
+            new_watch[ticker] = entry
+
+    st.divider()
+
+    # Add new watch level
+    with st.expander("➕ Add Watch Level"):
+        with st.form("add_watch_form"):
+            aw1, aw2, aw3, aw4, aw5 = st.columns([1, 1, 1, 1, 3])
+            wt = aw1.text_input("Ticker").strip().upper()
+            ws = aw2.number_input("Support",    min_value=0.0, step=0.01, format="%.2f")
+            wr = aw3.number_input("Resistance", min_value=0.0, step=0.01, format="%.2f")
+            wa = aw4.number_input("Alert Above", min_value=0.0, step=0.01, format="%.2f")
+            wn = aw5.text_input("Note")
+            if st.form_submit_button("Add", type="primary"):
+                if wt:
+                    entry = {}
+                    if ws > 0: entry["support"]     = ws
+                    if wr > 0: entry["resistance"]  = wr
+                    if wa > 0: entry["alert_above"] = wa
+                    if wn.strip(): entry["note"]    = wn.strip()
+                    new_watch[wt] = entry
+                    kl["watch"] = new_watch
+                    save_key_levels_to_db(kl)
+                    st.success(f"Added {wt}.")
+                    st.rerun()
+
+    st.divider()
+
+    if st.button("💾 Save All", type="primary"):
+        save_key_levels_to_db({"positions": new_positions, "watch": new_watch})
+        st.success("Key levels saved. Re-run the brief to reflect changes.")
+        st.rerun()

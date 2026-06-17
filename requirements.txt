@@ -3,3 +3,4 @@ psycopg2-binary>=2.9
 python-dotenv>=1.0
 yfinance>=0.2
 streamlit>=1.35
+pyyaml>=6.0

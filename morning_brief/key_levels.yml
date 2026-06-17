@@ -1,0 +1,37 @@
+positions:
+  URNM:
+    stop: 54.95
+    note: uranium ETF — hold, no hard stop set
+  UEC:
+    stop: 10.5
+    note: uranium miner, stop intact
+  UUUU:
+    stop: 14.0
+    note: trimmed position, hold remainder
+  VIXY:
+    stop: 21.51
+    note: vol hedge — exit after FOMC / event catalyst
+watch:
+  NQ=F:
+    support: 29500.0
+    resistance: 30500.0
+    note: scene of the crime — pre-selloff range
+  GC=F:
+    support: 4200.0
+    resistance: 4489.0
+    note: gold — harmonic D at 4042, watching 4489 next
+  ^VIX:
+    alert_above: 18.0
+    note: complacency zone below 18
+  FNV:
+    resistance: 232.1
+    note: 50 SMA on TSX — needs volume to break
+  DX-Y.NYB:
+    support: 99.0
+    resistance: 102.5
+    note: dollar index — inverse gold/commodities signal
+  CL=F:
+    support: 70.0
+    resistance: 85.0
+    alert_above: 80.0
+    note: Crude may be in trading range

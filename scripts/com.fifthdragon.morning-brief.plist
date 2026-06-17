@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fifthdragon.morning-brief</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/davidliao/git_repos/fifth_dragon_capital/scripts/morning_brief.sh</string>
+    </array>
+
+    <!-- Run daily at 6:45 AM — after sync-daily (6:00 AM) has refreshed positions -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>45</integer>
+    </dict>
+
+    <!-- Do NOT run immediately on load — wait for scheduled time -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/davidliao/git_repos/fifth_dragon_capital/logs/launchd_morning_brief.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/davidliao/git_repos/fifth_dragon_capital/logs/launchd_morning_brief_error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/Users/davidliao/git_repos/py312/venv/bin</string>
+    </dict>
+</dict>
+</plist>

@@ -145,7 +145,17 @@ def render_positions(data: list[dict]) -> str:
     if not data:
         return ""
 
-    lines = ["## 💼  YOUR POSITIONS\n"]
+    sources = [r.get("price_source") for r in data if "error" not in r]
+    etrade_count = sources.count("etrade")
+    yf_count     = sources.count("yfinance")
+    if etrade_count and not yf_count:
+        source_note = "_(prices: E*TRADE real-time)_"
+    elif etrade_count and yf_count:
+        source_note = f"_(prices: E*TRADE real-time for {etrade_count}, yfinance delayed for {yf_count})_"
+    else:
+        source_note = "_(prices: yfinance ~15min delayed)_"
+
+    lines = [f"## 💼  YOUR POSITIONS  {source_note}\n"]
     for row in data:
         if "error" in row:
             lines.append(_error_row(row["label"], row["error"]))

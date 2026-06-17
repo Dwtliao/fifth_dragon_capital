@@ -166,20 +166,44 @@ def fetch_positions(key_levels: dict) -> list[dict]:
     if not all_tickers:
         return []
 
-    # ── Fetch live prices via yfinance ────────────────────────────────────────
-    symbols = {t: t for t in all_tickers}
-    snaps   = _fetch_snapshot(symbols)
+    # ── Try E*TRADE quotes first (real-time); fall back to yfinance silently ──
+    etrade_quotes: dict[str, dict] = {}
+    try:
+        from etrade_sync.market.quotes import get_quotes_safe
+        etrade_quotes, _err = get_quotes_safe(all_tickers)
+    except Exception:
+        pass  # token missing or import error — yfinance handles everything
+
+    # yfinance fallback for tickers not covered by E*TRADE
+    yf_tickers = [t for t in all_tickers if t not in etrade_quotes]
+    yf_snaps   = {s["ticker"].upper(): s for s in _fetch_snapshot({t: t for t in yf_tickers})} \
+                 if yf_tickers else {}
 
     # ── Merge ─────────────────────────────────────────────────────────────────
     enriched = []
-    for snap in snaps:
-        ticker = snap["ticker"].upper()
-        yaml   = pos_config.get(ticker, {})
-        db     = db_by_sym.get(ticker, {})
+    for ticker in all_tickers:
+        yaml_cfg = pos_config.get(ticker, {})
+        db       = db_by_sym.get(ticker, {})
 
-        stop = yaml.get("stop")
-        note = yaml.get("note", "")
-        last = snap.get("last")
+        # Price: E*TRADE preferred, yfinance fallback
+        eq = etrade_quotes.get(ticker)
+        yf = yf_snaps.get(ticker, {})
+
+        if eq:
+            last    = eq["last_price"]
+            pct     = eq.get("change_pct")
+            source  = "etrade"
+        elif "last" in yf:
+            last    = yf["last"]
+            pct     = yf.get("pct")
+            source  = "yfinance"
+        else:
+            last    = None
+            pct     = None
+            source  = "error"
+
+        stop = yaml_cfg.get("stop")
+        note = yaml_cfg.get("note", "")
 
         warn = ""
         if stop and last:
@@ -187,18 +211,22 @@ def fetch_positions(key_levels: dict) -> list[dict]:
             if dist_pct < 3:
                 warn = f"⚠ {dist_pct:.1f}% above stop {stop}"
 
+        snap = yf if yf else {"label": ticker, "ticker": ticker}
         enriched.append({
             **snap,
-            # DB enrichment (None if DB unavailable or ticker not in DB)
+            "label":               ticker,
+            "ticker":              ticker,
+            "last":                last,
+            "pct":                 pct,
+            "price_source":        source,
             "cost_basis":          db.get("cost_basis"),
             "market_value_db":     db.get("market_value"),
             "unrealized_pnl":      db.get("unrealized_pnl"),
             "unrealized_pnl_pct":  db.get("unrealized_pnl_pct"),
             "quantity":            db.get("quantity"),
-            # YAML metadata
-            "stop": stop,
-            "note": note,
-            "warn": warn,
+            "stop":                stop,
+            "note":                note,
+            "warn":                warn,
         })
 
     return enriched

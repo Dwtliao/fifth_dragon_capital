@@ -156,36 +156,42 @@ def render_positions(data: list[dict]) -> str:
         source_note = "_(prices: yfinance ~15min delayed)_"
 
     lines = [f"## 💼  YOUR POSITIONS  {source_note}\n"]
+
+    # Table header
+    lines.append("| | Symbol | Price | Day % | Cost Basis | Unreal P/L % | Stop | Note |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---|")
+
     for row in data:
         if "error" in row:
-            lines.append(_error_row(row["label"], row["error"]))
+            lines.append(f"| ⚪ | **{row['label']}** | — | — | — | — | — | _{row.get('error', 'fetch error')}_ |")
             continue
 
-        label   = row["label"]
-        last    = row.get("last", 0.0)
-        pct     = row.get("pct")
-        warn    = row.get("warn", "")
-        note    = row.get("note", "")
-        stop    = row.get("stop")
-        cost    = row.get("cost_basis")
-        unreal  = row.get("unrealized_pnl_pct")
+        label  = row["label"]
+        last   = row.get("last")
+        pct    = row.get("pct")
+        cost   = row.get("cost_basis")
+        unreal = row.get("unrealized_pnl_pct")
+        stop   = row.get("stop")
+        note   = row.get("note", "")
+        warn   = row.get("warn", "")
 
-        emoji = _pct_emoji(pct)
-        pct_s = _pct_arrow(pct)
+        emoji  = _pct_emoji(pct)
+        pct_s  = _pct_arrow(pct) if pct is not None else "—"
+        last_s = f"{last:,.2f}" if last is not None else "—"
+        cost_s = f"{cost:,.2f}" if cost is not None else "—"
 
-        # Cost basis + unrealized P/L from DB
-        db_s = ""
-        if cost is not None:
-            db_s = f"  cost {cost:,.2f}"
         if unreal is not None:
-            sign  = "+" if unreal >= 0 else ""
-            db_s += f"  unreal {sign}{unreal:.1f}%"
+            sign = "+" if unreal >= 0 else ""
+            unreal_s = f"{sign}{unreal:.1f}%"
+        else:
+            unreal_s = "—"
 
-        stop_s = f"  stop {stop}" if stop else ""
-        warn_s = f"  {warn}" if warn else ""
-        note_s = f"  _{note}_" if note else ""
+        stop_s = f"{stop:,.2f}" if stop else "—"
+        note_s = f"⚠ {warn}  {note}".strip(" ⚠") if warn else note
 
-        lines.append(f"  {emoji} **{label}**  {last:,.2f}  ({pct_s}){db_s}{stop_s}{warn_s}{note_s}")
+        lines.append(
+            f"| {emoji} | **{label}** | {last_s} | {pct_s} | {cost_s} | {unreal_s} | {stop_s} | {note_s} |"
+        )
 
     return "\n".join(lines) + "\n\n---\n"
 

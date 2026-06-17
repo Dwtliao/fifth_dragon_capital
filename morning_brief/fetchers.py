@@ -269,15 +269,21 @@ def fetch_positions_from_db() -> list[dict]:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
-                    symbol,
-                    quantity,
-                    cost_basis,
-                    market_value,
-                    unrealized_pnl,
-                    unrealized_pnl_pct
-                FROM mv_unrealized_pnl
-                WHERE quantity IS NOT NULL AND quantity > 0
-                ORDER BY market_value DESC NULLS LAST
+                    u.symbol,
+                    u.quantity,
+                    u.cost_basis,
+                    u.market_value,
+                    u.unrealized_pnl,
+                    u.unrealized_pnl_pct
+                FROM mv_unrealized_pnl u
+                JOIN (
+                    SELECT DISTINCT symbol, security_type
+                    FROM positions
+                    WHERE fetched_at = (SELECT MAX(fetched_at) FROM positions)
+                ) p ON p.symbol = u.symbol
+                WHERE u.quantity IS NOT NULL AND u.quantity > 0
+                  AND p.security_type = 'EQ'
+                ORDER BY u.market_value DESC NULLS LAST
             """)
             cols = [d.name for d in cur.description]
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]

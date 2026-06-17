@@ -136,23 +136,50 @@ def fetch_vol_proxies() -> list[dict]:
 
 def fetch_positions(key_levels: dict) -> list[dict]:
     """
-    Fetch last prices for tickers listed under key_levels['positions'].
-    Cross-references stop levels from key_levels.yml and flags warnings.
+    Fetch positions for the morning brief.
+
+    Source priority:
+      1. DB (mv_unrealized_pnl) — authoritative ticker list + cost basis
+      2. key_levels.yml positions section — stop levels and notes layered on top
+      3. Fallback: YAML-only if DB is unavailable
+
+    Each returned dict includes:
+      label, ticker, last, prior, pct,        ← from yfinance
+      cost_basis, market_value, unrealized_pnl_pct  ← from DB (or None)
+      stop, note, warn                         ← from key_levels.yml
     """
-    pos_config = key_levels.get("positions", {})
-    if not pos_config:
+    pos_config = dict(key_levels.get("positions") or {})
+
+    # ── Try DB first ──────────────────────────────────────────────────────────
+    db_rows    = fetch_positions_from_db()
+    db_by_sym  : dict[str, dict] = {}
+    db_ok      = db_rows and "error" not in db_rows[0]
+
+    if db_ok:
+        for row in db_rows:
+            db_by_sym[row["symbol"].upper()] = row
+        # Union: DB tickers + any YAML tickers not in DB (carry-over / non-brokerage)
+        all_tickers = sorted(set(db_by_sym.keys()) | set(pos_config.keys()))
+    else:
+        all_tickers = sorted(pos_config.keys())
+
+    if not all_tickers:
         return []
 
-    symbols = {ticker: ticker for ticker in pos_config}
+    # ── Fetch live prices via yfinance ────────────────────────────────────────
+    symbols = {t: t for t in all_tickers}
     snaps   = _fetch_snapshot(symbols)
 
+    # ── Merge ─────────────────────────────────────────────────────────────────
     enriched = []
     for snap in snaps:
-        ticker  = snap["ticker"]
-        config  = pos_config.get(ticker, {})
-        stop    = config.get("stop")
-        note    = config.get("note", "")
-        last    = snap.get("last")
+        ticker = snap["ticker"].upper()
+        yaml   = pos_config.get(ticker, {})
+        db     = db_by_sym.get(ticker, {})
+
+        stop = yaml.get("stop")
+        note = yaml.get("note", "")
+        last = snap.get("last")
 
         warn = ""
         if stop and last:
@@ -160,7 +187,19 @@ def fetch_positions(key_levels: dict) -> list[dict]:
             if dist_pct < 3:
                 warn = f"⚠ {dist_pct:.1f}% above stop {stop}"
 
-        enriched.append({**snap, "stop": stop, "note": note, "warn": warn})
+        enriched.append({
+            **snap,
+            # DB enrichment (None if DB unavailable or ticker not in DB)
+            "cost_basis":          db.get("cost_basis"),
+            "market_value_db":     db.get("market_value"),
+            "unrealized_pnl":      db.get("unrealized_pnl"),
+            "unrealized_pnl_pct":  db.get("unrealized_pnl_pct"),
+            "quantity":            db.get("quantity"),
+            # YAML metadata
+            "stop": stop,
+            "note": note,
+            "warn": warn,
+        })
 
     return enriched
 
@@ -214,6 +253,82 @@ def fetch_watch_levels(key_levels: dict) -> list[dict]:
         })
 
     return enriched
+
+
+def fetch_positions_from_db() -> list[dict]:
+    """
+    Query mv_unrealized_pnl for current holdings.
+    Returns list of dicts: symbol, quantity, cost_basis, market_value,
+    unrealized_pnl, unrealized_pnl_pct.
+    Returns [] if DB is unavailable (brief still renders from key_levels.yml).
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from etrade_sync.db import get_connection  # type: ignore
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    symbol,
+                    quantity,
+                    cost_basis,
+                    market_value,
+                    unrealized_pnl,
+                    unrealized_pnl_pct
+                FROM mv_unrealized_pnl
+                WHERE quantity IS NOT NULL AND quantity > 0
+                ORDER BY market_value DESC NULLS LAST
+            """)
+            cols = [d.name for d in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+        conn.close()
+        return rows
+    except Exception as exc:
+        return [{"error": str(exc)}]
+
+
+def sync_positions_from_db(key_levels: dict) -> tuple[dict, list[str], list[str]]:
+    """
+    Smart merge: DB holdings → key_levels['positions'].
+
+    Rules:
+      - ADD tickers in DB but not in YAML (with blank stop/note)
+      - REMOVE tickers in YAML but not in DB, ONLY if they have no stop and no note
+        (tickers with user metadata are kept as a safety measure)
+      - PRESERVE all existing stops, notes, and any other metadata
+
+    Returns:
+      (updated_key_levels, added_tickers, removed_tickers)
+    """
+    db_rows = fetch_positions_from_db()
+
+    # If DB fetch failed entirely, bail out without touching YAML
+    if db_rows and "error" in db_rows[0]:
+        raise RuntimeError(f"DB unavailable: {db_rows[0]['error']}")
+
+    db_symbols = {row["symbol"].upper() for row in db_rows}
+
+    existing_positions = dict(key_levels.get("positions") or {})
+    yaml_symbols = {t.upper() for t in existing_positions}
+
+    added   = []
+    removed = []
+
+    # Add new tickers from DB
+    for symbol in sorted(db_symbols - yaml_symbols):
+        existing_positions[symbol] = {}
+        added.append(symbol)
+
+    # Remove closed positions — only if no user metadata attached
+    for symbol in sorted(yaml_symbols - db_symbols):
+        entry = existing_positions.get(symbol, {})
+        has_metadata = bool(entry.get("stop")) or bool(str(entry.get("note", "")).strip())
+        if not has_metadata:
+            del existing_positions[symbol]
+            removed.append(symbol)
+
+    updated = {**key_levels, "positions": existing_positions}
+    return updated, added, removed
 
 
 def fetch_fed_events() -> list[dict]:

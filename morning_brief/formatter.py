@@ -151,20 +151,31 @@ def render_positions(data: list[dict]) -> str:
             lines.append(_error_row(row["label"], row["error"]))
             continue
 
-        label  = row["label"]
-        last   = row.get("last", 0.0)
-        pct    = row.get("pct")
-        warn   = row.get("warn", "")
-        note   = row.get("note", "")
-        stop   = row.get("stop")
+        label   = row["label"]
+        last    = row.get("last", 0.0)
+        pct     = row.get("pct")
+        warn    = row.get("warn", "")
+        note    = row.get("note", "")
+        stop    = row.get("stop")
+        cost    = row.get("cost_basis")
+        unreal  = row.get("unrealized_pnl_pct")
+
+        emoji = _pct_emoji(pct)
+        pct_s = _pct_arrow(pct)
+
+        # Cost basis + unrealized P/L from DB
+        db_s = ""
+        if cost is not None:
+            db_s = f"  cost {cost:,.2f}"
+        if unreal is not None:
+            sign  = "+" if unreal >= 0 else ""
+            db_s += f"  unreal {sign}{unreal:.1f}%"
 
         stop_s = f"  stop {stop}" if stop else ""
         warn_s = f"  {warn}" if warn else ""
         note_s = f"  _{note}_" if note else ""
-        emoji  = _pct_emoji(pct)
-        pct_s  = _pct_arrow(pct)
 
-        lines.append(f"  {emoji} **{label}**  {last:,.2f}  ({pct_s}){stop_s}{warn_s}{note_s}")
+        lines.append(f"  {emoji} **{label}**  {last:,.2f}  ({pct_s}){db_s}{stop_s}{warn_s}{note_s}")
 
     return "\n".join(lines) + "\n\n---\n"
 

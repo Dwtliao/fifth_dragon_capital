@@ -297,8 +297,16 @@ if not positions_display.empty:
         "Symbol", "Sector", "Asset Class", "Vehicle Type", "Themes", "Quantity",
         "Cost Basis", "Market Value", "Unrealized P/L", "% Portfolio", "P/L %",
     ]
+
+    def _pnl_color(val):
+        if pd.isna(val) or val == 0:
+            return ""
+        return "color: #2ca02c; font-weight: 600" if val > 0 else "color: #d62728; font-weight: 600"
+
+    styled = display.style.map(_pnl_color, subset=["Unrealized P/L", "P/L %"])
+
     st.dataframe(
-        display,
+        styled,
         use_container_width=True,
         hide_index=True,
         column_config={

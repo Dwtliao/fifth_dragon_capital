@@ -250,39 +250,48 @@ with tab_trades:
 
         st.divider()
 
-        # Scatterplot ──────────────────────────────────────────────────────────
+        # Scatterplots ─────────────────────────────────────────────────────────
+        scatter_df = trades_raw.dropna(subset=["holding_days", "pnl_pct", "sell_date"]).copy()
+        scatter_df["color"]     = scatter_df["realized_pnl"].apply(lambda x: "Win" if x > 0 else "Loss")
+        scatter_df["sell_date"] = pd.to_datetime(scatter_df["sell_date"])
+
+        _zero_rule = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+            color="gray", strokeDash=[4, 4], opacity=0.5
+        ).encode(y="y:Q")
+
+        _color = alt.Color("color:N", scale=alt.Scale(
+            domain=["Win", "Loss"], range=["#2ca02c", "#d62728"]
+        ))
+        _size  = alt.Size("proceeds:Q", title="Proceeds ($)",
+                          scale=alt.Scale(range=[30, 400]), legend=None)
+        _common_tooltip = [
+            alt.Tooltip("symbol:N",       title="Symbol"),
+            alt.Tooltip("sell_date:T",    title="Sell Date", format="%Y-%m-%d"),
+            alt.Tooltip("holding_days:Q", title="Days Held"),
+            alt.Tooltip("pnl_pct:Q",      title="Return %",  format="+.1f"),
+            alt.Tooltip("realized_pnl:Q", title="P/L ($)",   format="$,.0f"),
+            alt.Tooltip("proceeds:Q",     title="Proceeds ($)", format="$,.0f"),
+            alt.Tooltip("term:N",         title="Term"),
+        ]
+
         st.subheader("Return % vs Holding Days")
-
-        scatter_df = trades_raw.dropna(subset=["holding_days", "pnl_pct"]).copy()
-        scatter_df["color"] = scatter_df["realized_pnl"].apply(
-            lambda x: "Win" if x > 0 else "Loss"
-        )
-
         st.altair_chart(
-            alt.Chart(scatter_df)
-            .mark_circle(opacity=0.7)
-            .encode(
+            alt.Chart(scatter_df).mark_circle(opacity=0.7).encode(
                 x=alt.X("holding_days:Q", title="Holding Days"),
                 y=alt.Y("pnl_pct:Q",      title="Return %"),
-                color=alt.Color("color:N", scale=alt.Scale(
-                    domain=["Win","Loss"], range=["#2ca02c","#d62728"]
-                )),
-                size=alt.Size("proceeds:Q", title="Proceeds ($)",
-                              scale=alt.Scale(range=[30, 400]), legend=None),
-                tooltip=[
-                    alt.Tooltip("symbol:N",       title="Symbol"),
-                    alt.Tooltip("sell_date:T",    title="Sell Date"),
-                    alt.Tooltip("holding_days:Q", title="Days Held"),
-                    alt.Tooltip("pnl_pct:Q",      title="Return %",     format="+.1f"),
-                    alt.Tooltip("realized_pnl:Q", title="P/L ($)",      format="$,.0f"),
-                    alt.Tooltip("proceeds:Q",      title="Proceeds ($)", format="$,.0f"),
-                    alt.Tooltip("term:N",          title="Term"),
-                ],
-            )
-            .properties(height=280)
-            + alt.Chart(pd.DataFrame({"y":[0]})).mark_rule(
-                color="gray", strokeDash=[4,4], opacity=0.5
-            ).encode(y="y:Q"),
+                color=_color, size=_size, tooltip=_common_tooltip,
+            ).properties(height=320) + _zero_rule,
+            use_container_width=True,
+        )
+
+        st.subheader("Return % vs Trade Date")
+        st.altair_chart(
+            alt.Chart(scatter_df).mark_circle(opacity=0.7).encode(
+                x=alt.X("sell_date:T", title="Sell Date",
+                        axis=alt.Axis(format="%b %Y", labelAngle=-45)),
+                y=alt.Y("pnl_pct:Q",  title="Return %"),
+                color=_color, size=_size, tooltip=_common_tooltip,
+            ).properties(height=320) + _zero_rule,
             use_container_width=True,
         )
 

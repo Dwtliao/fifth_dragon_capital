@@ -65,6 +65,38 @@ if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
         st.sidebar.error(f"Sync failed: {e}")
 
 st.sidebar.divider()
+st.sidebar.markdown("**Journal Sync**")
+if st.sidebar.button("🔄 Sync Latest Journal", use_container_width=True,
+                     help="Extract stops, watch levels, and alerts from the most recent journal using Claude API"):
+    diary = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
+    journals = sorted(diary.glob("trading_journal_*.md"))
+    if not journals:
+        st.sidebar.error("No journal files found.")
+    else:
+        latest = journals[-1]
+        with st.sidebar:
+            with st.spinner(f"Reading {latest.name}…"):
+                result = subprocess.run(
+                    [sys.executable, "-m", "morning_brief.journal_sync",
+                     "--file", str(latest)],
+                    capture_output=True, text=True, cwd=str(PROJECT_ROOT),
+                )
+        output = result.stdout + (result.stderr if result.returncode != 0 else "")
+        st.sidebar.code(output.strip(), language=None)
+        st.rerun()
+
+if st.sidebar.button("🔄 Sync All Journals", use_container_width=True,
+                     help="Process all unsynced journals in trading_diary/"):
+    with st.sidebar:
+        with st.spinner("Syncing all journals…"):
+            result = subprocess.run(
+                [sys.executable, "-m", "morning_brief.journal_sync"],
+                capture_output=True, text=True, cwd=str(PROJECT_ROOT),
+            )
+    st.sidebar.code((result.stdout + result.stderr).strip(), language=None)
+    st.rerun()
+
+st.sidebar.divider()
 if brief_path.exists():
     mtime = brief_path.stat().st_mtime
     st.sidebar.caption(

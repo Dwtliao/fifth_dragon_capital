@@ -115,26 +115,28 @@ def _already_synced(file_path: str, mtime: float) -> bool:
         conn.close()
 
 
-def _log_sync(file_path: str, mtime: float, counts: dict, dry_run: bool):
+def _log_sync(file_path: str, mtime: float, counts: dict, dry_run: bool, extracted: dict = None):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO journal_sync_log
-                    (file_path, file_mtime, positions_updated, watch_updated, alerts_created, dry_run)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                    (file_path, file_mtime, positions_updated, watch_updated, alerts_created, dry_run, extracted_json)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (file_path) DO UPDATE SET
                     file_mtime        = EXCLUDED.file_mtime,
                     synced_at         = NOW(),
                     positions_updated = EXCLUDED.positions_updated,
                     watch_updated     = EXCLUDED.watch_updated,
                     alerts_created    = EXCLUDED.alerts_created,
-                    dry_run           = EXCLUDED.dry_run
+                    dry_run           = EXCLUDED.dry_run,
+                    extracted_json    = EXCLUDED.extracted_json
             """, (file_path, mtime,
                   counts.get("positions", 0),
                   counts.get("watch", 0),
                   counts.get("alerts", 0),
-                  dry_run))
+                  dry_run,
+                  json.dumps(extracted) if extracted else None))
         conn.commit()
     finally:
         conn.close()
@@ -239,7 +241,7 @@ def process_file(path: Path, dry_run: bool = False, force: bool = False) -> dict
     counts = apply_extraction(extracted, dry_run=dry_run)
 
     if not dry_run:
-        _log_sync(str(path), mtime, counts, dry_run=False)
+        _log_sync(str(path), mtime, counts, dry_run=False, extracted=extracted)
         print(f"  done: {counts['positions']} positions, {counts['watch']} watch levels, {counts['alerts']} alerts")
 
     return counts

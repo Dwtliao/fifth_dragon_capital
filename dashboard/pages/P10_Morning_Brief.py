@@ -105,7 +105,7 @@ if brief_path.exists():
 
 # ── tabs ───────────────────────────────────────────────────────────────────────
 
-tab_brief, tab_levels = st.tabs(["📋 Brief", "🔑 Key Levels"])
+tab_brief, tab_levels, tab_history = st.tabs(["📋 Brief", "🔑 Key Levels", "📜 Sync History"])
 
 
 # ══ Tab 1: Brief ══════════════════════════════════════════════════════════════
@@ -254,3 +254,53 @@ with tab_levels:
         save_key_levels_to_db({"positions": new_positions, "watch": new_watch})
         st.success("Key levels saved. Re-run the brief to reflect changes.")
         st.rerun()
+
+
+# ══ Tab 3: Sync History ═══════════════════════════════════════════════════════
+
+with tab_history:
+    from dashboard.db import query as db_query
+
+    st.caption("One row per journal file processed. Re-syncing a file overwrites its row.")
+
+    log = db_query("""
+        SELECT file_path, synced_at, positions_updated, watch_updated,
+               alerts_created, dry_run, extracted_json
+        FROM journal_sync_log
+        ORDER BY synced_at DESC
+    """)
+
+    if not log:
+        st.info("No journals synced yet. Use **🔄 Sync Latest Journal** in the sidebar.")
+    else:
+        for r in log:
+            name     = Path(r["file_path"]).name
+            ts       = r["synced_at"].strftime("%Y-%m-%d %H:%M")
+            summary  = (f"{r['positions_updated']} positions  •  "
+                        f"{r['watch_updated']} watch levels  •  "
+                        f"{r['alerts_created']} alerts")
+            dry_tag  = "  _(dry run)_" if r["dry_run"] else ""
+            label    = f"**{name}** — {ts}  •  {summary}{dry_tag}"
+
+            with st.expander(label):
+                ex = r.get("extracted_json") or {}
+                if not ex:
+                    st.caption("No extraction detail stored.")
+                else:
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        st.markdown("**Positions**")
+                        for p in ex.get("positions") or []:
+                            stop_s = f"  stop {p['stop']}" if p.get("stop") else ""
+                            st.markdown(f"- `{p['ticker']}`{stop_s}  _{p.get('note','')}_")
+                    with c2:
+                        st.markdown("**Watch Levels**")
+                        for w in ex.get("watch_levels") or []:
+                            parts = []
+                            if w.get("support"):    parts.append(f"sup {w['support']}")
+                            if w.get("resistance"): parts.append(f"res {w['resistance']}")
+                            st.markdown(f"- `{w['ticker']}`  {', '.join(parts)}")
+                    with c3:
+                        st.markdown("**Alerts Created**")
+                        for a in ex.get("price_alerts") or []:
+                            st.markdown(f"- `{a['ticker']}` {a['condition']} {a['threshold']}  _{a.get('label','')}_")

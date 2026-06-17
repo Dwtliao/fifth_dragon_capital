@@ -6,18 +6,18 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-import yaml
-
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dotenv import load_dotenv
-from morning_brief.fetchers import fetch_positions_from_db, sync_positions_from_db
+from morning_brief.fetchers import (
+    fetch_positions_from_db, sync_positions_from_db,
+    load_key_levels_from_db, save_key_levels_to_db,
+)
 
 st.set_page_config(page_title="Morning Brief — Fifth Dragon Capital", layout="wide")
 st.title("Morning Brief")
 
 PROJECT_ROOT  = Path(__file__).parent.parent.parent
-KEY_LEVELS_PATH = PROJECT_ROOT / "morning_brief" / "key_levels.yml"
 DEFAULT_DIARY = Path.home() / "Library/CloudStorage/Dropbox/Etrade/trading_diary"
 
 load_dotenv(PROJECT_ROOT / ".env")
@@ -31,21 +31,6 @@ def _run_brief() -> str:
         capture_output=True, text=True, cwd=str(PROJECT_ROOT),
     )
     return result.stdout + result.stderr
-
-
-def _load_key_levels() -> dict:
-    if not KEY_LEVELS_PATH.exists():
-        return {"positions": {}, "watch": {}}
-    with open(KEY_LEVELS_PATH) as f:
-        data = yaml.safe_load(f) or {}
-    data.setdefault("positions", {})
-    data.setdefault("watch", {})
-    return data
-
-
-def _save_key_levels(data: dict):
-    with open(KEY_LEVELS_PATH, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
 # ── sidebar ────────────────────────────────────────────────────────────────────
@@ -62,9 +47,9 @@ st.sidebar.markdown("**Positions**")
 if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
                      help="Adds new holdings from E*TRADE DB; removes closed positions that have no stop/note set"):
     try:
-        kl = _load_key_levels()
+        kl = load_key_levels_from_db()
         updated, added, removed = sync_positions_from_db(kl)
-        _save_key_levels(updated)
+        save_key_levels_to_db(updated)
         msgs = []
         if added:
             msgs.append(f"Added: {', '.join(added)}")
@@ -112,7 +97,7 @@ with tab_levels:
         "Click **💾 Save** on any row to persist, or use **💾 Save All** at the bottom."
     )
 
-    kl = _load_key_levels()
+    kl = load_key_levels_from_db()
 
     # ── Positions ──────────────────────────────────────────────────────────────
 
@@ -175,7 +160,7 @@ with tab_levels:
                         entry["note"] = new_note.strip()
                     new_positions[new_ticker] = entry
                     kl["positions"] = new_positions
-                    _save_key_levels(kl)
+                    save_key_levels_to_db(kl)
                     st.success(f"Added {new_ticker}.")
                     st.rerun()
 
@@ -227,13 +212,13 @@ with tab_levels:
                     if wn.strip(): entry["note"]    = wn.strip()
                     new_watch[wt] = entry
                     kl["watch"] = new_watch
-                    _save_key_levels(kl)
+                    save_key_levels_to_db(kl)
                     st.success(f"Added {wt}.")
                     st.rerun()
 
     st.divider()
 
     if st.button("💾 Save All", type="primary"):
-        _save_key_levels({"positions": new_positions, "watch": new_watch})
+        save_key_levels_to_db({"positions": new_positions, "watch": new_watch})
         st.success("Key levels saved. Re-run the brief to reflect changes.")
         st.rerun()

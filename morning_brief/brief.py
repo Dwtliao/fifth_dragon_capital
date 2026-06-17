@@ -31,8 +31,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
 
-import yaml  # PyYAML — add to requirements if not present
-
 from morning_brief import fetchers, formatter
 
 # ── paths ─────────────────────────────────────────────────────────────────────
@@ -44,19 +42,11 @@ def _diary_path() -> Path:
     return Path(env_val) if env_val else DEFAULT_DIARY
 
 
-def _load_key_levels() -> dict:
-    yml_path = Path(__file__).parent / "key_levels.yml"
-    if not yml_path.exists():
-        return {}
-    with open(yml_path) as f:
-        return yaml.safe_load(f) or {}
-
-
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def generate_brief() -> str:
     """Fetch all data, render, return the full markdown string."""
-    key_levels = _load_key_levels()
+    key_levels = fetchers.load_key_levels_from_db()
     now        = datetime.datetime.now()
 
     sections = []

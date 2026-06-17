@@ -358,7 +358,78 @@ def sync_positions_from_db(key_levels: dict) -> tuple[dict, list[str], list[str]
     return updated, added, removed
 
 
-def fetch_fed_events() -> list[dict]:
+def load_key_levels_from_db() -> dict:
+    """
+    Load key_levels dict from DB. Returns same structure as the old YAML:
+      {"positions": {ticker: {stop, note}}, "watch": {ticker: {support, resistance, ...}}}
+
+    On first run (empty table), seeds from key_levels.yml if it exists.
+    Falls back to empty dict if DB is unavailable.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from etrade_sync.db import get_connection
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT section, ticker, stop, support, resistance, alert_above, note FROM key_levels ORDER BY section, ticker")
+            rows = cur.fetchall()
+
+        # If table empty, seed from YAML if available
+        if not rows:
+            yml_path = Path(__file__).parent / "key_levels.yml"
+            if yml_path.exists():
+                import yaml
+                with open(yml_path) as f:
+                    data = yaml.safe_load(f) or {}
+                save_key_levels_to_db(data)
+                conn.close()
+                return data
+            conn.close()
+            return {"positions": {}, "watch": {}}
+
+        conn.close()
+        result: dict = {"positions": {}, "watch": {}}
+        for section, ticker, stop, support, resistance, alert_above, note in rows:
+            entry = {}
+            if stop        is not None: entry["stop"]        = float(stop)
+            if support     is not None: entry["support"]     = float(support)
+            if resistance  is not None: entry["resistance"]  = float(resistance)
+            if alert_above is not None: entry["alert_above"] = float(alert_above)
+            if note:                    entry["note"]         = note
+            result[section][ticker] = entry
+        return result
+    except Exception:
+        return {"positions": {}, "watch": {}}
+
+
+def save_key_levels_to_db(key_levels: dict) -> None:
+    """Upsert key_levels dict to DB. Deletes rows not in the new dict."""
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from etrade_sync.db import get_connection
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # Delete all existing rows then re-insert (clean state)
+            cur.execute("DELETE FROM key_levels")
+            for section in ("positions", "watch"):
+                for ticker, vals in (key_levels.get(section) or {}).items():
+                    cur.execute("""
+                        INSERT INTO key_levels (section, ticker, stop, support, resistance, alert_above, note, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    """, (
+                        section, ticker,
+                        vals.get("stop"),
+                        vals.get("support"),
+                        vals.get("resistance"),
+                        vals.get("alert_above"),
+                        vals.get("note"),
+                    ))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def sync_positions_from_db(key_levels: dict) -> tuple[dict, list[str], list[str]]:
     """
     Returns known/hardcoded near-term Fed events.
     In a future version this could scrape federalreserve.gov/meetings.htm.

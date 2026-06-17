@@ -1,3 +1,14 @@
+# key_levels.yml — user-defined stops, resistance, and watch levels
+#
+# positions: tickers from your E*TRADE DB (auto-synced). Add stop/note manually.
+#   Use standard equity tickers: URNM, UEC, VIXY, etc.
+#
+# watch: use yfinance ticker format directly — no hidden translation:
+#   Futures  : NQ=F, GC=F, SI=F, CL=F, HG=F
+#   Indices  : ^VIX, ^GSPC, ^IXIC
+#   FX / DXY : DX-Y.NYB, EURUSD=X
+#   Equities : FNV, AAPL, SILJ, etc.
+
 positions:
   URNM:
     stop: 54.95
@@ -11,22 +22,23 @@ positions:
   VIXY:
     stop: 21.51
     note: vol hedge — exit after FOMC / event catalyst
+
 watch:
-  NQ:
+  NQ=F:
     support: 29500.0
     resistance: 30500.0
     note: scene of the crime — pre-selloff range
-  GC:
+  GC=F:
     support: 4200.0
     resistance: 4489.0
     note: gold — harmonic D at 4042, watching 4489 next
-  VIX:
+  ^VIX:
     alert_above: 18.0
     note: complacency zone below 18
   FNV:
     resistance: 232.1
     note: 50 SMA on TSX — needs volume to break
-  DXY:
+  DX-Y.NYB:
     support: 99.0
     resistance: 102.5
     note: dollar index — inverse gold/commodities signal

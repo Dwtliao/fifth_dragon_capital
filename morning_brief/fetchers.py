@@ -241,16 +241,9 @@ def fetch_watch_levels(key_levels: dict) -> list[dict]:
     if not watch_config:
         return []
 
-    # Map display names → yfinance tickers
-    WATCH_TICKERS = {
-        "NQ":  "NQ=F",
-        "GC":  "GC=F",
-        "VIX": "^VIX",
-        "FNV": "FNV",
-        "DXY": "DX-Y.NYB",
-    }
-
-    symbols = {k: WATCH_TICKERS.get(k, k) for k in watch_config}
+    # Use ticker keys directly as yfinance symbols — no hidden mapping.
+    # Users enter the yfinance format in key_levels.yml (e.g. NQ=F, GC=F, ^VIX, DX-Y.NYB).
+    symbols = {k: k for k in watch_config}
     snaps   = _fetch_snapshot(symbols)
 
     enriched = []

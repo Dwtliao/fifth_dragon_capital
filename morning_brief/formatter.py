@@ -13,6 +13,13 @@ from typing import Optional
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+def _display_ticker(ticker: str) -> str:
+    """Strip yfinance suffixes for clean display: NQ=F → NQ, ^VIX → VIX, DX-Y.NYB → DXY."""
+    t = ticker.lstrip("^")
+    t = t.replace("=F", "").replace("-Y.NYB", "Y").replace("=X", "")
+    return t
+
+
 def _pct_arrow(pct: Optional[float]) -> str:
     if pct is None:
         return "  —  "
@@ -209,10 +216,9 @@ def render_key_levels(data: list[dict]) -> str:
             lines.append(f"| ⚪ | **{row['label']}** | — | — | — | — | — | _{row.get('error', 'fetch error')}_ |")
             continue
 
-        label   = row["label"]
+        label   = _display_ticker(row["label"])
         last    = row.get("last")
         pct     = row.get("pct")
-        config  = row.get("_config", {})
 
         emoji  = _pct_emoji(pct)
         pct_s  = _pct_arrow(pct) if pct is not None else "—"

@@ -252,7 +252,7 @@ run_every = INTERVALS[choice]
 st.sidebar.divider()
 st.sidebar.markdown("**Price Alerts**")
 if st.sidebar.button("▶ Run Alert Poll", use_container_width=True, type="primary"):
-    venv_python = str(Path(__file__).parent.parent.parent.parent / "py312" / "venv" / "bin" / "python")
+    venv_python  = sys.executable
     project_root = str(Path(__file__).parent.parent.parent)
     with st.sidebar:
         with st.spinner("Polling…"):

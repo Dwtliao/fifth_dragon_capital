@@ -125,7 +125,7 @@ with tab_levels:
         for col in ["Cost Basis","Mkt Value","Unreal P/L $"]:
             db_df[col] = db_df[col].apply(lambda x: f"${x:,.2f}" if x is not None else "—")
         db_df["Unreal P/L %"] = db_df["Unreal P/L %"].apply(lambda x: f"{x:+.2f}%" if x is not None else "—")
-        st.caption("📊 Live from DB (read-only)")
+        st.caption("📊 Last E*TRADE sync snapshot (read-only) — brief uses real-time E*TRADE quotes when token is valid")
         st.dataframe(db_df, use_container_width=True, hide_index=True)
     elif db_rows and "error" in db_rows[0]:
         st.warning(f"DB unavailable: {db_rows[0]['error']}")

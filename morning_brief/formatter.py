@@ -201,24 +201,39 @@ def render_key_levels(data: list[dict]) -> str:
         return ""
 
     lines = ["## 🔑  KEY LEVELS\n"]
+    lines.append("| | Ticker | Price | Day % | Support | Resistance | Alert Above | Note |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---|")
+
     for row in data:
         if "error" in row:
-            lines.append(_error_row(row["label"], row["error"]))
+            lines.append(f"| ⚪ | **{row['label']}** | — | — | — | — | — | _{row.get('error', 'fetch error')}_ |")
             continue
 
-        label       = row["label"]
-        last        = row.get("last", 0.0)
-        pct         = row.get("pct")
-        level_notes = row.get("level_notes", [])
-        key_note    = row.get("key_note", "")
-        emoji       = _pct_emoji(pct)
-        pct_s       = _pct_arrow(pct)
+        label   = row["label"]
+        last    = row.get("last")
+        pct     = row.get("pct")
+        config  = row.get("_config", {})
 
-        lines.append(f"  {emoji} **{label}**  {last:,.2f}  ({pct_s})")
+        emoji  = _pct_emoji(pct)
+        pct_s  = _pct_arrow(pct) if pct is not None else "—"
+        last_s = f"{last:,.2f}" if last is not None else "—"
+
+        # Extract levels from level_notes back or from config directly
+        level_notes = row.get("level_notes", [])
+        sup_s = res_s = alrt_s = "—"
         for ln in level_notes:
-            lines.append(f"    → {ln}")
-        if key_note:
-            lines.append(f"    _{key_note}_")
+            if "Resistance" in ln:
+                res_s = ln.split("→")[0].replace("Resistance", "").strip()
+            elif "Support" in ln and "⚠" not in ln:
+                sup_s = ln.split("→")[0].replace("Support", "").strip()
+            elif "alert level" in ln:
+                alrt_s = ln.split("alert level")[-1].strip()
+
+        note_s = row.get("key_note", "")
+
+        lines.append(
+            f"| {emoji} | **{label}** | {last_s} | {pct_s} | {sup_s} | {res_s} | {alrt_s} | {note_s} |"
+        )
 
     return "\n".join(lines) + "\n\n---\n"
 

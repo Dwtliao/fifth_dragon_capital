@@ -8,6 +8,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from dashboard.db import query, scalar
+from etrade_sync.market.quotes import get_quotes_safe
 
 st.set_page_config(page_title="Portfolio Overview — Fifth Dragon Capital", layout="wide")
 st.title("Portfolio Overview")
@@ -55,6 +56,39 @@ positions_raw = pd.DataFrame(query(f"""
     ORDER BY market_value DESC
 """, _params))
 
+
+# ── live quotes (manual fetch via sidebar button) ─────────────────────────────
+
+st.sidebar.divider()
+st.sidebar.markdown("**Live Quotes**")
+fetch_clicked = st.sidebar.button("Fetch Live Quotes", type="primary", use_container_width=True)
+if st.sidebar.button("Clear Live Quotes", use_container_width=True):
+    st.session_state.pop("live_quotes", None)
+    st.session_state.pop("quote_error", None)
+    st.rerun()
+
+if fetch_clicked and not positions_raw.empty:
+    symbols_list = sorted(positions_raw["symbol"].unique().tolist())
+    with st.spinner("Fetching live quotes from E*TRADE…"):
+        quotes, error = get_quotes_safe(symbols_list)
+    st.session_state["live_quotes"]      = quotes
+    st.session_state["quote_error"]      = error
+    st.session_state["quote_fetched_at"] = pd.Timestamp.now()
+
+_live_quotes: dict = st.session_state.get("live_quotes", {})
+_quote_error: str | None = st.session_state.get("quote_error", None)
+_is_live = bool(_live_quotes)
+
+if _is_live and not positions_raw.empty:
+    def _apply_live(row):
+        q = _live_quotes.get(row["symbol"])
+        if not q:
+            return row
+        live_mv = row["quantity"] * q["last_price"]
+        row["market_value"]   = live_mv
+        row["unrealized_pnl"] = live_mv - row["cost_basis"]
+        return row
+    positions_raw = positions_raw.apply(_apply_live, axis=1)
 
 # ── position filter options (built from fetched data) ─────────────────────────
 
@@ -145,8 +179,18 @@ as_of_ts = scalar(f"""
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
 
+if _is_live:
+    n = len(_live_quotes)
+    fetched_at = st.session_state.get("quote_fetched_at")
+    ts = fetched_at.strftime("%Y-%m-%d %H:%M:%S") if fetched_at else "unknown"
+    st.success(f"Live quotes active — {n} symbol{'s' if n != 1 else ''} as of {ts}. Click 'Fetch Live Quotes' to refresh.", icon="🟢")
+elif _quote_error:
+    st.warning(f"Snapshot data — {_quote_error}", icon="🟡")
+else:
+    st.info("Showing snapshot data. Click **Fetch Live Quotes** in the sidebar to load real-time prices.", icon="ℹ️")
+
 if as_of_ts:
-    st.caption(f"As of {as_of_ts.strftime('%Y-%m-%d %H:%M ET')}")
+    st.caption(f"Snapshot as of {as_of_ts.strftime('%Y-%m-%d %H:%M ET')}")
 
 if filters_active:
     st.info(
@@ -313,7 +357,7 @@ if not positions_display.empty:
             "Quantity":       st.column_config.NumberColumn(format="%.4g"),
             "Cost Basis":     st.column_config.NumberColumn(format="$%.0f"),
             "Market Value":   st.column_config.NumberColumn(format="$%.0f"),
-            "Unrealized P/L": st.column_config.NumberColumn(format="$%.0f"),
+            "Unrealized P/L": st.column_config.NumberColumn(format="$%.2f"),
             "P/L %":          st.column_config.NumberColumn(format="%.1f%%"),
             "% Portfolio":    st.column_config.NumberColumn(format="%.1f%%"),
         },

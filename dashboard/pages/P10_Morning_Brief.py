@@ -39,28 +39,43 @@ if brief_path.exists():
     mtime = brief_path.stat().st_mtime
     st.sidebar.caption(f"Brief: {datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')}")
 
-if st.sidebar.button("▶ Run Morning Brief", type="primary", use_container_width=True):
+# ── primary: one-click morning pipeline ───────────────────────────────────────
+if st.sidebar.button("▶ Run Morning Pipeline", type="primary", use_container_width=True,
+                     help="1) Sync latest journal (if updated)  2) Generate morning brief"):
+    diary   = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
+    journals = sorted(diary.glob("trading_journal_*.md"))
+    output_lines = []
+
+    # Step 1: sync latest journal if it exists
+    if journals:
+        latest = journals[-1]
+        with st.spinner(f"Step 1/2 — syncing {latest.name}…"):
+            r1 = subprocess.run(
+                [sys.executable, "-m", "morning_brief.journal_sync", "--file", str(latest)],
+                capture_output=True, text=True, cwd=str(PROJECT_ROOT),
+            )
+        output_lines.append(r1.stdout.strip())
+
+    # Step 2: generate brief
+    with st.spinner("Step 2/2 — generating brief…"):
+        r2 = subprocess.run(
+            [sys.executable, "-m", "morning_brief.brief"],
+            capture_output=True, text=True, cwd=str(PROJECT_ROOT),
+        )
+    output_lines.append(r2.stderr.strip())
+
+    st.sidebar.code("\n".join(filter(None, output_lines)), language=None)
+    st.rerun()
+
+st.sidebar.divider()
+
+# ── manual controls ────────────────────────────────────────────────────────────
+if st.sidebar.button("▶ Brief only", use_container_width=True,
+                     help="Regenerate brief without re-syncing journal"):
     with st.spinner("Fetching market data…"):
         output = _run_brief()
     st.sidebar.code(output.strip(), language=None)
     st.rerun()
-
-if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
-                     help="Add new E*TRADE holdings, remove closed ones"):
-    try:
-        kl = load_key_levels_from_db()
-        updated, added, removed = sync_positions_from_db(kl)
-        save_key_levels_to_db(updated)
-        msgs = []
-        if added:   msgs.append(f"Added: {', '.join(added)}")
-        if removed: msgs.append(f"Removed: {', '.join(removed)}")
-        if not msgs: msgs.append("Already in sync.")
-        st.sidebar.success("\n".join(msgs))
-        st.rerun()
-    except RuntimeError as e:
-        st.sidebar.error(str(e))
-    except Exception as e:
-        st.sidebar.error(f"Sync failed: {e}")
 
 if st.sidebar.button("🔄 Sync Latest Journal", use_container_width=True,
                      help="Extract stops/levels/alerts from latest journal via Claude API"):
@@ -80,6 +95,23 @@ if st.sidebar.button("🔄 Sync Latest Journal", use_container_width=True,
         output = result.stdout + (result.stderr if result.returncode != 0 else "")
         st.sidebar.code(output.strip(), language=None)
         st.rerun()
+
+if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
+                     help="Add new E*TRADE holdings, remove closed ones"):
+    try:
+        kl = load_key_levels_from_db()
+        updated, added, removed = sync_positions_from_db(kl)
+        save_key_levels_to_db(updated)
+        msgs = []
+        if added:   msgs.append(f"Added: {', '.join(added)}")
+        if removed: msgs.append(f"Removed: {', '.join(removed)}")
+        if not msgs: msgs.append("Already in sync.")
+        st.sidebar.success("\n".join(msgs))
+        st.rerun()
+    except RuntimeError as e:
+        st.sidebar.error(str(e))
+    except Exception as e:
+        st.sidebar.error(f"Sync failed: {e}")
 
 if st.sidebar.button("🔄 Sync All Journals", use_container_width=True,
                      help="Process all unsynced journals"):

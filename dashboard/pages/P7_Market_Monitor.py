@@ -173,8 +173,8 @@ def fetch_ticker(ticker: str, period: str = "2d", interval: str = "5m") -> tuple
     df["Datetime"] = pd.to_datetime(df["Datetime"]).dt.tz_localize(None)
     df = df[["Datetime", "Open", "High", "Low", "Close", "Volume"]].copy()
     prev_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else None
-    # For intraday: filter to today only
-    if interval in ("5m", "15m"):
+    # Intraday only: filter to today, use yesterday's close as prev_close
+    if period == "2d":
         today = df["Datetime"].dt.date.max()
         prev_closes = df[df["Datetime"].dt.date < today]["Close"]
         prev_close  = float(prev_closes.iloc[-1]) if not prev_closes.empty else None

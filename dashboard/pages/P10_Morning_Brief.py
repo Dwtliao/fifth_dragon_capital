@@ -253,23 +253,22 @@ with tab_levels:
     if st.button("💾 Save All", type="primary"):
         save_key_levels_to_db({"positions": new_positions, "watch": new_watch})
 
-        # Auto-sync alert_above values → price_alerts table
-        from dashboard.db import query as db_query2, execute as db_execute
+        # Auto-sync alert_above → price_alerts; delete old then insert so threshold stays current
+        from dashboard.db import execute as db_execute
         synced = []
         for ticker, vals in new_watch.items():
             alert_above = vals.get("alert_above")
             if not alert_above or alert_above <= 0:
                 continue
-            existing = db_query2(
-                "SELECT id FROM price_alerts WHERE ticker=%s AND condition='above' AND threshold=%s",
-                (ticker, alert_above)
+            db_execute(
+                "DELETE FROM price_alerts WHERE ticker = %s AND condition = 'above' AND label LIKE 'Watch: %'",
+                (ticker,)
             )
-            if not existing:
-                db_execute(
-                    "INSERT INTO price_alerts (ticker, label, condition, threshold) VALUES (%s, %s, 'above', %s)",
-                    (ticker, f"Watch: {ticker} above {alert_above}", alert_above)
-                )
-                synced.append(f"{ticker} > {alert_above}")
+            db_execute(
+                "INSERT INTO price_alerts (ticker, label, condition, threshold) VALUES (%s, %s, 'above', %s)",
+                (ticker, f"Watch: {ticker} above {alert_above}", alert_above)
+            )
+            synced.append(f"{ticker} > {alert_above}")
 
         msg = "Key levels saved."
         if synced:

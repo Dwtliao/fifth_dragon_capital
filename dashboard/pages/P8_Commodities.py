@@ -157,6 +157,7 @@ def _chart(label: str, ticker: str, df: pd.DataFrame, prev_close: float | None, 
             subtitleColor=line_color,
         ),
         height=240,
+        width="container",
     )
 
     volume_chart = (
@@ -174,7 +175,7 @@ def _chart(label: str, ticker: str, df: pd.DataFrame, prev_close: float | None, 
                 alt.Tooltip("Volume:Q",   title="Volume", format=","),
             ],
         )
-        .properties(height=60)
+        .properties(height=60, width="container")
     )
 
     chart = alt.vconcat(candle_chart, volume_chart, spacing=4).resolve_scale(x="shared")
@@ -221,7 +222,7 @@ def commodity_panel() -> None:
         st.subheader(group_name)
         for row_start in range(0, len(tickers), COLS):
             row  = tickers[row_start : row_start + COLS]
-            cols = st.columns(COLS)
+            cols = st.columns(COLS, gap="medium")
             for col, (label, ticker) in zip(cols, row):
                 with col:
                     df, prev_close = fetch_ticker(ticker, yf_period, yf_interval)

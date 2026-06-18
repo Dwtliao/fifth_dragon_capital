@@ -149,7 +149,7 @@ GROUPS = {
     ],
 }
 
-COLS = 3  # charts per row
+COLS = 2  # charts per row
 
 
 PERIODS = {

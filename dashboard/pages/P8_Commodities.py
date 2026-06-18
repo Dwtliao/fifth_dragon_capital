@@ -222,7 +222,7 @@ def commodity_panel() -> None:
         st.subheader(group_name)
         for row_start in range(0, len(tickers), COLS):
             row  = tickers[row_start : row_start + COLS]
-            cols = st.columns(COLS, gap="medium")
+            cols = st.columns(COLS, gap="large")
             for col, (label, ticker) in zip(cols, row):
                 with col:
                     df, prev_close = fetch_ticker(ticker, yf_period, yf_interval)

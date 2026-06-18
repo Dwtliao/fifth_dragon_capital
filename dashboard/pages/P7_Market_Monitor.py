@@ -203,7 +203,8 @@ def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close:
 
     base = alt.Chart(today_df).encode(
         x=alt.X("Datetime:T", title=None,
-                axis=alt.Axis(format=fmt, labelAngle=-45, tickCount=6)),
+                axis=alt.Axis(format=fmt, labelAngle=-45, tickCount=6),
+                scale=alt.Scale(padding=10)),
         color=alt.Color(
             "color:N",
             scale=alt.Scale(domain=["up", "down"], range=["#4CAF50", "#ef5350"]),
@@ -275,6 +276,13 @@ choice    = st.sidebar.selectbox(
     help="Auto-refresh only applies to Intraday",
 )
 run_every = INTERVALS[choice] if period_choice == "Intraday" else None
+
+# Clear cache automatically when period changes
+if "last_period" not in st.session_state:
+    st.session_state.last_period = period_choice
+if st.session_state.last_period != period_choice:
+    st.cache_data.clear()
+    st.session_state.last_period = period_choice
 
 st.sidebar.divider()
 st.sidebar.markdown("**Price Alerts**")

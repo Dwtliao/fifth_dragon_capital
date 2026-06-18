@@ -197,6 +197,12 @@ refresh_choice = st.sidebar.selectbox(
 )
 run_every = INTERVALS[refresh_choice] if period_choice == "Intraday" else None
 
+if "last_period_p8" not in st.session_state:
+    st.session_state.last_period_p8 = period_choice
+if st.session_state.last_period_p8 != period_choice:
+    st.cache_data.clear()
+    st.session_state.last_period_p8 = period_choice
+
 
 # ── commodity panel (auto-refreshes for intraday) ─────────────────────────────
 

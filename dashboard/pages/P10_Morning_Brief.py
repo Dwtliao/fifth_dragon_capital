@@ -285,7 +285,7 @@ with tab_history:
     st.caption("One row per journal file processed. Re-syncing a file overwrites its row.")
 
     log = db_query("""
-        SELECT file_path, synced_at, positions_updated, watch_updated,
+        SELECT file_path, file_mtime, synced_at, positions_updated, watch_updated,
                alerts_created, dry_run, extracted_json
         FROM journal_sync_log
         ORDER BY synced_at DESC
@@ -295,13 +295,14 @@ with tab_history:
         st.info("No journals synced yet. Use **🔄 Sync Latest Journal** in the sidebar.")
     else:
         for r in log:
-            name     = Path(r["file_path"]).name
-            ts       = r["synced_at"].strftime("%Y-%m-%d %H:%M")
-            summary  = (f"{r['positions_updated']} positions  •  "
-                        f"{r['watch_updated']} watch levels  •  "
-                        f"{r['alerts_created']} alerts")
-            dry_tag  = "  _(dry run)_" if r["dry_run"] else ""
-            label    = f"**{name}** — {ts}  •  {summary}{dry_tag}"
+            name         = Path(r["file_path"]).name
+            synced_at    = r["synced_at"].strftime("%Y-%m-%d %H:%M")
+            journal_mtime = datetime.datetime.fromtimestamp(r["file_mtime"]).strftime("%Y-%m-%d %H:%M")
+            summary      = (f"{r['positions_updated']} positions  •  "
+                            f"{r['watch_updated']} watch levels  •  "
+                            f"{r['alerts_created']} alerts")
+            dry_tag      = "  _(dry run)_" if r["dry_run"] else ""
+            label        = f"**{name}** — journal: {journal_mtime}  •  synced: {synced_at}  •  {summary}{dry_tag}"
 
             with st.expander(label):
                 ex = r.get("extracted_json") or {}

@@ -35,28 +35,26 @@ def _run_brief() -> str:
 
 # ── sidebar ────────────────────────────────────────────────────────────────────
 
-st.sidebar.markdown("**Generate Brief**")
+if brief_path.exists():
+    mtime = brief_path.stat().st_mtime
+    st.sidebar.caption(f"Brief: {datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')}")
+
 if st.sidebar.button("▶ Run Morning Brief", type="primary", use_container_width=True):
     with st.spinner("Fetching market data…"):
         output = _run_brief()
     st.sidebar.code(output.strip(), language=None)
     st.rerun()
 
-st.sidebar.divider()
-st.sidebar.markdown("**Positions**")
 if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
-                     help="Adds new holdings from E*TRADE DB; removes closed positions that have no stop/note set"):
+                     help="Add new E*TRADE holdings, remove closed ones"):
     try:
         kl = load_key_levels_from_db()
         updated, added, removed = sync_positions_from_db(kl)
         save_key_levels_to_db(updated)
         msgs = []
-        if added:
-            msgs.append(f"Added: {', '.join(added)}")
-        if removed:
-            msgs.append(f"Removed: {', '.join(removed)}")
-        if not added and not removed:
-            msgs.append("Already in sync — no changes.")
+        if added:   msgs.append(f"Added: {', '.join(added)}")
+        if removed: msgs.append(f"Removed: {', '.join(removed)}")
+        if not msgs: msgs.append("Already in sync.")
         st.sidebar.success("\n".join(msgs))
         st.rerun()
     except RuntimeError as e:
@@ -64,10 +62,8 @@ if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
     except Exception as e:
         st.sidebar.error(f"Sync failed: {e}")
 
-st.sidebar.divider()
-st.sidebar.markdown("**Journal Sync**")
 if st.sidebar.button("🔄 Sync Latest Journal", use_container_width=True,
-                     help="Extract stops, watch levels, and alerts from the most recent journal using Claude API"):
+                     help="Extract stops/levels/alerts from latest journal via Claude API"):
     diary = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
     journals = sorted(diary.glob("trading_journal_*.md"))
     if not journals:
@@ -86,7 +82,7 @@ if st.sidebar.button("🔄 Sync Latest Journal", use_container_width=True,
         st.rerun()
 
 if st.sidebar.button("🔄 Sync All Journals", use_container_width=True,
-                     help="Process all unsynced journals in trading_diary/"):
+                     help="Process all unsynced journals"):
     with st.sidebar:
         with st.spinner("Syncing all journals…"):
             result = subprocess.run(
@@ -95,13 +91,6 @@ if st.sidebar.button("🔄 Sync All Journals", use_container_width=True,
             )
     st.sidebar.code((result.stdout + result.stderr).strip(), language=None)
     st.rerun()
-
-st.sidebar.divider()
-if brief_path.exists():
-    mtime = brief_path.stat().st_mtime
-    st.sidebar.caption(
-        f"Last generated:\n{datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')}"
-    )
 
 # ── tabs ───────────────────────────────────────────────────────────────────────
 

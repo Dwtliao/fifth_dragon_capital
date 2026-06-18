@@ -152,22 +152,37 @@ GROUPS = {
 COLS = 3  # charts per row
 
 
+PERIODS = {
+    "Intraday": ("2d",  "5m",  "%H:%M"),
+    "5 Days":   ("5d",  "15m", "%m/%d %H:%M"),
+    "1 Month":  ("1mo", "1d",  "%b %d"),
+    "3 Months": ("3mo", "1d",  "%b %d"),
+    "6 Months": ("6mo", "1d",  "%b '%y"),
+}
+
+
 @st.cache_data(ttl=300)
-def fetch_ticker(ticker: str) -> tuple[pd.DataFrame, float | None]:
-    """Returns (today_5m_bars, prev_close). One yfinance call per ticker."""
-    df = yf.Ticker(ticker).history(period="2d", interval="5m")
+def fetch_ticker(ticker: str, period: str = "2d", interval: str = "5m") -> tuple[pd.DataFrame, float | None]:
+    """Returns (bars_df, prev_close). One yfinance call per ticker+period."""
+    df = yf.Ticker(ticker).history(period=period, interval=interval)
     if df.empty:
         return pd.DataFrame(), None
     df = df.reset_index()
+    time_col = "Datetime" if "Datetime" in df.columns else "Date"
+    df = df.rename(columns={time_col: "Datetime"})
     df["Datetime"] = pd.to_datetime(df["Datetime"]).dt.tz_localize(None)
-    today = df["Datetime"].dt.date.max()
-    prev_closes = df[df["Datetime"].dt.date < today]["Close"]
-    prev_close = float(prev_closes.iloc[-1]) if not prev_closes.empty else None
-    today_df = df[df["Datetime"].dt.date == today][["Datetime", "Open", "High", "Low", "Close", "Volume"]].copy()
-    return today_df, prev_close
+    df = df[["Datetime", "Open", "High", "Low", "Close", "Volume"]].copy()
+    prev_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else None
+    # For intraday: filter to today only
+    if interval in ("5m", "15m"):
+        today = df["Datetime"].dt.date.max()
+        prev_closes = df[df["Datetime"].dt.date < today]["Close"]
+        prev_close  = float(prev_closes.iloc[-1]) if not prev_closes.empty else None
+        df = df[df["Datetime"].dt.date == today].copy()
+    return df, prev_close
 
 
-def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close: float | None) -> None:
+def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close: float | None, fmt: str = "%H:%M") -> None:
     if today_df.empty:
         st.caption(f"**{label}** ({ticker})  —  no data")
         return
@@ -188,14 +203,14 @@ def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close:
 
     base = alt.Chart(today_df).encode(
         x=alt.X("Datetime:T", title=None,
-                axis=alt.Axis(format="%H:%M", labelAngle=-45, tickCount=6)),
+                axis=alt.Axis(format=fmt, labelAngle=-45, tickCount=6)),
         color=alt.Color(
             "color:N",
             scale=alt.Scale(domain=["up", "down"], range=["#4CAF50", "#ef5350"]),
             legend=None,
         ),
         tooltip=[
-            alt.Tooltip("Datetime:T", title="Time",  format="%H:%M"),
+            alt.Tooltip("Datetime:T", title="Time",  format=fmt),
             alt.Tooltip("Open:Q",     title="Open",  format=",.2f"),
             alt.Tooltip("High:Q",     title="High",  format=",.2f"),
             alt.Tooltip("Low:Q",      title="Low",   format=",.2f"),
@@ -227,7 +242,7 @@ def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close:
         alt.Chart(today_df)
         .mark_bar(size=5, stroke=None, opacity=0.7)
         .encode(
-            x=alt.X("Datetime:T", title=None, axis=alt.Axis(format="%H:%M", labelAngle=-45, tickCount=6)),
+            x=alt.X("Datetime:T", title=None, axis=alt.Axis(format=fmt, labelAngle=-45, tickCount=6)),
             y=alt.Y("Volume:Q",   title=None, axis=alt.Axis(format="~s", tickCount=3)),
             color=alt.Color(
                 "color:N",
@@ -235,7 +250,7 @@ def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close:
                 legend=None,
             ),
             tooltip=[
-                alt.Tooltip("Datetime:T", title="Time",   format="%H:%M"),
+                alt.Tooltip("Datetime:T", title="Time",   format=fmt),
                 alt.Tooltip("Volume:Q",   title="Volume", format=","),
             ],
         )
@@ -248,10 +263,18 @@ def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close:
 
 # ── sidebar ────────────────────────────────────────────────────────────────────
 
+st.sidebar.markdown("**Chart Period**")
+period_choice = st.sidebar.selectbox("Period", list(PERIODS.keys()), index=0)
+yf_period, yf_interval, x_fmt = PERIODS[period_choice]
+
 st.sidebar.markdown("**Auto-Refresh**")
 INTERVALS = {"Off": None, "5 min": "5m", "10 min": "10m", "15 min": "15m"}
-choice   = st.sidebar.selectbox("Interval", list(INTERVALS.keys()), index=2)
-run_every = INTERVALS[choice]
+choice    = st.sidebar.selectbox(
+    "Interval", list(INTERVALS.keys()), index=2,
+    disabled=(period_choice != "Intraday"),
+    help="Auto-refresh only applies to Intraday",
+)
+run_every = INTERVALS[choice] if period_choice == "Intraday" else None
 
 st.sidebar.divider()
 st.sidebar.markdown("**Price Alerts**")
@@ -272,9 +295,10 @@ if st.sidebar.button("▶ Run Alert Poll", use_container_width=True, type="prima
 
 @st.fragment(run_every=run_every)
 def market_panel() -> None:
+    period_label = "Intraday 5-min bars" if yf_interval in ("5m", "15m") else f"{period_choice} daily bars"
     st.caption(
         f"Last updated: {datetime.now().strftime('%H:%M:%S')}  •  "
-        "Data delayed ~15 min  •  Intraday = today's 5-min bars"
+        f"Data delayed ~15 min  •  {period_label}"
     )
     if st.button("↺ Refresh now", key="manual_refresh"):
         st.cache_data.clear()
@@ -287,8 +311,8 @@ def market_panel() -> None:
             cols = st.columns(COLS)
             for col, (label, ticker) in zip(cols, row):
                 with col:
-                    today_df, prev_close = fetch_ticker(ticker)
-                    _intraday_chart(label, ticker, today_df, prev_close)
+                    df, prev_close = fetch_ticker(ticker, yf_period, yf_interval)
+                    _intraday_chart(label, ticker, df, prev_close, x_fmt)
         st.divider()
 
 

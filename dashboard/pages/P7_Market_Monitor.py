@@ -76,15 +76,19 @@ with col_manage:
         chosen_label = st.selectbox("Select alert", list(options.keys()))
         chosen = options[chosen_label]
 
+        st.caption(f"Current threshold: **{chosen['threshold']:,.2f}**")
         new_threshold = st.number_input(
-            "Adjust threshold", value=chosen["threshold"],
-            min_value=0.0, step=0.01, format="%.2f", key="manage_threshold"
+            "New threshold (leave 0 to keep current)", value=0.0,
+            min_value=0.0, step=0.01, format="%.2f", key=f"manage_threshold_{chosen['id']}"
         )
         m1, m2, m3, m4 = st.columns(4)
         if m1.button("Save", use_container_width=True, type="primary"):
-            execute("UPDATE price_alerts SET threshold = %s, triggered = FALSE WHERE id = %s",
-                    (new_threshold, chosen["id"]))
-            st.success(f"Threshold updated to {new_threshold:,.2f} and re-armed.")
+            if new_threshold > 0:
+                execute("UPDATE price_alerts SET threshold = %s, triggered = FALSE WHERE id = %s",
+                        (new_threshold, chosen["id"]))
+                st.success(f"Threshold updated to {new_threshold:,.2f} and re-armed.")
+            else:
+                st.warning("Enter a value above 0 to change the threshold.")
             st.rerun()
         if m2.button("Enable" if not chosen["enabled"] else "Disable", use_container_width=True):
             execute("UPDATE price_alerts SET enabled = %s WHERE id = %s", (not chosen["enabled"], chosen["id"]))

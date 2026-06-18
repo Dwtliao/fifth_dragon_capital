@@ -261,7 +261,7 @@ with tab_levels:
             if not alert_above or alert_above <= 0:
                 continue
             db_execute(
-                "DELETE FROM price_alerts WHERE ticker = %s AND condition = 'above' AND label LIKE 'Watch: %'",
+                "DELETE FROM price_alerts WHERE ticker = %s AND condition = 'above' AND label LIKE 'Watch: %%'",
                 (ticker,)
             )
             db_execute(

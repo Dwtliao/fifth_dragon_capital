@@ -114,6 +114,7 @@ GROUPS = {
         ("NASDAQ",         "^IXIC"),
         ("Russell 2000",   "^RUT"),
         ("NYSE Composite", "^NYA"),
+        ("DXY (US Dollar)", "DX-Y.NYB"),
     ],
     "Global Indices": [
         ("FTSE 100",   "^FTSE"),

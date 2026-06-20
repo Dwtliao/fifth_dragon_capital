@@ -341,7 +341,11 @@ def main():
             t0 = time.time()
             print(f"[{_ts()}] {name}...")
             try:
-                fn()
+                result = fn()
+                if isinstance(result, dict) and result.get("errors"):
+                    for err in result["errors"]:
+                        print(f"[{_ts()}] WARNING: {name} partial failure — {err}")
+                    errors.append(name)
             except RuntimeError as e:
                 print(f"[{_ts()}] ERROR: {e}")
                 finish_run(log_id, "failed", error_msg=str(e))

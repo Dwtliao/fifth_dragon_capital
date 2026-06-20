@@ -14,6 +14,7 @@ def _require(name: str) -> str:
 
 CONSUMER_KEY = _require("ETRADE_CONSUMER_KEY")
 CONSUMER_SECRET = _require("ETRADE_CONSUMER_SECRET")
-DEV = os.environ.get("ETRADE_DEV", "true").lower() == "true"
+DEV         = os.environ.get("ETRADE_DEV",         "true").lower()  == "true"
+LIVE_ORDERS = os.environ.get("ETRADE_LIVE_ORDERS", "false").lower() == "true"
 TOKEN_FILE = Path(os.environ.get("ETRADE_TOKEN_FILE", "~/.config/etrade/tokens.json")).expanduser()
 DATABASE_URL = _require("DATABASE_URL")

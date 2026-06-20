@@ -9,6 +9,8 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from dashboard.db import query, scalar
 from etrade_sync.market.quotes import get_quotes_safe
+from etrade_sync.config import DEV
+from etrade_sync.trading.orders import LIVE_ORDERS, preview_market_sell, place_market_sell
 
 st.set_page_config(page_title="Portfolio Overview — Fifth Dragon Capital", layout="wide")
 st.title("Portfolio Overview")
@@ -366,6 +368,149 @@ if not positions_display.empty:
     )
 else:
     st.info("No positions match the current filters.")
+
+
+# ── quick sell ────────────────────────────────────────────────────────────────
+
+st.divider()
+
+with st.expander("⚡ Quick Sell — Market Order", expanded=False):
+    # Gate banner
+    if not LIVE_ORDERS:
+        st.warning(
+            "Order placement is disabled. Add `ETRADE_LIVE_ORDERS=true` to your .env file to enable.",
+            icon="🔒",
+        )
+    elif DEV:
+        st.info("**Sandbox mode** (ETRADE_DEV=true) — orders go to E\\*TRADE sandbox, not live.", icon="🧪")
+    else:
+        st.error("**Live trading enabled** — orders will execute against your real account.", icon="🔴")
+
+    # Sellable positions: long EQ positions only, all accounts
+    sellable_raw = query("""
+        SELECT p.account_id_key,
+               COALESCE(NULLIF(a.account_name,''), a.account_type) || ' (' || a.account_id || ')' AS acct_label,
+               p.symbol,
+               SUM(p.quantity) AS quantity
+        FROM positions p
+        JOIN accounts a USING (account_id_key)
+        WHERE (p.account_id_key, p.fetched_at) IN (
+            SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
+        )
+          AND p.security_type = 'EQ'
+          AND p.quantity > 0
+        GROUP BY p.account_id_key, acct_label, p.symbol
+        HAVING SUM(p.quantity) > 0
+        ORDER BY acct_label, p.symbol
+    """)
+
+    if not sellable_raw:
+        st.info("No long equity positions available to sell.")
+    else:
+        sell_state = st.session_state.get("sell_state", {"step": "form"})
+
+        if sell_state["step"] in ("placed", "failed"):
+            if st.button("↩ New Order", key="sell_reset"):
+                st.session_state.pop("sell_state", None)
+                st.rerun()
+
+        if sell_state["step"] == "placed":
+            order_id = sell_state.get("order_id", "—")
+            st.success(f"Order submitted — E\\*TRADE order ID: **{order_id}**", icon="✅")
+            st.info("Run a full sync from P1 after the fill to update your ledger and positions.", icon="ℹ️")
+
+        elif sell_state["step"] == "failed":
+            st.error(f"Order failed: {sell_state.get('error')}", icon="❌")
+
+        elif sell_state["step"] == "previewed":
+            pr   = sell_state["preview"]
+            sym  = sell_state["symbol"]
+            qty  = sell_state["quantity"]
+            acct = sell_state["acct_label"]
+            est_total      = pr.get("estimated_total")
+            est_commission = pr.get("estimated_commission")
+
+            st.subheader(f"Preview — Sell {qty} × {sym}")
+            st.caption(f"Account: {acct}")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Quantity",    f"{qty:,}")
+            c2.metric("Est. Total",  f"${est_total:,.2f}"      if est_total      is not None else "—")
+            c3.metric("Commission",  f"${est_commission:,.2f}" if est_commission is not None else "—")
+
+            st.caption("⚠️ Market order — fill price may differ from estimate.")
+
+            for msg in pr.get("messages", []):
+                st.warning(msg, icon="ℹ️")
+
+            col_confirm, col_cancel = st.columns([1, 3])
+            with col_confirm:
+                if st.button("✅ Confirm Sell", type="primary", use_container_width=True, key="sell_confirm"):
+                    with st.spinner("Placing order…"):
+                        try:
+                            result = place_market_sell(
+                                sell_state["account_id_key"],
+                                sym, qty,
+                                pr["preview_id"],
+                                pr["client_order_id"],
+                            )
+                            st.session_state["sell_state"] = {
+                                "step":     "placed",
+                                "order_id": result.get("order_id"),
+                                "symbol":   sym,
+                                "quantity": qty,
+                                "acct_label": acct,
+                            }
+                        except RuntimeError as e:
+                            st.session_state["sell_state"] = {"step": "failed", "error": str(e)}
+                    st.rerun()
+            with col_cancel:
+                if st.button("Cancel", use_container_width=True, key="sell_cancel"):
+                    st.session_state.pop("sell_state", None)
+                    st.rerun()
+
+        else:  # "form"
+            # Build (acct_label, symbol) options
+            acct_sym_options = {
+                f"{r['symbol']}  —  {r['acct_label']}  ({r['quantity']:g} shares)": r
+                for r in sellable_raw
+            }
+            # Pre-select if account filter is active
+            default_idx = 0
+            if account_filter:
+                for i, r in enumerate(sellable_raw):
+                    if r["account_id_key"] == account_filter:
+                        default_idx = i
+                        break
+
+            sel_key = st.selectbox(
+                "Position to sell",
+                list(acct_sym_options.keys()),
+                index=default_idx,
+                key="sell_position_select",
+            )
+            sel_row   = acct_sym_options[sel_key]
+            max_qty   = int(sel_row["quantity"])
+            sel_qty   = st.number_input(
+                "Quantity", min_value=1, max_value=max_qty, value=max_qty, step=1, key="sell_qty"
+            )
+
+            if st.button("Preview Sell", type="primary", disabled=not LIVE_ORDERS, key="sell_preview"):
+                with st.spinner("Fetching preview from E\\*TRADE…"):
+                    try:
+                        preview = preview_market_sell(
+                            sel_row["account_id_key"], sel_row["symbol"], sel_qty
+                        )
+                        st.session_state["sell_state"] = {
+                            "step":           "previewed",
+                            "account_id_key": sel_row["account_id_key"],
+                            "acct_label":     sel_row["acct_label"],
+                            "symbol":         sel_row["symbol"],
+                            "quantity":       sel_qty,
+                            "preview":        preview,
+                        }
+                    except RuntimeError as e:
+                        st.error(str(e), icon="❌")
+                st.rerun()
 
 
 # ── lot detail (symbols with multiple open buy lots) ──────────────────────────

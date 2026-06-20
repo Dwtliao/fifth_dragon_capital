@@ -43,7 +43,9 @@ SELECT
     round(b.total_account_value::numeric, 2)        AS total_account_value,
     b.fetched_at
 FROM balances b
-WHERE b.fetched_at = (SELECT MAX(fetched_at) FROM balances)
+WHERE (b.account_id_key, b.fetched_at) IN (
+    SELECT account_id_key, MAX(fetched_at) FROM balances GROUP BY account_id_key
+)
 ORDER BY b.account_id_key;
 
 

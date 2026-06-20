@@ -456,7 +456,9 @@ lots5 = pd.DataFrame(query(f"""
     JOIN (
         SELECT account_id_key, symbol, market_value, quantity
         FROM positions
-        WHERE fetched_at = (SELECT MAX(fetched_at) FROM positions)
+        WHERE (account_id_key, fetched_at) IN (
+            SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
+        )
           AND security_type = 'EQ'
     ) p ON p.account_id_key = ol.account_id_key AND p.symbol = ol.symbol
     WHERE 1=1 {_lot_where5}

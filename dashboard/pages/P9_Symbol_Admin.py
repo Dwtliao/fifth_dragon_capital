@@ -104,7 +104,9 @@ symbols_df = pd.DataFrame(query("""
             ELSE 'unknown'
         END AS source
     FROM (SELECT DISTINCT symbol, security_type FROM positions
-          WHERE fetched_at = (SELECT MAX(fetched_at) FROM positions)) p
+          WHERE (account_id_key, fetched_at) IN (
+              SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
+          )) p
     LEFT JOIN dim_symbols ds         ON ds.symbol = p.symbol
     LEFT JOIN dim_symbol_overrides o ON o.symbol = p.symbol
     ORDER BY source DESC, p.symbol

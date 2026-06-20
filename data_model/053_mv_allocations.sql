@@ -12,7 +12,9 @@ WITH latest_positions AS (
         total_cost,
         market_value
     FROM positions
-    WHERE fetched_at = (SELECT MAX(fetched_at) FROM positions)
+    WHERE (account_id_key, fetched_at) IN (
+        SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
+    )
 ),
 portfolio_total AS (
     SELECT SUM(market_value) AS total_mv FROM latest_positions

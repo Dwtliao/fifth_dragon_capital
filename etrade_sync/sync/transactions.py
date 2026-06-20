@@ -103,6 +103,7 @@ def sync_transactions(account_filter=None, only=None,
 
                 marker = None
                 acct_count = 0
+                acct_had_error = False
 
                 while True:
                     try:
@@ -116,6 +117,7 @@ def sync_transactions(account_filter=None, only=None,
                         )
                     except Exception as e:
                         errors.append(f"{key}: {e}")
+                        acct_had_error = True
                         break
 
                     if not resp:
@@ -195,7 +197,8 @@ def sync_transactions(account_filter=None, only=None,
                         break
                     time.sleep(0.2)
 
-                cur.execute(WATERMARK_UPSERT, (key,))
+                if not acct_had_error:
+                    cur.execute(WATERMARK_UPSERT, (key,))
                 total += acct_count
 
     print(f"  transactions: upserted {total} row(s)")

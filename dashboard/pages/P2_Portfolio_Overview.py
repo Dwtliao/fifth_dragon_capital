@@ -164,7 +164,9 @@ cash_row = query(f"""
         round(sum(cash_available_for_invest)::numeric, 2) AS net_cash,
         round(sum(total_account_value)::numeric, 2) AS total_account_value
     FROM balances
-    WHERE fetched_at = (SELECT MAX(fetched_at) FROM balances)
+    WHERE (account_id_key, fetched_at) IN (
+        SELECT account_id_key, MAX(fetched_at) FROM balances GROUP BY account_id_key
+    )
     {_where}
 """, _params)[0]
 
@@ -391,7 +393,9 @@ lots_df = pd.DataFrame(query(f"""
     JOIN (
         SELECT account_id_key, symbol, market_value, quantity, security_type
         FROM positions
-        WHERE fetched_at = (SELECT MAX(fetched_at) FROM positions)
+        WHERE (account_id_key, fetched_at) IN (
+            SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
+        )
     ) p ON p.account_id_key = ol.account_id_key AND p.symbol = ol.symbol
     JOIN ledger l ON l.id = ol.buy_ledger_id
     LEFT JOIN transactions t ON t.transaction_id = l.source_id
@@ -413,7 +417,9 @@ if not lots_df.empty:
     pos_raw = query(f"""
         SELECT symbol, SUM(quantity)::float AS qty
         FROM positions
-        WHERE fetched_at = (SELECT MAX(fetched_at) FROM positions)
+        WHERE (account_id_key, fetched_at) IN (
+            SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
+        )
           AND security_type = 'EQ'
           {_lot_where.replace('ol.account_id_key', 'account_id_key')}
         GROUP BY symbol

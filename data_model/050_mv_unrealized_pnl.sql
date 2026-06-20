@@ -16,7 +16,9 @@ SELECT
     END                                                 AS unrealized_pnl_pct,
     p.fetched_at                                        AS as_of
 FROM positions p
-WHERE p.fetched_at = (SELECT MAX(fetched_at) FROM positions);
+WHERE (p.account_id_key, p.fetched_at) IN (
+    SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
+);
 
 CREATE UNIQUE INDEX IF NOT EXISTS mv_unrealized_pnl_pk
     ON mv_unrealized_pnl (account_id_key, symbol);

@@ -423,9 +423,9 @@ rg_by_year = pd.DataFrame(query(f"""
         SUM(CASE WHEN term='short' THEN realized_pnl ELSE 0 END)::float AS short_term,
         COUNT(*)                          AS lots
     FROM realized_gains
-    WHERE 1=1 {_acct_where}
+    WHERE 1=1 {_acct_where} {_year_where}
     GROUP BY 1 ORDER BY 1
-""", _acct_params))
+""", {**_acct_params, **_year_params}))
 
 if not rg_by_year.empty:
     rg_by_year["color"] = rg_by_year["realized_pnl"].apply(lambda x: "gain" if x >= 0 else "loss")

@@ -341,7 +341,11 @@ def main():
             t0 = time.time()
             print(f"[{_ts()}] {name}...")
             try:
-                fn()
+                result = fn()
+                if isinstance(result, dict) and result.get("errors"):
+                    for err in result["errors"]:
+                        print(f"[{_ts()}] WARNING: {name} partial failure — {err}")
+                    errors.append(name)
             except RuntimeError as e:
                 print(f"[{_ts()}] ERROR: {e}")
                 finish_run(log_id, "failed", error_msg=str(e))
@@ -359,6 +363,7 @@ def main():
                 build_ledger()
             except Exception as e:
                 print(f"[{_ts()}] WARNING: ledger rebuild failed — {e}")
+                errors.append("ledger")
             print(f"[{_ts()}] ledger done")
 
             print(f"[{_ts()}] realized pnl...")
@@ -367,6 +372,7 @@ def main():
                 build_realized_pnl()
             except Exception as e:
                 print(f"[{_ts()}] WARNING: realized pnl failed — {e}")
+                errors.append("realized_pnl")
             print(f"[{_ts()}] realized pnl done")
 
             print(f"[{_ts()}] benchmark prices...")
@@ -375,6 +381,7 @@ def main():
                 seed_prices()
             except Exception as e:
                 print(f"[{_ts()}] WARNING: benchmark price fetch failed — {e}")
+                errors.append("benchmark_prices")
             print(f"[{_ts()}] benchmark prices done")
 
             print(f"[{_ts()}] refreshing views...")
@@ -382,6 +389,7 @@ def main():
                 refresh_views()
             except Exception as e:
                 print(f"[{_ts()}] WARNING: view refresh failed — {e}")
+                errors.append("view_refresh")
             print(f"[{_ts()}] views done")
 
             print(f"[{_ts()}] reconciling positions...")
@@ -390,6 +398,7 @@ def main():
                 reconcile()
             except Exception as e:
                 print(f"[{_ts()}] WARNING: reconcile failed — {e}")
+                errors.append("reconcile")
             print(f"[{_ts()}] reconcile done")
 
         # Summary + sync_log

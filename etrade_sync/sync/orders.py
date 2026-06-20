@@ -97,6 +97,7 @@ def sync_orders(account_filter=None, only=None,
                 marker = None
                 acct_orders = 0
                 acct_legs = 0
+                acct_had_error = False
 
                 # Build date range for this account
                 if start_date:
@@ -130,6 +131,7 @@ def sync_orders(account_filter=None, only=None,
                     except Exception as e:
                         errors.append(f"{key}: {e}")
                         print(f"  orders: skipping {key} — {e}")
+                        acct_had_error = True
                         break
 
                     orders = data.get("OrdersResponse", {}).get("Order", [])
@@ -198,7 +200,8 @@ def sync_orders(account_filter=None, only=None,
                     marker = next_marker
                     time.sleep(0.2)
 
-                cur.execute(WATERMARK_UPSERT, (key,))
+                if not acct_had_error:
+                    cur.execute(WATERMARK_UPSERT, (key,))
                 total_orders += acct_orders
                 total_legs += acct_legs
 

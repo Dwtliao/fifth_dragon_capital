@@ -300,7 +300,9 @@ def fetch_positions_from_db() -> list[dict]:
                 JOIN (
                     SELECT DISTINCT symbol, security_type
                     FROM positions
-                    WHERE fetched_at = (SELECT MAX(fetched_at) FROM positions)
+                    WHERE (account_id_key, fetched_at) IN (
+                        SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
+                    )
                 ) p ON p.symbol = u.symbol
                 WHERE u.quantity IS NOT NULL AND u.quantity > 0
                   AND p.security_type = 'EQ'

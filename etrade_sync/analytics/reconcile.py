@@ -27,7 +27,9 @@ def reconcile():
             cur.execute("""
                 SELECT account_id_key, symbol, quantity AS api_qty
                 FROM positions
-                WHERE fetched_at = (SELECT MAX(fetched_at) FROM positions)
+                WHERE (account_id_key, fetched_at) IN (
+                    SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
+                )
                   AND symbol IS NOT NULL
             """)
             api_rows = {(r[0], r[1]): r[2] for r in cur.fetchall()}

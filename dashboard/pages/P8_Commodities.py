@@ -157,6 +157,7 @@ def _chart(label: str, ticker: str, df: pd.DataFrame, prev_close: float | None, 
             subtitleColor=line_color,
         ),
         height=240,
+        width="container",
     )
 
     volume_chart = (
@@ -174,7 +175,7 @@ def _chart(label: str, ticker: str, df: pd.DataFrame, prev_close: float | None, 
                 alt.Tooltip("Volume:Q",   title="Volume", format=","),
             ],
         )
-        .properties(height=60)
+        .properties(height=60, width="container")
     )
 
     chart = alt.vconcat(candle_chart, volume_chart, spacing=4).resolve_scale(x="shared")
@@ -197,6 +198,12 @@ refresh_choice = st.sidebar.selectbox(
 )
 run_every = INTERVALS[refresh_choice] if period_choice == "Intraday" else None
 
+if "last_period_p8" not in st.session_state:
+    st.session_state.last_period_p8 = period_choice
+if st.session_state.last_period_p8 != period_choice:
+    st.cache_data.clear()
+    st.session_state.last_period_p8 = period_choice
+
 
 # ── commodity panel (auto-refreshes for intraday) ─────────────────────────────
 
@@ -215,7 +222,7 @@ def commodity_panel() -> None:
         st.subheader(group_name)
         for row_start in range(0, len(tickers), COLS):
             row  = tickers[row_start : row_start + COLS]
-            cols = st.columns(COLS)
+            cols = st.columns(COLS, gap="large")
             for col, (label, ticker) in zip(cols, row):
                 with col:
                     df, prev_close = fetch_ticker(ticker, yf_period, yf_interval)

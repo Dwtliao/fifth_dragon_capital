@@ -35,39 +35,50 @@ def _run_brief() -> str:
 
 # ── sidebar ────────────────────────────────────────────────────────────────────
 
-st.sidebar.markdown("**Generate Brief**")
-if st.sidebar.button("▶ Run Morning Brief", type="primary", use_container_width=True):
+if brief_path.exists():
+    mtime = brief_path.stat().st_mtime
+    st.sidebar.caption(f"Brief: {datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')}")
+
+# ── primary: one-click morning pipeline ───────────────────────────────────────
+if st.sidebar.button("▶ Run Morning Pipeline", type="primary", use_container_width=True,
+                     help="1) Sync latest journal (if updated)  2) Generate morning brief"):
+    diary   = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
+    journals = sorted(diary.glob("trading_journal_*.md"))
+    output_lines = []
+
+    # Step 1: sync latest journal if it exists
+    if journals:
+        latest = journals[-1]
+        with st.spinner(f"Step 1/2 — syncing {latest.name}…"):
+            r1 = subprocess.run(
+                [sys.executable, "-m", "morning_brief.journal_sync", "--file", str(latest)],
+                capture_output=True, text=True, cwd=str(PROJECT_ROOT),
+            )
+        output_lines.append(r1.stdout.strip())
+
+    # Step 2: generate brief
+    with st.spinner("Step 2/2 — generating brief…"):
+        r2 = subprocess.run(
+            [sys.executable, "-m", "morning_brief.brief"],
+            capture_output=True, text=True, cwd=str(PROJECT_ROOT),
+        )
+    output_lines.append(r2.stderr.strip())
+
+    st.sidebar.code("\n".join(filter(None, output_lines)), language=None)
+    st.rerun()
+
+st.sidebar.divider()
+
+# ── manual controls ────────────────────────────────────────────────────────────
+if st.sidebar.button("▶ Brief only", use_container_width=True,
+                     help="Regenerate brief without re-syncing journal"):
     with st.spinner("Fetching market data…"):
         output = _run_brief()
     st.sidebar.code(output.strip(), language=None)
     st.rerun()
 
-st.sidebar.divider()
-st.sidebar.markdown("**Positions**")
-if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
-                     help="Adds new holdings from E*TRADE DB; removes closed positions that have no stop/note set"):
-    try:
-        kl = load_key_levels_from_db()
-        updated, added, removed = sync_positions_from_db(kl)
-        save_key_levels_to_db(updated)
-        msgs = []
-        if added:
-            msgs.append(f"Added: {', '.join(added)}")
-        if removed:
-            msgs.append(f"Removed: {', '.join(removed)}")
-        if not added and not removed:
-            msgs.append("Already in sync — no changes.")
-        st.sidebar.success("\n".join(msgs))
-        st.rerun()
-    except RuntimeError as e:
-        st.sidebar.error(str(e))
-    except Exception as e:
-        st.sidebar.error(f"Sync failed: {e}")
-
-st.sidebar.divider()
-st.sidebar.markdown("**Journal Sync**")
 if st.sidebar.button("🔄 Sync Latest Journal", use_container_width=True,
-                     help="Extract stops, watch levels, and alerts from the most recent journal using Claude API"):
+                     help="Extract stops/levels/alerts from latest journal via Claude API"):
     diary = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
     journals = sorted(diary.glob("trading_journal_*.md"))
     if not journals:
@@ -85,8 +96,25 @@ if st.sidebar.button("🔄 Sync Latest Journal", use_container_width=True,
         st.sidebar.code(output.strip(), language=None)
         st.rerun()
 
+if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
+                     help="Add new E*TRADE holdings, remove closed ones"):
+    try:
+        kl = load_key_levels_from_db()
+        updated, added, removed = sync_positions_from_db(kl)
+        save_key_levels_to_db(updated)
+        msgs = []
+        if added:   msgs.append(f"Added: {', '.join(added)}")
+        if removed: msgs.append(f"Removed: {', '.join(removed)}")
+        if not msgs: msgs.append("Already in sync.")
+        st.sidebar.success("\n".join(msgs))
+        st.rerun()
+    except RuntimeError as e:
+        st.sidebar.error(str(e))
+    except Exception as e:
+        st.sidebar.error(f"Sync failed: {e}")
+
 if st.sidebar.button("🔄 Sync All Journals", use_container_width=True,
-                     help="Process all unsynced journals in trading_diary/"):
+                     help="Process all unsynced journals"):
     with st.sidebar:
         with st.spinner("Syncing all journals…"):
             result = subprocess.run(
@@ -95,13 +123,6 @@ if st.sidebar.button("🔄 Sync All Journals", use_container_width=True,
             )
     st.sidebar.code((result.stdout + result.stderr).strip(), language=None)
     st.rerun()
-
-st.sidebar.divider()
-if brief_path.exists():
-    mtime = brief_path.stat().st_mtime
-    st.sidebar.caption(
-        f"Last generated:\n{datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')}"
-    )
 
 # ── tabs ───────────────────────────────────────────────────────────────────────
 
@@ -253,23 +274,22 @@ with tab_levels:
     if st.button("💾 Save All", type="primary"):
         save_key_levels_to_db({"positions": new_positions, "watch": new_watch})
 
-        # Auto-sync alert_above values → price_alerts table
-        from dashboard.db import query as db_query2, execute as db_execute
+        # Auto-sync alert_above → price_alerts; delete old then insert so threshold stays current
+        from dashboard.db import execute as db_execute
         synced = []
         for ticker, vals in new_watch.items():
             alert_above = vals.get("alert_above")
             if not alert_above or alert_above <= 0:
                 continue
-            existing = db_query2(
-                "SELECT id FROM price_alerts WHERE ticker=%s AND condition='above' AND threshold=%s",
-                (ticker, alert_above)
+            db_execute(
+                "DELETE FROM price_alerts WHERE ticker = %s AND condition = 'above' AND label LIKE 'Watch: %%'",
+                (ticker,)
             )
-            if not existing:
-                db_execute(
-                    "INSERT INTO price_alerts (ticker, label, condition, threshold) VALUES (%s, %s, 'above', %s)",
-                    (ticker, f"Watch: {ticker} above {alert_above}", alert_above)
-                )
-                synced.append(f"{ticker} > {alert_above}")
+            db_execute(
+                "INSERT INTO price_alerts (ticker, label, condition, threshold) VALUES (%s, %s, 'above', %s)",
+                (ticker, f"Watch: {ticker} above {alert_above}", alert_above)
+            )
+            synced.append(f"{ticker} > {alert_above}")
 
         msg = "Key levels saved."
         if synced:
@@ -286,7 +306,7 @@ with tab_history:
     st.caption("One row per journal file processed. Re-syncing a file overwrites its row.")
 
     log = db_query("""
-        SELECT file_path, synced_at, positions_updated, watch_updated,
+        SELECT file_path, file_mtime, synced_at, positions_updated, watch_updated,
                alerts_created, dry_run, extracted_json
         FROM journal_sync_log
         ORDER BY synced_at DESC
@@ -296,13 +316,14 @@ with tab_history:
         st.info("No journals synced yet. Use **🔄 Sync Latest Journal** in the sidebar.")
     else:
         for r in log:
-            name     = Path(r["file_path"]).name
-            ts       = r["synced_at"].strftime("%Y-%m-%d %H:%M")
-            summary  = (f"{r['positions_updated']} positions  •  "
-                        f"{r['watch_updated']} watch levels  •  "
-                        f"{r['alerts_created']} alerts")
-            dry_tag  = "  _(dry run)_" if r["dry_run"] else ""
-            label    = f"**{name}** — {ts}  •  {summary}{dry_tag}"
+            name         = Path(r["file_path"]).name
+            synced_at    = r["synced_at"].strftime("%Y-%m-%d %H:%M")
+            journal_mtime = datetime.datetime.fromtimestamp(r["file_mtime"]).strftime("%Y-%m-%d %H:%M")
+            summary      = (f"{r['positions_updated']} positions  •  "
+                            f"{r['watch_updated']} watch levels  •  "
+                            f"{r['alerts_created']} alerts")
+            dry_tag      = "  _(dry run)_" if r["dry_run"] else ""
+            label        = f"**{name}** — journal: {journal_mtime}  •  synced: {synced_at}  •  {summary}{dry_tag}"
 
             with st.expander(label):
                 ex = r.get("extracted_json") or {}

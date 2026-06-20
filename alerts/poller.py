@@ -73,6 +73,7 @@ def run_once() -> int:
             return 0
 
         tickers = list({a["ticker"] for a in alerts})
+        print(f"Prices via yfinance (~15min delayed) — no E*TRADE connection required")
         print(f"Polling {len(tickers)} ticker(s): {', '.join(tickers)}")
         prices = _fetch_prices(tickers)
 

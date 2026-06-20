@@ -45,7 +45,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 
 ---
 
-## Current State (as of 2026-06-05, updated 4x)
+## Current State (as of 2026-06-20)
 
 ### ✅ Completed
 
@@ -88,6 +88,17 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | 4 | Lot provenance (#38) | Provenance column in Position Lot Detail showing source (api/csv) and classification per lot. `🔍` badge fires only for `cross_source_overlap` / `same_source_candidate` — API lots with no audit record show silently. Positions table columns are real numbers with column_config formatting (sortable, subtotals-ready). |
 | 4 | P2 column swap fix | `% Portfolio` and `P/L %` columns were transposed in positions table rename — IUSXX showed 0% because pnl_pct (≈0 for money market) was labeled "% Portfolio". Fixed column order. |
 | 4 | Risk & Exposure page (#28/#39) | P5 complete. See Page 5 spec below. |
+| 4 | P4 Return % vs Trade Date | Second scatter added to Trades tab — sell_date on x-axis, stacked below existing Holding Days scatter. Full-width layout. |
+| 4 | P2 Live E*TRADE quotes | `etrade_sync/market/quotes.py` wrapper. Manual "Fetch Live Quotes" button in sidebar — overrides snapshot market values with real-time E*TRADE prices for the session. Timestamp shown on banner. Graceful fallback to snapshot when token expired. |
+| 4 | P2 P/L color coding | Unrealized P/L and P/L% columns green/bold for gains, red/bold for losses via pandas Styler. 2 decimal places on Unrealized P/L. |
+| 4 | Physical Metals page (P6) | Fully separate from E*TRADE schema. `physical_holdings_pm` + `physical_prices_pm` tables (migration 064). Spot prices auto-fetched via yfinance (GC=F, SI=F, PL=F, PA=F) with manual override. Holdings table with live spot value and unrealized G/L. Add/delete holdings form. |
+| 4 | Market Monitor page (P7) | Candlestick + volume charts for US indices (incl. DXY), global indices, ETFs, volatility/rates/bond futures, defensive sectors. Period selector: Intraday/5D/1M/3M/6M. Auto-refresh via `st.fragment(run_every=...)`. 2 charts per row. Price Alerts section at top: add/manage/delete/re-arm alerts, ▶ Run Alert Poll sidebar button. |
+| 4 | Commodities page (P8) | Candlestick + volume charts with period selector for precious metals futures, energy futures, metals & miners (incl. PPLT, SBSW, SIL, SILJ, WPM, FNV, AEM, RGLD, GROY), uranium (SRUUF spot proxy + miners), copper, agriculture. Auto-refresh on intraday only. |
+| 4 | Morning Brief page (P10) | Two tabs: 📋 Brief (renders trading_diary/morning_brief.md) + 🔑 Key Levels (edit stops/watch levels, saved to DB). Sync History tab shows per-journal extraction detail. ▶ Run Morning Pipeline = journal sync + brief in one click. |
+| 0 | Price alerts system | `price_alerts` table (migration 065). `alerts/poller.py`: poll yfinance every N minutes, fire+re-arm logic. `alerts/notify.py`: email via smtplib. Managed via P7 UI. |
+| 0 | Morning brief module | `morning_brief/brief.py`: generates daily pre-market markdown to `trading_diary/`. Fetches global indices, US futures, commodities, FX, vol via yfinance. Positions use E*TRADE real-time quotes (yfinance fallback). `morning_brief/fetchers.py`, `formatter.py`. launchd at 6:45am. |
+| 0 | Key levels DB (migration 066) | `key_levels` table replaces `key_levels.yml`. Section (positions/watch), ticker, stop, support, resistance, alert_above, note. Seeds from YAML on first run. P10 reads/writes DB directly. |
+| 0 | Journal sync (migration 067) | `morning_brief/journal_sync.py`: sends trading journals to Claude API, extracts stops/watch levels/conditional alerts, writes to `key_levels` + `price_alerts`. Tracks processed files in `journal_sync_log` by mtime. Integrated into P10 Morning Pipeline button. |
 
 ### Known Gaps / Open Issues
 
@@ -96,6 +107,9 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | #35 | Medium | OAuth re-auth flow not yet in the dashboard UI — still requires terminal |
 | #33 | Low | `dim_symbols.cusip` column never populated by `seed_symbols()` |
 | #34 | Deferred | Ledger only sources from `transactions`; option/spread fills from `orders` not yet mapped |
+| #41 | In progress | Market Intelligence Layer — Tier 1 alerts (price levels, volume anomaly, pre-market brief) done. Tier 2 (rotation signals, correlation break, FOMC countdown) and Tier 3 (Claude API snapshot) pending. |
+| — | Design gap | `price_alerts` has two creation paths (journal sync + P10 Watch Levels alert_above) that can create duplicate alerts for same ticker. Options: (A) unique constraint on (ticker, condition), (B) remove alert_above→price_alerts sync from P10, alerts only via journal or P7 manual. |
+| — | Design gap | E*TRADE OAuth tokens expire at midnight ET. Browser login invalidates API token. No automated re-auth possible without Selenium + 2FA interception (not worth the risk). Morning brief uses E*TRADE quotes when token valid, yfinance fallback silently. |
 
 ---
 
@@ -123,8 +137,11 @@ Dependencies determine sequence. Do not start a page before its upstream data la
 | **#25** | ✅ Done | Portfolio Overview — account filter, position filters, donut charts with labels |
 | **#26** | ✅ Done | Performance — equity curve, drawdown, rolling returns, attribution, realized P/L |
 | **#27** | ✅ Done | Trading History — P/L heatmap, cash flow/income charts, trade scatterplot, ledger explorer, strategy tag form |
+| **#28** | ✅ Done | Risk & Exposure page (P5) — 5 sections: concentration, position sizing, loss watch, realized P/L, holding period |
 | **#32** | ✅ Done | Split-adjusted FIFO cost basis |
 | **#38** | ✅ Done | Lot provenance display — Provenance column, smart flagging, sortable positions table, override migration fix |
+| **#42** | ✅ Done | Price level alerts — `price_alerts` table, `alerts/poller.py`, P7 management UI, email notify |
+| **#43** | ✅ Done | Pre-market brief — `morning_brief/` module, launchd at 6:45am, P10 dashboard, journal→Claude→DB sync |
 | **#28** | ✅ Done | Risk & Exposure page (P5) — see Page 5 spec |
 
 ---

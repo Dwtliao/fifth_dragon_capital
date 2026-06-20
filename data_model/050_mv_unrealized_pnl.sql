@@ -15,10 +15,21 @@ SELECT
         ELSE NULL
     END                                                 AS unrealized_pnl_pct,
     p.fetched_at                                        AS as_of
-FROM positions p
-WHERE (p.account_id_key, p.fetched_at) IN (
-    SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
-);
+FROM (
+    SELECT
+        account_id_key,
+        symbol,
+        MAX(security_type)  AS security_type,
+        SUM(quantity)       AS quantity,
+        SUM(total_cost)     AS total_cost,
+        SUM(market_value)   AS market_value,
+        MAX(fetched_at)     AS fetched_at
+    FROM positions
+    WHERE (account_id_key, fetched_at) IN (
+        SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
+    )
+    GROUP BY account_id_key, symbol
+) p;
 
 CREATE UNIQUE INDEX IF NOT EXISTS mv_unrealized_pnl_pk
     ON mv_unrealized_pnl (account_id_key, symbol);

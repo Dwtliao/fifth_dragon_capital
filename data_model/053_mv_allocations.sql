@@ -7,14 +7,15 @@ WITH latest_positions AS (
     SELECT
         account_id_key,
         symbol,
-        security_type,
-        quantity,
-        total_cost,
-        market_value
+        MAX(security_type)  AS security_type,
+        SUM(quantity)       AS quantity,
+        SUM(total_cost)     AS total_cost,
+        SUM(market_value)   AS market_value
     FROM positions
     WHERE (account_id_key, fetched_at) IN (
         SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
     )
+    GROUP BY account_id_key, symbol
 ),
 portfolio_total AS (
     SELECT SUM(market_value) AS total_mv FROM latest_positions

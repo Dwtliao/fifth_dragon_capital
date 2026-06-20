@@ -110,6 +110,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | #41 | In progress | Market Intelligence Layer — Tier 1 alerts (price levels, volume anomaly, pre-market brief) done. Tier 2 (rotation signals, correlation break, FOMC countdown) and Tier 3 (Claude API snapshot) pending. |
 | — | Design gap | `price_alerts` has two creation paths (journal sync + P10 Watch Levels alert_above) that can create duplicate alerts for same ticker. Options: (A) unique constraint on (ticker, condition), (B) remove alert_above→price_alerts sync from P10, alerts only via journal or P7 manual. |
 | — | Design gap | E*TRADE OAuth tokens expire at midnight ET. Browser login invalidates API token. No automated re-auth possible without Selenium + 2FA interception (not worth the risk). Morning brief uses E*TRADE quotes when token valid, yfinance fallback silently. |
+| — | Future feature | P3 equity curve, drawdown, and attribution timeseries only go back to when daily launchd syncs started (June 2026). Transaction/CSV history exists for 2 years but `mv_portfolio_timeseries` is built from position snapshots, not transactions. Historical equity curve would require replaying `ledger` + `open_lots` holdings through yfinance daily price history — significant build, low urgency. |
 
 ---
 

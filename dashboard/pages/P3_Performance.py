@@ -48,14 +48,18 @@ acct_options = {"All Accounts": None} | {_acct_label(a): a["account_id_key"] for
 
 # ── global filters ────────────────────────────────────────────────────────────
 
-f1, f2, f3 = st.columns([3, 2, 1])
-with f1:
+with st.sidebar:
+    st.header("Filters")
     sel_account = st.selectbox("Account", list(acct_options.keys()))
-with f2:
     sel_period  = st.selectbox("Period", ["YTD", "1 Year", "3 Years", "All"], index=3)
-with f3:
-    st.write("")
-    show_spy = st.toggle("Show SPY", value=True)
+    show_spy    = st.toggle("Show SPY", value=True)
+    st.divider()
+    rg_years_raw = query("""
+        SELECT DISTINCT EXTRACT(year FROM sell_date)::int AS yr
+        FROM realized_gains ORDER BY 1 DESC
+    """)
+    year_opts = ["All Years"] + [str(r["yr"]) for r in rg_years_raw]
+    sel_year  = st.selectbox("Realized P/L Year", year_opts)
 
 account_filter = acct_options[sel_account]
 _acct_where  = "AND account_id_key = %(acct)s" if account_filter else ""
@@ -402,15 +406,6 @@ st.divider()
 # ── realized P/L ──────────────────────────────────────────────────────────────
 
 st.subheader("Realized P/L")
-
-rg_year_col, _ = st.columns([2, 5])
-with rg_year_col:
-    rg_years_raw = query("""
-        SELECT DISTINCT EXTRACT(year FROM sell_date)::int AS yr
-        FROM realized_gains ORDER BY 1 DESC
-    """)
-    year_opts = ["All Years"] + [str(r["yr"]) for r in rg_years_raw]
-    sel_year  = st.selectbox("Year", year_opts, label_visibility="collapsed")
 
 _year_where  = "AND EXTRACT(year FROM sell_date) = %(yr)s" if sel_year != "All Years" else ""
 _year_params = {"yr": int(sel_year)} if sel_year != "All Years" else {}

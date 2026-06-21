@@ -386,6 +386,9 @@ with st.expander("⚡ Quick Sell — Market Order", expanded=False):
     else:
         st.error("**Live trading enabled** — orders will execute against your real account.", icon="🔴")
 
+    def _sell_option_label(row):
+        return f"{row['symbol']}  —  {row['acct_label']}  ({row['quantity']:g} shares)"
+
     # Sellable positions: long EQ positions only, all accounts
     sellable_raw = query("""
         SELECT p.account_id_key,
@@ -469,11 +472,8 @@ with st.expander("⚡ Quick Sell — Market Order", expanded=False):
                     st.rerun()
 
         else:  # "form"
-            # Build (acct_label, symbol) options
-            acct_sym_options = {
-                f"{r['symbol']}  —  {r['acct_label']}  ({r['quantity']:g} shares)": r
-                for r in sellable_raw
-            }
+            # Build one label per sellable position.
+            acct_sym_options = {_sell_option_label(r): r for r in sellable_raw}
             # Pre-select if account filter is active
             default_idx = 0
             if account_filter:
@@ -488,29 +488,59 @@ with st.expander("⚡ Quick Sell — Market Order", expanded=False):
                 index=default_idx,
                 key="sell_position_select",
             )
-            sel_row   = acct_sym_options[sel_key]
-            max_qty   = int(sel_row["quantity"])
-            sel_qty   = st.number_input(
-                "Quantity", min_value=1, max_value=max_qty, value=max_qty, step=1, key="sell_qty"
-            )
 
-            if st.button("Preview Sell", type="primary", disabled=not LIVE_ORDERS, key="sell_preview"):
-                with st.spinner("Fetching preview from E\\*TRADE…"):
-                    try:
-                        preview = preview_market_sell(
-                            sel_row["account_id_key"], sel_row["symbol"], sel_qty
-                        )
-                        st.session_state["sell_state"] = {
-                            "step":           "previewed",
-                            "account_id_key": sel_row["account_id_key"],
-                            "acct_label":     sel_row["acct_label"],
-                            "symbol":         sel_row["symbol"],
-                            "quantity":       sel_qty,
-                            "preview":        preview,
-                        }
-                    except RuntimeError as e:
-                        st.error(str(e), icon="❌")
-                st.rerun()
+            # Clear preview error when position selection changes
+            if sell_state.get("preview_error") and sel_key != sell_state.get("error_for_key"):
+                sell_state.pop("preview_error", None)
+                sell_state.pop("error_for_key", None)
+
+            sel_row       = acct_sym_options[sel_key]
+            actual_qty    = float(sel_row["quantity"])
+            max_whole_qty = int(actual_qty)
+
+            fractional_only = max_whole_qty < 1
+            if fractional_only:
+                st.warning(
+                    f"This position is fractional only ({actual_qty:g} shares). "
+                    "Market orders require whole shares — use the E*TRADE website to sell fractional shares.",
+                    icon="⚠️",
+                )
+            else:
+                if actual_qty != max_whole_qty:
+                    st.caption(
+                        f"Position has {actual_qty:g} shares (fractional residue). "
+                        f"Max sellable via market order: {max_whole_qty}."
+                    )
+
+                sel_qty = st.number_input(
+                    "Quantity", min_value=1, max_value=max_whole_qty, value=max_whole_qty,
+                    step=1, key="sell_qty"
+                )
+
+                if sell_state.get("preview_error"):
+                    st.error(sell_state["preview_error"], icon="❌")
+
+                if st.button("Preview Sell", type="primary", disabled=not LIVE_ORDERS, key="sell_preview"):
+                    with st.spinner("Fetching preview from E\\*TRADE…"):
+                        try:
+                            preview = preview_market_sell(
+                                sel_row["account_id_key"], sel_row["symbol"], sel_qty
+                            )
+                            st.session_state["sell_state"] = {
+                                "step":           "previewed",
+                                "account_id_key": sel_row["account_id_key"],
+                                "acct_label":     sel_row["acct_label"],
+                                "symbol":         sel_row["symbol"],
+                                "quantity":       sel_qty,
+                                "preview":        preview,
+                            }
+                        except RuntimeError as e:
+                            st.session_state["sell_state"] = {
+                                "step":          "form",
+                                "preview_error": str(e),
+                                "error_for_key": sel_key,
+                            }
+                    st.rerun()
 
 
 # ── lot detail (symbols with multiple open buy lots) ──────────────────────────

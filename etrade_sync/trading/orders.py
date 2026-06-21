@@ -23,6 +23,7 @@ from etrade_sync.db import get_connection
 
 LIVE_ORDERS = os.environ.get("ETRADE_LIVE_ORDERS", "false").lower() == "true"
 
+_BASE_URL     = f"https://{'apisb' if DEV else 'api'}.etrade.com"
 _MARKET_OPEN  = dt_time(9, 30)
 _MARKET_CLOSE = dt_time(16, 0)
 
@@ -34,19 +35,59 @@ def _check_gates():
         )
 
 
-def _check_market_hours():
+def _now_et():
     try:
         from zoneinfo import ZoneInfo
     except ImportError:
         import pytz
         ZoneInfo = pytz.timezone
-    now_et = datetime.now(tz=ZoneInfo("America/New_York"))
+    return datetime.now(tz=ZoneInfo("America/New_York"))
+
+
+def _fallback_market_hours_check(now_et):
     if now_et.weekday() >= 5:
         raise RuntimeError("Market is closed (weekend).")
     if not (_MARKET_OPEN <= now_et.time() < _MARKET_CLOSE):
         raise RuntimeError(
             f"Outside regular session (9:30–16:00 ET). Current ET: {now_et.strftime('%H:%M')}."
         )
+
+
+def _fetch_market_clock_status() -> tuple[str, str]:
+    """Call E*TRADE market clock. Returns status string (e.g. 'open', 'close').
+    Raises on any network/auth/parse failure — caller decides the fallback."""
+    token, secret = load_tokens()
+    from requests_oauthlib import OAuth1Session
+    session = OAuth1Session(
+        CONSUMER_KEY, CONSUMER_SECRET, token, secret,
+        signature_type="AUTH_HEADER",
+    )
+    resp = session.get(
+        f"{_BASE_URL}/v1/market/clock.json",
+        headers={"consumerkey": CONSUMER_KEY},
+        timeout=(3, 5),
+    )
+    resp.raise_for_status()
+    clock = resp.json().get("ClockResponse", {})
+    return clock.get("status", "").lower(), clock.get("time", "")
+
+
+def _check_market_hours():
+    """
+    Primary gate: E*TRADE market clock API — authoritative for holidays and early closes.
+    Falls back to regular-session time check if the clock call fails.
+    Broker rejection is the secondary safety net for anything this misses.
+    """
+    try:
+        status, time_str = _fetch_market_clock_status()
+        if status != "open":
+            raise RuntimeError(
+                f"Market is not open (E*TRADE status: '{status}'{f', {time_str}' if time_str else ''})."
+            )
+    except RuntimeError:
+        raise
+    except Exception:
+        _fallback_market_hours_check(_now_et())
 
 
 def _etrade_client():
@@ -58,6 +99,11 @@ def _parse_preview(resp: dict) -> dict:
     pr = resp.get("PreviewOrderResponse", {})
     ids = pr.get("PreviewIds", {})
     preview_id = ids.get("previewId")
+
+    if not preview_id:
+        raise RuntimeError(
+            f"E*TRADE preview response missing previewId — cannot proceed. Raw: {resp}"
+        )
 
     order = pr.get("Order", {})
     est_commission = order.get("estimatedCommission")
@@ -152,6 +198,14 @@ def place_market_sell(account_id_key: str, symbol: str, quantity: int,
     pr = resp.get("PlaceOrderResponse", {})
     order_ids = pr.get("OrderIds", {})
     order_id  = order_ids.get("orderId")
+
+    if not order_id:
+        _log_audit(account_id_key, symbol, quantity, client_order_id,
+                   place_response=resp, status="failed",
+                   error_msg="Place response missing orderId")
+        raise RuntimeError(
+            f"E*TRADE place response missing orderId — order status unknown. Raw: {resp}"
+        )
 
     _log_audit(account_id_key, symbol, quantity, client_order_id,
                place_response=resp, status="placed")

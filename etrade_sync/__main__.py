@@ -286,6 +286,7 @@ def main():
     # --------------------------------------------------------------- sync
     elif args.command == "sync":
         from etrade_sync.db import create_tables, get_connection
+        from etrade_sync.config import DEV
         from etrade_sync.sync.accounts import sync_accounts, sync_balances
         from etrade_sync.sync.positions import sync_positions
         from etrade_sync.sync.transactions import sync_transactions
@@ -296,7 +297,11 @@ def main():
 
         job_name = f"sync:{args.only}" if args.only else "sync"
         start = time.time()
-        print(f"[{_ts()}] Starting sync{' (--only ' + args.only + ')' if args.only else ''}")
+        base_url = "https://apisb.etrade.com" if DEV else "https://api.etrade.com"
+        print(
+            f"[{_ts()}] Starting sync{' (--only ' + args.only + ')' if args.only else ''} "
+            f"(E*TRADE base_url={base_url})"
+        )
 
         try:
             create_tables()

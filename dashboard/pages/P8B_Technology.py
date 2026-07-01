@@ -65,11 +65,11 @@ def _load_alerts() -> dict[str, list[dict]]:
 # ── period / interval config ───────────────────────────────────────────────────
 
 PERIODS = {
-    "Intraday": ("1d",  "5m",  "%H:%M"),
-    "5 Days":   ("5d",  "15m", "%m/%d %H:%M"),
-    "1 Month":  ("1mo", "1d",  "%b %d"),
-    "3 Months": ("3mo", "1d",  "%b %d"),
-    "6 Months": ("6mo", "1d",  "%b '%y"),
+    "Intraday": ("1d",  "5m",  "%H:%M",       "%b %d %H:%M"),
+    "5 Days":   ("5d",  "15m", "%m/%d %H:%M", "%b %d %H:%M"),
+    "1 Month":  ("1mo", "1d",  "%b %d",       "%b %d, %Y"),
+    "3 Months": ("3mo", "1d",  "%b %d",       "%b %d, %Y"),
+    "6 Months": ("6mo", "1d",  "%b '%y",      "%b %d, %Y"),
 }
 
 
@@ -432,7 +432,7 @@ def _rsi_panel(df: pd.DataFrame, x_fmt: str) -> alt.Chart | None:
     return (rsi_line + band_rules).properties(height=70, width="container")
 
 
-def _chart(label: str, ticker: str, df: pd.DataFrame, prev_close: float | None, x_fmt: str, alerts: list[dict] | None = None, show_ema: bool = False, indicator: str = "None", show_st: bool = False) -> None:
+def _chart(label: str, ticker: str, df: pd.DataFrame, prev_close: float | None, x_fmt: str, tooltip_fmt: str = "", alerts: list[dict] | None = None, show_ema: bool = False, indicator: str = "None", show_st: bool = False) -> None:
     if df.empty:
         st.caption(f"**{label}** ({ticker}) — no data")
         return
@@ -460,7 +460,7 @@ def _chart(label: str, ticker: str, df: pd.DataFrame, prev_close: float | None, 
                 axis=alt.Axis(format=x_fmt, labelAngle=-45, tickCount=6),
                 scale=alt.Scale(padding=10))
     _tooltip = [
-        alt.Tooltip("Datetime:T", title="Time",   format=x_fmt),
+        alt.Tooltip("Datetime:T", title="Time",   format=tooltip_fmt or x_fmt),
         alt.Tooltip("Open:Q",     title="Open",   format=",.3f"),
         alt.Tooltip("High:Q",     title="High",   format=",.3f"),
         alt.Tooltip("Low:Q",      title="Low",    format=",.3f"),
@@ -600,7 +600,7 @@ def _chart(label: str, ticker: str, df: pd.DataFrame, prev_close: float | None, 
 
 st.sidebar.markdown("**Chart Period**")
 period_choice = st.sidebar.selectbox("Period", list(PERIODS.keys()), index=4)
-yf_period, yf_interval, x_fmt = PERIODS[period_choice]
+yf_period, yf_interval, x_fmt, tooltip_fmt = PERIODS[period_choice]
 
 show_st = st.sidebar.checkbox(
     "Supertrend (ATR 10, ×3.0)", value=True,
@@ -715,7 +715,7 @@ def technology_panel() -> None:
             for col, (label, ticker) in zip(cols, row):
                 with col:
                     df, prev_close = fetch_ticker(ticker, yf_period, yf_interval)
-                    _chart(label, ticker, df, prev_close, x_fmt, all_alerts.get(ticker), show_ema, indicator, show_st)
+                    _chart(label, ticker, df, prev_close, x_fmt, tooltip_fmt, all_alerts.get(ticker), show_ema, indicator, show_st)
         st.divider()
 
 

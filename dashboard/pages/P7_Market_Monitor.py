@@ -155,11 +155,11 @@ COLS = 2  # charts per row
 
 
 PERIODS = {
-    "Intraday": ("2d",  "5m",  "%H:%M"),
-    "5 Days":   ("5d",  "15m", "%m/%d %H:%M"),
-    "1 Month":  ("1mo", "1d",  "%b %d"),
-    "3 Months": ("3mo", "1d",  "%b %d"),
-    "6 Months": ("6mo", "1d",  "%b '%y"),
+    "Intraday": ("2d",  "5m",  "%H:%M",       "%b %d %H:%M"),
+    "5 Days":   ("5d",  "15m", "%m/%d %H:%M", "%b %d %H:%M"),
+    "1 Month":  ("1mo", "1d",  "%b %d",       "%b %d, %Y"),
+    "3 Months": ("3mo", "1d",  "%b %d",       "%b %d, %Y"),
+    "6 Months": ("6mo", "1d",  "%b '%y",      "%b %d, %Y"),
 }
 
 
@@ -529,7 +529,7 @@ def _rsi_panel(df: pd.DataFrame, x_fmt: str) -> alt.Chart | None:
     return (rsi_line + band_rules).properties(height=70, width="container")
 
 
-def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close: float | None, fmt: str = "%H:%M", alerts: list[dict] | None = None, show_ema: bool = False, indicator: str = "None", show_st: bool = False) -> None:
+def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close: float | None, fmt: str = "%H:%M", tooltip_fmt: str = "", alerts: list[dict] | None = None, show_ema: bool = False, indicator: str = "None", show_st: bool = False) -> None:
     if today_df.empty:
         st.caption(f"**{label}** ({ticker})  —  no data")
         return
@@ -558,7 +558,7 @@ def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close:
             legend=None,
         ),
         tooltip=[
-            alt.Tooltip("Datetime:T", title="Time",  format=fmt),
+            alt.Tooltip("Datetime:T", title="Time",  format=tooltip_fmt or fmt),
             alt.Tooltip("Open:Q",     title="Open",  format=",.2f"),
             alt.Tooltip("High:Q",     title="High",  format=",.2f"),
             alt.Tooltip("Low:Q",      title="Low",   format=",.2f"),
@@ -697,7 +697,7 @@ def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close:
 
 st.sidebar.markdown("**Chart Period**")
 period_choice = st.sidebar.selectbox("Period", list(PERIODS.keys()), index=4)
-yf_period, yf_interval, x_fmt = PERIODS[period_choice]
+yf_period, yf_interval, x_fmt, tooltip_fmt = PERIODS[period_choice]
 
 show_st = st.sidebar.checkbox(
     "Supertrend (ATR 10, ×3.0)", value=True,
@@ -832,7 +832,7 @@ def market_panel() -> None:
             for col, (label, ticker) in zip(cols, row):
                 with col:
                     df, prev_close = fetch_ticker(ticker, yf_period, yf_interval)
-                    _intraday_chart(label, ticker, df, prev_close, x_fmt, alerts_by_ticker.get(ticker), show_ema, indicator, show_st)
+                    _intraday_chart(label, ticker, df, prev_close, x_fmt, tooltip_fmt, alerts_by_ticker.get(ticker), show_ema, indicator, show_st)
         st.divider()
 
 

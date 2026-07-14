@@ -157,9 +157,9 @@ COLS = 2  # charts per row
 PERIODS = {
     "Intraday": ("2d",  "5m",  "%H:%M",       "%b %d %H:%M"),
     "5 Days":   ("5d",  "15m", "%m/%d %H:%M", "%b %d %H:%M"),
-    "1 Month":  ("1mo", "1d",  "%b %d",       "%b %d, %Y"),
-    "3 Months": ("3mo", "1d",  "%b %d",       "%b %d, %Y"),
-    "6 Months": ("6mo", "1d",  "%b '%y",      "%b %d, %Y"),
+    "1 Month":  ("1mo", "1d",  "%b %d",       "%d/%m/%Y"),
+    "3 Months": ("3mo", "1d",  "%b %d",       "%d/%m/%Y"),
+    "6 Months": ("6mo", "1d",  "%b '%y",      "%d/%m/%Y"),
 }
 
 

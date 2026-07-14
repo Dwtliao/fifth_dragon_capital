@@ -106,9 +106,9 @@ def _load_alerts() -> dict[str, list[dict]]:
 PERIODS = {
     "Intraday": ("1d",  "5m",  "%H:%M",       "%b %d %H:%M"),
     "5 Days":   ("5d",  "15m", "%m/%d %H:%M", "%b %d %H:%M"),
-    "1 Month":  ("1mo", "1d",  "%b %d",       "%b %d, %Y"),
-    "3 Months": ("3mo", "1d",  "%b %d",       "%b %d, %Y"),
-    "6 Months": ("6mo", "1d",  "%b '%y",      "%b %d, %Y"),
+    "1 Month":  ("1mo", "1d",  "%b %d",       "%d/%m/%Y"),
+    "3 Months": ("3mo", "1d",  "%b %d",       "%d/%m/%Y"),
+    "6 Months": ("6mo", "1d",  "%b '%y",      "%d/%m/%Y"),
 }
 
 

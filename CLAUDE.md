@@ -175,3 +175,5 @@ Sandbox also blocks outbound network (yfinance fetches return 403). Code is stru
 
 ## Trading Context
 See `/Users/davidliao/Library/CloudStorage/Dropbox/Etrade/trading_diary/SESSION_CONTEXT.md` for full trading state: positions, stops, active theses, key calendar events, trading rules.
+
+Daily journal files live in that same folder, named `trading_journal_<month><day>_<year>.md` (e.g. `trading_journal_july13_2026.md`, no leading zeros, month spelled out lowercase). `morning_brief/journal_sync.py` globs `trading_journal_*.md` there to extract positions/watch levels/alerts — keep new journal files matching this pattern or the sync won't pick them up.

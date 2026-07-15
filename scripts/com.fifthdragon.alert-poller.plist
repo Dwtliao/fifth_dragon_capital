@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fifthdragon.alert-poller</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/davidliao/git_repos/fifth_dragon_capital/scripts/alert_poller.sh</string>
+    </array>
+
+    <!-- Repeat every 5 minutes, matching alerts/poller.py's own DEFAULT_INTERVAL -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <!-- Run once immediately on load, then every 5 minutes after -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/davidliao/git_repos/fifth_dragon_capital/logs/launchd_alert_poller.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/davidliao/git_repos/fifth_dragon_capital/logs/launchd_alert_poller_error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/Users/davidliao/git_repos/py312/venv/bin</string>
+    </dict>
+</dict>
+</plist>

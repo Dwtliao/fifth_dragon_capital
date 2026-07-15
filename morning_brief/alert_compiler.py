@@ -217,16 +217,43 @@ def _find_matching_journal_alert(cur, ticker: str, condition: str, threshold: fl
     return None
 
 
+def _matches_existing_structural_alert(cur, ticker: str, condition: str, threshold: float) -> bool:
+    """True if an active structural alert already covers this ticker/condition within tolerance."""
+    cur.execute(
+        """
+        SELECT threshold::float
+        FROM price_alerts
+        WHERE source = 'key_levels_watch'
+          AND enabled = TRUE
+          AND archived_at IS NULL
+          AND ticker = %s
+          AND condition = %s
+        """,
+        (ticker, condition),
+    )
+    for (existing_threshold,) in cur.fetchall():
+        if abs(existing_threshold - threshold) <= _journal_match_tolerance(existing_threshold):
+            return True
+    return False
+
+
 def upsert_journal_alert(
     cur, ticker: str, condition: str, threshold: float, label: str,
     *, ttl_days: int = DEFAULT_JOURNAL_ALERT_TTL_DAYS,
 ) -> str:
-    """Match against existing tactical journal alerts within tolerance; update in place or start a new idea."""
+    """Match against existing tactical journal alerts within tolerance; update in place or start a new idea.
+
+    If a structural alert already covers the same ticker/condition/threshold, skip
+    creating a tactical shadow of it entirely — the idea is already captured
+    long-lived in key_levels_watch, so a new journal_sync row would just be noise.
+    """
     now = _utcnow()
     expires_at = now + dt.timedelta(days=ttl_days)
     existing = _find_matching_journal_alert(cur, ticker, condition, threshold)
 
     if existing is None:
+        if _matches_existing_structural_alert(cur, ticker, condition, threshold):
+            return "skipped_structural"
         source_key = f"journal:{ticker}:{condition}:{now.strftime('%Y%m%dT%H%M%S%f')}"
         cur.execute(
             """
@@ -550,7 +577,7 @@ def reconcile_journal_alerts(
 ) -> dict:
     """Match/refresh journal-derived alerts in place, then promote recurring ideas."""
     candidates = build_journal_alerts(alerts)
-    stats = {"created": 0, "updated": 0, "promoted": 0, "desired": len(candidates)}
+    stats = {"created": 0, "updated": 0, "skipped_structural": 0, "promoted": 0, "desired": len(candidates)}
 
     conn = get_connection()
     try:

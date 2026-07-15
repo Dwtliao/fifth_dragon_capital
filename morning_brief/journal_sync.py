@@ -204,7 +204,7 @@ def apply_extraction(extracted: dict, dry_run: bool = False) -> dict:
 
     if not dry_run:
         structural_stats = {"created": 0, "updated": 0, "archived": 0, "deduped": 0}
-        journal_stats = {"created": 0, "updated": 0, "promoted": 0}
+        journal_stats = {"created": 0, "updated": 0, "skipped_structural": 0, "promoted": 0}
         try:
             if counts["positions"] or counts["watch"]:
                 structural_stats = reconcile_structural_alerts(kl)
@@ -226,7 +226,7 @@ def apply_extraction(extracted: dict, dry_run: bool = False) -> dict:
             f"archived={structural_stats['archived']} deduped={structural_stats['deduped']} "
             f"backfilled={structural_stats.get('backfilled', 0)}; "
             f"journal created={journal_stats['created']} updated={journal_stats['updated']} "
-            f"promoted={journal_stats['promoted']} "
+            f"skipped_structural={journal_stats['skipped_structural']} promoted={journal_stats['promoted']} "
             f"expired_pruned={expired}"
         )
 

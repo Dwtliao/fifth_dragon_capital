@@ -203,6 +203,15 @@ class _FakeJournalCursor:
             self.description = [_Col(c) for c in cols]
             self._fetchall_rows = [tuple(r.get(c) for c in cols) for r in rows]
 
+        elif sql_l.startswith("select threshold::float from price_alerts where source = 'key_levels_watch' and enabled = true and archived_at is null and ticker = %s and condition = %s"):
+            ticker, condition = params
+            matches = [
+                r for r in self.db
+                if r["source"] == "key_levels_watch" and r["enabled"] and r["archived_at"] is None
+                and r["ticker"] == ticker and r["condition"] == condition
+            ]
+            self._fetchall_rows = [(r["threshold"],) for r in matches]
+
         elif sql_l.startswith("update price_alerts set enabled = false, triggered = false, archived_at = %s, refreshed_at = %s where id = %s"):
             archived_at, refreshed_at, row_id = params
             for r in self.db:
@@ -415,22 +424,14 @@ class AlertCompilerTests(unittest.TestCase):
         self.assertEqual(stats2["updated"], 0)
         self.assertEqual(len(conn.db), 2)  # two distinct ideas, not merged
 
-    def test_reconcile_journal_alerts_never_matches_manual_or_structural_rows(self):
+    def test_reconcile_journal_alerts_never_updates_manual_rows(self):
         now = datetime.now(timezone.utc)
-        conn = _FakeJournalConnection(rows=[
-            {
-                "id": 1, "source": "manual", "source_key": None, "ticker": "GC=F",
-                "label": "manual gold alert", "condition": "below", "threshold": 4200.0,
-                "pinned": True, "enabled": True, "archived_at": None,
-                "recurrence_count": 1, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
-            },
-            {
-                "id": 2, "source": "key_levels_watch", "source_key": "watch:GC=F:support", "ticker": "GC=F",
-                "label": "Support: GC=F below 4200", "condition": "below", "threshold": 4200.0,
-                "pinned": False, "enabled": True, "archived_at": None,
-                "recurrence_count": 1, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
-            },
-        ], next_id=3)
+        conn = _FakeJournalConnection(rows=[{
+            "id": 1, "source": "manual", "source_key": None, "ticker": "GC=F",
+            "label": "manual gold alert", "condition": "below", "threshold": 4200.0,
+            "pinned": True, "enabled": True, "archived_at": None,
+            "recurrence_count": 1, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
+        }], next_id=2)
 
         with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
             from morning_brief.alert_compiler import reconcile_journal_alerts
@@ -438,10 +439,33 @@ class AlertCompilerTests(unittest.TestCase):
                 {"ticker": "GC=F", "condition": "below", "threshold": 4195, "label": "Gold re-entry"},
             ])
 
-        self.assertEqual(stats["created"], 1)  # new journal row, did not match the manual/structural ones
-        self.assertEqual(len(conn.db), 3)
+        # a manual alert at the same price doesn't block or absorb the new journal idea —
+        # only structural alerts do (manual intent is ambiguous, structural is authoritative)
+        self.assertEqual(stats["created"], 1)
+        self.assertEqual(stats["skipped_structural"], 0)
+        self.assertEqual(len(conn.db), 2)
         self.assertEqual(conn.db[0]["recurrence_count"], 1)  # manual row untouched
-        self.assertEqual(conn.db[1]["recurrence_count"], 1)  # structural row untouched
+
+    def test_reconcile_journal_alerts_skips_when_structural_alert_already_covers_it(self):
+        now = datetime.now(timezone.utc)
+        conn = _FakeJournalConnection(rows=[{
+            "id": 1, "source": "key_levels_watch", "source_key": "watch:GC=F:support", "ticker": "GC=F",
+            "label": "Support: GC=F below 4200", "condition": "below", "threshold": 4200.0,
+            "pinned": False, "enabled": True, "archived_at": None,
+            "recurrence_count": 1, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
+        }], next_id=2)
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import reconcile_journal_alerts
+            stats = reconcile_journal_alerts([
+                {"ticker": "GC=F", "condition": "below", "threshold": 4195, "label": "Gold re-entry"},
+            ])
+
+        # already covered structurally — no tactical shadow row gets created
+        self.assertEqual(stats["created"], 0)
+        self.assertEqual(stats["skipped_structural"], 1)
+        self.assertEqual(len(conn.db), 1)
+        self.assertEqual(conn.db[0]["recurrence_count"], 1)  # structural row untouched, not "matched" either
 
     def test_promotion_reclassifies_after_threshold_recurrences(self):
         now = datetime.now(timezone.utc)

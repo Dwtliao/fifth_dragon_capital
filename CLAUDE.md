@@ -133,6 +133,22 @@ cp scripts/com.fifthdragon.morning-brief.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.fifthdragon.morning-brief.plist
 ```
 
+### Alert Poller
+
+- **Script:** `scripts/alert_poller.sh`
+- **Plist:** `scripts/com.fifthdragon.alert-poller.plist`
+- **Schedule:** every 5 minutes, runs immediately on load too (`RunAtLoad`)
+- **Runs:** `python -m alerts.poller --once` — fires/re-arms `price_alerts` rows
+- **Logs:** `logs/alert_poller.log` (script's own output) + `logs/launchd_alert_poller.log`/`_error.log` (launchd, usually empty since the script redirects its own output)
+
+Added because the poller previously only ran via the manual "▶ Run Alert Poll" button in P7 — alerts could cross their threshold and never fire since nothing was checking prices in the background. `alerts/poller.py` itself is untouched, per the do-not-modify rule — this is purely an operational wrapper.
+
+**To install:**
+```bash
+cp scripts/com.fifthdragon.alert-poller.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.fifthdragon.alert-poller.plist
+```
+
 ---
 
 ## DB Connection

@@ -9,10 +9,6 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dotenv import load_dotenv
-from morning_brief.fetchers import (
-    fetch_positions_from_db, sync_positions_from_db,
-    load_key_levels_from_db, save_key_levels_to_db,
-)
 
 st.set_page_config(page_title="Morning Brief — Fifth Dragon Capital", layout="wide")
 st.title("Morning Brief")
@@ -21,8 +17,29 @@ PROJECT_ROOT  = Path(__file__).parent.parent.parent
 DEFAULT_DIARY = Path.home() / "Library/CloudStorage/Dropbox/Etrade/trading_diary"
 
 load_dotenv(PROJECT_ROOT / ".env")
+from morning_brief.alert_compiler import reconcile_structural_alerts
+from morning_brief.fetchers import (
+    fetch_positions_from_db, sync_positions_from_db,
+    load_key_levels_from_db, save_key_levels_to_db,
+)
+
 diary      = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
 brief_path = diary / "morning_brief.md"
+
+
+def _save_levels_and_refresh_alerts(key_levels: dict) -> dict:
+    save_key_levels_to_db(key_levels)
+    try:
+        return reconcile_structural_alerts(key_levels)
+    except Exception as exc:
+        return {
+            "created": 0,
+            "updated": 0,
+            "archived": 0,
+            "deduped": 0,
+            "backfilled": 0,
+            "error": str(exc),
+        }
 
 
 def _run_brief() -> str:
@@ -43,7 +60,7 @@ if brief_path.exists():
 if st.sidebar.button("▶ Run Morning Pipeline", type="primary", use_container_width=True,
                      help="1) Sync latest journal (if updated)  2) Generate morning brief"):
     diary   = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
-    journals = sorted(diary.glob("trading_journal_*.md"))
+    journals = sorted(diary.glob("trading_journal_*.md"), key=lambda p: p.stat().st_mtime)
     output_lines = []
 
     # Step 1: sync latest journal if it exists
@@ -80,7 +97,7 @@ if st.sidebar.button("▶ Brief only", use_container_width=True,
 if st.sidebar.button("🔄 Sync Latest Journal", use_container_width=True,
                      help="Extract stops/levels/alerts from latest journal via Claude API"):
     diary = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
-    journals = sorted(diary.glob("trading_journal_*.md"))
+    journals = sorted(diary.glob("trading_journal_*.md"), key=lambda p: p.stat().st_mtime)
     if not journals:
         st.sidebar.error("No journal files found.")
     else:
@@ -102,10 +119,26 @@ if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
         kl = load_key_levels_from_db()
         updated, added, removed = sync_positions_from_db(kl)
         save_key_levels_to_db(updated)
+        try:
+            compiler_stats = reconcile_structural_alerts(updated)
+        except Exception as exc:
+            compiler_stats = {
+                "created": 0,
+                "updated": 0,
+                "archived": 0,
+                "deduped": 0,
+                "backfilled": 0,
+                "error": str(exc),
+            }
         msgs = []
         if added:   msgs.append(f"Added: {', '.join(added)}")
         if removed: msgs.append(f"Removed: {', '.join(removed)}")
         if not msgs: msgs.append("Already in sync.")
+        msgs.append(
+            "Alerts: "
+            f"created={compiler_stats['created']} updated={compiler_stats['updated']} "
+            f"archived={compiler_stats['archived']} deduped={compiler_stats['deduped']}"
+        )
         st.sidebar.success("\n".join(msgs))
         st.rerun()
     except RuntimeError as e:
@@ -149,6 +182,17 @@ with tab_levels:
         "Edit stops, levels, and notes below. "
         "Click **💾 Save** on any row to persist, or use **💾 Save All** at the bottom."
     )
+
+    flash = st.session_state.pop("p10_save_all_flash", None)
+    if flash:
+        level = flash.get("level", "success")
+        message = flash.get("message", "")
+        if level == "error":
+            st.error(message)
+        elif level == "warning":
+            st.warning(message)
+        else:
+            st.success(message)
 
     kl = load_key_levels_from_db()
 
@@ -213,7 +257,7 @@ with tab_levels:
                         entry["note"] = new_note.strip()
                     new_positions[new_ticker] = entry
                     kl["positions"] = new_positions
-                    save_key_levels_to_db(kl)
+                    _save_levels_and_refresh_alerts(kl)
                     st.success(f"Added {new_ticker}.")
                     st.rerun()
 
@@ -265,36 +309,33 @@ with tab_levels:
                     if wn.strip(): entry["note"]    = wn.strip()
                     new_watch[wt] = entry
                     kl["watch"] = new_watch
-                    save_key_levels_to_db(kl)
+                    _save_levels_and_refresh_alerts(kl)
                     st.success(f"Added {wt}.")
                     st.rerun()
 
     st.divider()
 
     if st.button("💾 Save All", type="primary"):
-        save_key_levels_to_db({"positions": new_positions, "watch": new_watch})
-
-        # Auto-sync alert_above → price_alerts; delete old then insert so threshold stays current
-        from dashboard.db import execute as db_execute
+        compiler_stats = _save_levels_and_refresh_alerts({"positions": new_positions, "watch": new_watch})
         synced = []
         for ticker, vals in new_watch.items():
             alert_above = vals.get("alert_above")
-            if not alert_above or alert_above <= 0:
-                continue
-            db_execute(
-                "DELETE FROM price_alerts WHERE ticker = %s AND condition = 'above' AND label LIKE 'Watch: %%'",
-                (ticker,)
-            )
-            db_execute(
-                "INSERT INTO price_alerts (ticker, label, condition, threshold) VALUES (%s, %s, 'above', %s)",
-                (ticker, f"Watch: {ticker} above {alert_above}", alert_above)
-            )
-            synced.append(f"{ticker} > {alert_above}")
+            if alert_above and alert_above > 0:
+                synced.append(f"{ticker} > {alert_above}")
 
-        msg = "Key levels saved."
+        msg = "Key levels saved and structural alerts reconciled."
+        msg += (
+            " Alerts: "
+            f"created={compiler_stats['created']} updated={compiler_stats['updated']} "
+            f"archived={compiler_stats['archived']} deduped={compiler_stats['deduped']}"
+        )
+        if compiler_stats.get("backfilled"):
+            msg += f" backfilled={compiler_stats['backfilled']}"
+        if compiler_stats.get("error"):
+            msg += f" alert refresh error={compiler_stats['error']}"
         if synced:
-            msg += f"  Also pushed to Price Alerts: {', '.join(synced)}"
-        st.success(msg)
+            msg += f"  Active watch levels: {', '.join(synced)}"
+        st.session_state["p10_save_all_flash"] = {"level": "success", "message": msg}
         st.rerun()
 
 

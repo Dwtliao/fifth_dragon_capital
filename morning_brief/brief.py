@@ -31,6 +31,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
 
+from morning_brief.alert_compiler import prune_expired_alerts, refresh_structural_alerts_from_db
 from morning_brief import fetchers, formatter
 
 # ── paths ─────────────────────────────────────────────────────────────────────
@@ -162,6 +163,19 @@ def main() -> None:
     latest, archive = save_brief(brief_md)
     print(f"✅ Brief saved → {latest}", file=sys.stderr)
     print(f"   Archive     → {archive}", file=sys.stderr)
+
+    try:
+        compiler_stats = refresh_structural_alerts_from_db()
+        expired = prune_expired_alerts()
+        print(
+            "   Alerts      → "
+            f"created={compiler_stats['created']} updated={compiler_stats['updated']} "
+            f"archived={compiler_stats['archived']} deduped={compiler_stats['deduped']} "
+            f"backfilled={compiler_stats.get('backfilled', 0)} expired_pruned={expired}",
+            file=sys.stderr,
+        )
+    except Exception as exc:
+        print(f"   Alerts      → refresh failed: {exc}", file=sys.stderr)
 
     if args.print:
         print(brief_md)

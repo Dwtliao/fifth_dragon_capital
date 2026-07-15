@@ -21,10 +21,17 @@ st.title("Market Monitor")
 st.header("Price Alerts")
 st.caption("Alerts fire once when the threshold is crossed, then re-arm when price moves back. Run `python -m alerts.poller` to start the background poller.")
 
-alerts = query("SELECT id, ticker, label, condition, threshold::float, enabled, triggered, last_fired_at FROM price_alerts ORDER BY id")
+alerts = query(f"""
+    SELECT id, ticker, label, condition, threshold::float, enabled, triggered,
+           last_fired_at, archived_at, source, tier, pinned
+    FROM price_alerts
+    ORDER BY id
+""")
 
 if alerts:
     def _status(a):
+        if a.get("archived_at"):
+            return "📦 Archived"
         if not a["enabled"]:
             return "⚫ Disabled"
         if a["triggered"]:
@@ -61,8 +68,9 @@ with col_add:
                 st.error("Ticker is required.")
             else:
                 execute("""
-                    INSERT INTO price_alerts (ticker, label, condition, threshold)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO price_alerts
+                        (ticker, label, condition, threshold, source, source_key, tier, pinned)
+                    VALUES (%s, %s, %s, %s, 'manual', NULL, 2, TRUE)
                 """, (ticker_in.strip().upper(), label_in.strip() or None, condition_in, threshold_in))
                 st.success(f"Alert added: {ticker_in.strip().upper()} {condition_in} {threshold_in:,.2f}")
                 st.rerun()
@@ -94,9 +102,9 @@ with col_manage:
         if m2.button("Enable" if not chosen["enabled"] else "Disable", use_container_width=True):
             execute("UPDATE price_alerts SET enabled = %s WHERE id = %s", (not chosen["enabled"], chosen["id"]))
             st.rerun()
-        if m3.button("Re-arm", use_container_width=True, help="Reset triggered state so alert can fire again"):
+        if m3.button("Clear Trigger", use_container_width=True, help="Clear the fired state so an enabled alert can fire again"):
             execute("UPDATE price_alerts SET triggered = FALSE WHERE id = %s", (chosen["id"],))
-            st.success("Alert re-armed.")
+            st.success("Trigger cleared.")
             st.rerun()
         if m4.button("Delete", use_container_width=True, type="secondary"):
             execute("DELETE FROM price_alerts WHERE id = %s", (chosen["id"],))

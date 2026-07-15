@@ -431,7 +431,7 @@ def save_key_levels_to_db(key_levels: dict) -> None:
         conn.close()
 
 
-def sync_positions_from_db(key_levels: dict) -> tuple[dict, list[str], list[str]]:
+def fetch_fed_events() -> list:
     """
     Returns known/hardcoded near-term Fed events.
     In a future version this could scrape federalreserve.gov/meetings.htm.

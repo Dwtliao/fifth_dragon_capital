@@ -31,6 +31,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 import anthropic
 
 from etrade_sync.db import get_connection
+from morning_brief.alert_compiler import prune_expired_alerts, reconcile_journal_alerts, reconcile_structural_alerts
 from morning_brief.fetchers import load_key_levels_from_db, save_key_levels_to_db
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -87,7 +88,7 @@ def extract_from_journal(text: str) -> dict:
     client = anthropic.Anthropic()
     message = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=1024,
+        max_tokens=4096,
         messages=[{"role": "user", "content": EXTRACTION_PROMPT + text}],
     )
     raw = message.content[0].text.strip()
@@ -142,27 +143,6 @@ def _log_sync(file_path: str, mtime: float, counts: dict, dry_run: bool, extract
         conn.close()
 
 
-def _upsert_alert(ticker: str, condition: str, threshold: float, label: str) -> bool:
-    """Insert alert if no identical one exists. Returns True if inserted."""
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id FROM price_alerts
-                WHERE ticker = %s AND condition = %s AND threshold = %s
-            """, (ticker, condition, threshold))
-            if cur.fetchone():
-                return False
-            cur.execute("""
-                INSERT INTO price_alerts (ticker, label, condition, threshold)
-                VALUES (%s, %s, %s, %s)
-            """, (ticker, label or None, condition, threshold))
-        conn.commit()
-        return True
-    finally:
-        conn.close()
-
-
 # ── apply extraction to DB ────────────────────────────────────────────────────
 
 def apply_extraction(extracted: dict, dry_run: bool = False) -> dict:
@@ -203,6 +183,8 @@ def apply_extraction(extracted: dict, dry_run: bool = False) -> dict:
     if not dry_run and (counts["positions"] or counts["watch"]):
         save_key_levels_to_db(kl)
 
+    journal_alerts = []
+
     # ── price alerts ───────────────────────────────────────────────────────────
     for alert in extracted.get("price_alerts") or []:
         ticker    = str(alert.get("ticker", "")).strip()
@@ -212,10 +194,41 @@ def apply_extraction(extracted: dict, dry_run: bool = False) -> dict:
         if not ticker or condition not in ("above", "below") or threshold is None:
             continue
         print(f"  alert: {ticker} {condition} {threshold}  [{label}]")
-        if not dry_run:
-            inserted = _upsert_alert(ticker, condition, float(threshold), label)
-            if inserted:
-                counts["alerts"] += 1
+        journal_alerts.append({
+            "ticker": ticker,
+            "condition": condition,
+            "threshold": float(threshold),
+            "label": label,
+        })
+        counts["alerts"] += 1
+
+    if not dry_run:
+        structural_stats = {"created": 0, "updated": 0, "archived": 0, "deduped": 0}
+        journal_stats = {"created": 0, "updated": 0, "archived": 0, "deduped": 0}
+        try:
+            if counts["positions"] or counts["watch"]:
+                structural_stats = reconcile_structural_alerts(kl)
+        except Exception as exc:
+            print(f"  compiler: structural alert refresh failed: {exc}")
+        try:
+            if journal_alerts:
+                journal_stats = reconcile_journal_alerts(journal_alerts)
+        except Exception as exc:
+            print(f"  compiler: journal alert refresh failed: {exc}")
+        try:
+            expired = prune_expired_alerts()
+        except Exception as exc:
+            expired = 0
+            print(f"  compiler: expired alert pruning failed: {exc}")
+        print(
+            "  compiler: "
+            f"structural created={structural_stats['created']} updated={structural_stats['updated']} "
+            f"archived={structural_stats['archived']} deduped={structural_stats['deduped']} "
+            f"backfilled={structural_stats.get('backfilled', 0)}; "
+            f"journal created={journal_stats['created']} updated={journal_stats['updated']} "
+            f"archived={journal_stats['archived']} deduped={journal_stats['deduped']} "
+            f"expired_pruned={expired}"
+        )
 
     return counts
 

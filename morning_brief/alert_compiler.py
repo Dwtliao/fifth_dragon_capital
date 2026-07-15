@@ -16,6 +16,18 @@ from etrade_sync.db import get_connection
 MANAGED_SOURCES = ("key_levels_watch", "journal_sync")
 DEFAULT_JOURNAL_ALERT_TTL_DAYS = 21
 
+# Two journal mentions of the same ticker+condition count as the same idea when
+# their thresholds are within this band of each other. Percentage-based so it
+# scales across asset prices, clamped so it's neither too loose on high-priced
+# futures nor too tight on cheap stocks.
+JOURNAL_MATCH_PCT = 0.01
+JOURNAL_MATCH_MIN_ABS = 0.05
+JOURNAL_MATCH_MAX_ABS = 25.0
+
+# Recurrences (distinct sync runs matching the same journal idea) required
+# before it gets promoted from a tactical journal alert into a structural one.
+PROMOTION_RECURRENCE_THRESHOLD = 3
+
 
 def _utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
@@ -137,11 +149,15 @@ def build_structural_alerts(key_levels: dict) -> list[dict]:
     return desired
 
 
-def build_journal_alerts(alerts: list[dict], ttl_days: int = DEFAULT_JOURNAL_ALERT_TTL_DAYS) -> list[dict]:
-    """Compile journal-derived alerts with a fixed source key per ticker/condition."""
-    desired: list[dict] = []
-    seen: set[tuple[str, str]] = set()
-    expires_at = _utcnow() + dt.timedelta(days=ttl_days)
+def build_journal_alerts(alerts: list[dict]) -> list[dict]:
+    """Normalize raw journal extraction into candidate alerts.
+
+    No dedup/keying here — matching against existing tactical journal alerts
+    (same idea vs. a genuinely new one) happens per-candidate in
+    `upsert_journal_alert`, since it depends on live DB state (tolerance
+    against an existing row's threshold), not just this batch.
+    """
+    candidates: list[dict] = []
 
     for alert in alerts or []:
         ticker = str(alert.get("ticker") or "").strip().upper()
@@ -154,19 +170,88 @@ def build_journal_alerts(alerts: list[dict], ttl_days: int = DEFAULT_JOURNAL_ALE
         if not label:
             label = f"Journal: {ticker} {condition} {_format_threshold(threshold)}"
 
-        _append_unique(desired, seen, {
-            "source": "journal_sync",
-            "source_key": f"journal:{ticker}:{condition}",
-            "tier": 3,
+        candidates.append({
             "ticker": ticker,
-            "label": label,
             "condition": condition,
             "threshold": threshold,
-            "expires_at": expires_at,
-            "pinned": False,
+            "label": label,
+            "tier": 3,
         })
 
-    return desired
+    return candidates
+
+
+def _journal_match_tolerance(threshold: float) -> float:
+    band = abs(threshold) * JOURNAL_MATCH_PCT
+    return min(max(band, JOURNAL_MATCH_MIN_ABS), JOURNAL_MATCH_MAX_ABS)
+
+
+def _find_matching_journal_alert(cur, ticker: str, condition: str, threshold: float) -> dict | None:
+    """Return the most-recently-refreshed active, non-pinned journal alert within tolerance, if any."""
+    cur.execute(
+        """
+        SELECT id, ticker, label, condition, threshold::float, tier, expires_at,
+               pinned, enabled, archived_at, source_key, recurrence_count,
+               first_seen_at, last_seen_at, refreshed_at
+        FROM price_alerts
+        WHERE source = 'journal_sync'
+          AND pinned = FALSE
+          AND enabled = TRUE
+          AND archived_at IS NULL
+          AND ticker = %s
+          AND condition = %s
+        ORDER BY refreshed_at DESC NULLS LAST, id DESC
+        """,
+        (ticker, condition),
+    )
+    cols = [d.name for d in cur.description]
+    for row in cur.fetchall():
+        candidate = dict(zip(cols, row))
+        if abs(candidate["threshold"] - threshold) <= _journal_match_tolerance(candidate["threshold"]):
+            return candidate
+    return None
+
+
+def upsert_journal_alert(
+    cur, ticker: str, condition: str, threshold: float, label: str,
+    *, ttl_days: int = DEFAULT_JOURNAL_ALERT_TTL_DAYS,
+) -> str:
+    """Match against existing tactical journal alerts within tolerance; update in place or start a new idea."""
+    now = _utcnow()
+    expires_at = now + dt.timedelta(days=ttl_days)
+    existing = _find_matching_journal_alert(cur, ticker, condition, threshold)
+
+    if existing is None:
+        source_key = f"journal:{ticker}:{condition}:{now.strftime('%Y%m%dT%H%M%S%f')}"
+        cur.execute(
+            """
+            INSERT INTO price_alerts
+                (ticker, label, condition, threshold, source, source_key, tier,
+                 expires_at, pinned, refreshed_at, enabled, archived_at, triggered,
+                 recurrence_count, first_seen_at, last_seen_at)
+            VALUES
+                (%s, %s, %s, %s, 'journal_sync', %s, 3,
+                 %s, FALSE, %s, TRUE, NULL, FALSE,
+                 1, %s, %s)
+            """,
+            (ticker, label or None, condition, threshold, source_key, expires_at, now, now, now),
+        )
+        return "created"
+
+    cur.execute(
+        """
+        UPDATE price_alerts
+        SET label = %s,
+            threshold = %s,
+            expires_at = %s,
+            refreshed_at = %s,
+            last_seen_at = %s,
+            recurrence_count = recurrence_count + 1
+        WHERE id = %s
+        """,
+        (label or None, threshold, expires_at, now, now, existing["id"]),
+    )
+    return "updated"
 
 
 def _load_managed_alerts(cur, sources: tuple[str, ...]) -> list[dict]:
@@ -455,11 +540,128 @@ def reconcile_structural_alerts(key_levels: dict, *, dry_run: bool = False) -> d
     return stats
 
 
-def reconcile_journal_alerts(alerts: list[dict], *, dry_run: bool = False) -> dict:
-    """Reconcile journal-derived alerts."""
-    return reconcile_alerts(
-        build_journal_alerts(alerts), dry_run=dry_run, archive_missing=False, sources=("journal_sync",)
-    )
+def reconcile_journal_alerts(
+    alerts: list[dict], *, dry_run: bool = False, ttl_days: int = DEFAULT_JOURNAL_ALERT_TTL_DAYS,
+) -> dict:
+    """Match/refresh journal-derived alerts in place, then promote recurring ideas."""
+    candidates = build_journal_alerts(alerts)
+    stats = {"created": 0, "updated": 0, "promoted": 0, "desired": len(candidates)}
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            for alert in candidates:
+                action = upsert_journal_alert(
+                    cur, alert["ticker"], alert["condition"], alert["threshold"], alert["label"],
+                    ttl_days=ttl_days,
+                )
+                stats[action] += 1
+
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+    finally:
+        conn.close()
+
+    stats["promoted"] = promote_recurring_journal_alerts(dry_run=dry_run)
+    return stats
+
+
+def promote_recurring_journal_alerts(
+    *, threshold: int = PROMOTION_RECURRENCE_THRESHOLD, dry_run: bool = False,
+) -> int:
+    """Move journal alerts that have recurred `threshold`+ times into structural (key_levels_watch) alerts."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT source_key, ticker, condition
+                FROM price_alerts
+                WHERE source = 'journal_sync'
+                  AND pinned = FALSE
+                  AND enabled = TRUE
+                  AND archived_at IS NULL
+                  AND recurrence_count >= %s
+                """,
+                (threshold,),
+            )
+            cols = [d.name for d in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+    promoted = 0
+    for row in rows:
+        field = "resistance" if row["condition"] == "above" else "support"
+        new_key = f"watch:{row['ticker']}:{field}"
+
+        if _structural_row_exists(new_key):
+            # key_levels.yml already has a structural belief at this ticker/field — it's
+            # regenerated fresh from the YAML on every reconcile, so overwriting its
+            # threshold here would just get reverted on the next brief.py/Save All run.
+            # The recurring journal idea has effectively already been captured
+            # structurally, so retire the tactical duplicate instead of colliding with it.
+            _archive_by_source_key("journal_sync", row["source_key"], dry_run=dry_run)
+            promoted += 1
+            continue
+
+        if reclassify(
+            "journal_sync", row["source_key"], "key_levels_watch", new_key,
+            tier=2, dry_run=dry_run,
+        ):
+            # reclassify() only overrides fields you pass a non-None value for, so it
+            # can't be used to clear expires_at — structural alerts must be long-lived,
+            # not keep carrying the journal TTL they were promoted from.
+            _clear_expires_at(new_key, dry_run=dry_run)
+            promoted += 1
+    return promoted
+
+
+def _structural_row_exists(source_key: str) -> bool:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM price_alerts WHERE source = 'key_levels_watch' AND source_key = %s LIMIT 1",
+                (source_key,),
+            )
+            return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def _archive_by_source_key(source: str, source_key: str, *, dry_run: bool = False) -> None:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM price_alerts WHERE source = %s AND source_key = %s", (source, source_key))
+            row = cur.fetchone()
+            if row:
+                _archive_alert(cur, row[0])
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def _clear_expires_at(source_key: str, *, dry_run: bool = False) -> None:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE price_alerts SET expires_at = NULL WHERE source = 'key_levels_watch' AND source_key = %s",
+                (source_key,),
+            )
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+    finally:
+        conn.close()
 
 
 def refresh_structural_alerts_from_db(*, dry_run: bool = False) -> dict:

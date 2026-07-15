@@ -91,6 +91,149 @@ class _FakeConnection:
         pass
 
 
+class _FakeJournalCursor:
+    """Stateful fake supporting the journal match/upsert/promote/reclassify query surface."""
+
+    def __init__(self, db, next_id):
+        self.db = db
+        self.next_id = next_id
+        self.executed = []
+        self.description = []
+        self._fetchall_rows = []
+        self._fetchone_row = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+        sql_l = " ".join(sql.lower().split())
+
+        if sql_l.startswith(
+            "select id, ticker, label, condition, threshold::float, tier, expires_at, "
+            "pinned, enabled, archived_at, source_key, recurrence_count, first_seen_at, last_seen_at, refreshed_at "
+            "from price_alerts where source = 'journal_sync'"
+        ):
+            ticker, condition = params
+            rows = [
+                r for r in self.db
+                if r["source"] == "journal_sync" and not r["pinned"] and r["enabled"]
+                and r["archived_at"] is None and r["ticker"] == ticker and r["condition"] == condition
+            ]
+            rows.sort(key=lambda r: (r["refreshed_at"] or datetime.min.replace(tzinfo=timezone.utc), r["id"]), reverse=True)
+            cols = ["id", "ticker", "label", "condition", "threshold", "tier", "expires_at",
+                    "pinned", "enabled", "archived_at", "source_key", "recurrence_count",
+                    "first_seen_at", "last_seen_at", "refreshed_at"]
+            self.description = [_Col(c) for c in cols]
+            self._fetchall_rows = [tuple(r.get(c) for c in cols) for r in rows]
+
+        elif sql_l.startswith("insert into price_alerts"):
+            ticker, label, condition, threshold, source_key, expires_at, refreshed_at, first_seen_at, last_seen_at = params
+            row = {
+                "id": self.next_id, "ticker": ticker, "label": label, "condition": condition,
+                "threshold": threshold, "source": "journal_sync", "source_key": source_key,
+                "tier": 3, "expires_at": expires_at, "pinned": False, "refreshed_at": refreshed_at,
+                "enabled": True, "archived_at": None, "triggered": False,
+                "recurrence_count": 1, "first_seen_at": first_seen_at, "last_seen_at": last_seen_at,
+            }
+            self.db.append(row)
+            self.next_id += 1
+
+        elif sql_l.startswith("update price_alerts set label = %s, threshold = %s"):
+            label, threshold, expires_at, refreshed_at, last_seen_at, row_id = params
+            for r in self.db:
+                if r["id"] == row_id:
+                    r.update(label=label, threshold=threshold, expires_at=expires_at,
+                              refreshed_at=refreshed_at, last_seen_at=last_seen_at)
+                    r["recurrence_count"] += 1
+
+        elif sql_l.startswith("select source_key, ticker, condition from price_alerts where source = 'journal_sync'"):
+            (min_recurrence,) = params
+            rows = [
+                r for r in self.db
+                if r["source"] == "journal_sync" and not r["pinned"] and r["enabled"]
+                and r["archived_at"] is None and r["recurrence_count"] >= min_recurrence
+            ]
+            cols = ["source_key", "ticker", "condition"]
+            self.description = [_Col(c) for c in cols]
+            self._fetchall_rows = [tuple(r.get(c) for c in cols) for r in rows]
+
+        elif sql_l.startswith("select id, ticker, label, condition, threshold::float, tier, expires_at, pinned, enabled, archived_at from price_alerts where source = %s and source_key = %s"):
+            source, source_key = params
+            matches = [r for r in self.db if r["source"] == source and r["source_key"] == source_key]
+            matches.sort(key=lambda r: r["id"], reverse=True)
+            cols = ["id", "ticker", "label", "condition", "threshold", "tier", "expires_at", "pinned", "enabled", "archived_at"]
+            self._fetchone_row = tuple(matches[0].get(c) for c in cols) if matches else None
+            self.description = [_Col(c) for c in cols]
+
+        elif sql_l.startswith("update price_alerts set source = %s, source_key = %s"):
+            (source, source_key, ticker, label, condition, threshold, tier,
+             expires_at, pinned, refreshed_at, row_id) = params
+            for r in self.db:
+                if r["id"] == row_id:
+                    r.update(source=source, source_key=source_key, ticker=ticker, label=label,
+                              condition=condition, threshold=threshold, tier=tier, expires_at=expires_at,
+                              pinned=pinned, refreshed_at=refreshed_at, enabled=True, archived_at=None,
+                              triggered=False)
+
+        elif sql_l.startswith("update price_alerts set expires_at = null where source = 'key_levels_watch'"):
+            (source_key,) = params
+            for r in self.db:
+                if r["source"] == "key_levels_watch" and r["source_key"] == source_key:
+                    r["expires_at"] = None
+
+        elif sql_l.startswith("select 1 from price_alerts where source = 'key_levels_watch' and source_key = %s"):
+            (source_key,) = params
+            self._fetchone_row = (1,) if any(
+                r["source"] == "key_levels_watch" and r["source_key"] == source_key for r in self.db
+            ) else None
+
+        elif sql_l.startswith("select id from price_alerts where source = %s and source_key = %s"):
+            source, source_key = params
+            matches = [r for r in self.db if r["source"] == source and r["source_key"] == source_key]
+            self._fetchone_row = (matches[0]["id"],) if matches else None
+
+        elif sql_l.startswith("update price_alerts set enabled = false, triggered = false, archived_at = %s, refreshed_at = %s where id = %s"):
+            archived_at, refreshed_at, row_id = params
+            for r in self.db:
+                if r["id"] == row_id:
+                    r.update(enabled=False, triggered=False, archived_at=archived_at, refreshed_at=refreshed_at)
+
+    def fetchall(self):
+        return self._fetchall_rows
+
+    def fetchone(self):
+        return self._fetchone_row
+
+
+class _FakeJournalConnection:
+    """Shares one mutable row list across every get_connection() call in a test."""
+
+    def __init__(self, rows=None, next_id=1):
+        self.db = rows if rows is not None else []
+        self.next_id = next_id
+        self.committed = False
+        self.rolled_back = False
+
+    @contextmanager
+    def cursor(self):
+        cur = _FakeJournalCursor(self.db, self.next_id)
+        yield cur
+        self.next_id = cur.next_id
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
+
+    def close(self):
+        pass
+
+
 class AlertCompilerTests(unittest.TestCase):
     def test_build_structural_alerts_compiles_all_structural_sources(self):
         key_levels = {
@@ -126,50 +269,174 @@ class AlertCompilerTests(unittest.TestCase):
         self.assertIn("hold", by_key["position:AAPL:stop"]["label"])
         self.assertIn("watch", by_key["watch:SPY:alert_above"]["label"])
 
-    def test_build_journal_alerts_uses_stable_key_and_ttl(self):
+    def test_build_journal_alerts_normalizes_without_keying(self):
         alerts = build_journal_alerts([
             {"ticker": "NQ=F", "condition": "above", "threshold": 30200, "label": "Breakout"},
+            {"ticker": "bad", "condition": "sideways", "threshold": 1},  # invalid condition, dropped
         ])
 
         self.assertEqual(len(alerts), 1)
         alert = alerts[0]
-        self.assertEqual(alert["source_key"], "journal:NQ=F:above")
+        self.assertNotIn("source_key", alert)
+        self.assertNotIn("expires_at", alert)
+        self.assertEqual(alert["ticker"], "NQ=F")
         self.assertEqual(alert["tier"], 3)
         self.assertEqual(alert["condition"], "above")
         self.assertEqual(alert["threshold"], 30200.0)
+        self.assertEqual(alert["label"], "Breakout")
 
-        now = datetime.now(timezone.utc)
-        self.assertGreater(alert["expires_at"], now)
-        self.assertLess(alert["expires_at"], now + timedelta(days=22))
+    def test_journal_match_tolerance_is_percent_clamped(self):
+        from morning_brief.alert_compiler import _journal_match_tolerance, JOURNAL_MATCH_MIN_ABS, JOURNAL_MATCH_MAX_ABS
 
-    def test_journal_reconcile_does_not_archive_missing_rows(self):
-        now = datetime.now(timezone.utc)
-        conn = _FakeConnection(managed_rows=[{
-            "id": 1,
-            "source": "journal_sync",
-            "source_key": "journal:GC=F:below",
-            "ticker": "GC=F",
-            "label": "old",
-            "condition": "below",
-            "threshold": 4200.0,
-            "enabled": True,
-            "triggered": False,
-            "tier": 3,
-            "expires_at": now + timedelta(days=10),
-            "archived_at": None,
-            "pinned": False,
-        }])
+        # cheap stock: 1% would be tiny, clamped up to the floor
+        self.assertAlmostEqual(_journal_match_tolerance(2.0), JOURNAL_MATCH_MIN_ABS)
+        # expensive future: 1% would be huge, clamped down to the ceiling
+        self.assertAlmostEqual(_journal_match_tolerance(30000.0), JOURNAL_MATCH_MAX_ABS)
+        # mid-range: plain 1%
+        self.assertAlmostEqual(_journal_match_tolerance(1000.0), 10.0)
+
+    def test_reconcile_journal_alerts_updates_recurrence_within_tolerance(self):
+        conn = _FakeJournalConnection()
 
         with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
             from morning_brief.alert_compiler import reconcile_journal_alerts
-            stats = reconcile_journal_alerts([])
 
-        self.assertEqual(stats["archived"], 0)
-        self.assertEqual(stats["created"], 0)
-        self.assertEqual(stats["updated"], 0)
-        sql_text = "\n".join(sql for sql, _ in conn.cursor_obj.executed).lower()
-        self.assertNotIn("set enabled = false", sql_text)
-        self.assertTrue(conn.committed)
+            stats1 = reconcile_journal_alerts([
+                {"ticker": "GC=F", "condition": "below", "threshold": 4200, "label": "Gold re-entry"},
+            ])
+            self.assertEqual(stats1["created"], 1)
+            self.assertEqual(stats1["updated"], 0)
+            self.assertEqual(len(conn.db), 1)
+            self.assertEqual(conn.db[0]["recurrence_count"], 1)
+
+            # same idea, slightly different threshold (within 1% band, well under $25 clamp)
+            stats2 = reconcile_journal_alerts([
+                {"ticker": "GC=F", "condition": "below", "threshold": 4180, "label": "Gold re-entry (updated)"},
+            ])
+            self.assertEqual(stats2["created"], 0)
+            self.assertEqual(stats2["updated"], 1)
+            self.assertEqual(len(conn.db), 1)  # still one row, matched not duplicated
+            self.assertEqual(conn.db[0]["recurrence_count"], 2)
+            self.assertEqual(conn.db[0]["threshold"], 4180.0)
+
+    def test_reconcile_journal_alerts_creates_new_row_outside_tolerance(self):
+        conn = _FakeJournalConnection()
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import reconcile_journal_alerts
+
+            reconcile_journal_alerts([
+                {"ticker": "CL=F", "condition": "above", "threshold": 80, "label": "Resistance"},
+            ])
+            # 83 vs 80 is $3 away — beyond the $25 max clamp band? No: 1% of 80 = 0.80,
+            # clamped up to the $0.05 floor... clamp min applies only when pct is too small.
+            # 1% of 80 = 0.80 (already above the floor), so anything beyond ~$0.80 is a new idea.
+            stats2 = reconcile_journal_alerts([
+                {"ticker": "CL=F", "condition": "above", "threshold": 83, "label": "Breakout above resistance cluster"},
+            ])
+
+        self.assertEqual(stats2["created"], 1)
+        self.assertEqual(stats2["updated"], 0)
+        self.assertEqual(len(conn.db), 2)  # two distinct ideas, not merged
+
+    def test_reconcile_journal_alerts_never_matches_manual_or_structural_rows(self):
+        now = datetime.now(timezone.utc)
+        conn = _FakeJournalConnection(rows=[
+            {
+                "id": 1, "source": "manual", "source_key": None, "ticker": "GC=F",
+                "label": "manual gold alert", "condition": "below", "threshold": 4200.0,
+                "pinned": True, "enabled": True, "archived_at": None,
+                "recurrence_count": 1, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
+            },
+            {
+                "id": 2, "source": "key_levels_watch", "source_key": "watch:GC=F:support", "ticker": "GC=F",
+                "label": "Support: GC=F below 4200", "condition": "below", "threshold": 4200.0,
+                "pinned": False, "enabled": True, "archived_at": None,
+                "recurrence_count": 1, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
+            },
+        ], next_id=3)
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import reconcile_journal_alerts
+            stats = reconcile_journal_alerts([
+                {"ticker": "GC=F", "condition": "below", "threshold": 4195, "label": "Gold re-entry"},
+            ])
+
+        self.assertEqual(stats["created"], 1)  # new journal row, did not match the manual/structural ones
+        self.assertEqual(len(conn.db), 3)
+        self.assertEqual(conn.db[0]["recurrence_count"], 1)  # manual row untouched
+        self.assertEqual(conn.db[1]["recurrence_count"], 1)  # structural row untouched
+
+    def test_promotion_reclassifies_after_threshold_recurrences(self):
+        now = datetime.now(timezone.utc)
+        conn = _FakeJournalConnection(rows=[{
+            "id": 5, "source": "journal_sync", "source_key": "journal:XLE:above:20260101T000000000000",
+            "ticker": "XLE", "label": "XLE breakout", "condition": "above", "threshold": 58.0,
+            "pinned": False, "enabled": True, "archived_at": None,
+            "recurrence_count": 3, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
+            "expires_at": now + timedelta(days=10),
+        }], next_id=6)
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import promote_recurring_journal_alerts
+            promoted = promote_recurring_journal_alerts()
+
+        self.assertEqual(promoted, 1)
+        row = conn.db[0]
+        self.assertEqual(row["source"], "key_levels_watch")
+        self.assertEqual(row["source_key"], "watch:XLE:resistance")
+        self.assertEqual(row["tier"], 2)
+        self.assertIsNone(row["expires_at"])  # TTL cleared on promotion — structural alerts are long-lived
+
+    def test_promotion_archives_journal_alert_instead_of_colliding_with_existing_structural(self):
+        now = datetime.now(timezone.utc)
+        conn = _FakeJournalConnection(rows=[
+            {
+                "id": 5, "source": "journal_sync", "source_key": "journal:XLE:above:x",
+                "ticker": "XLE", "label": "XLE breakout", "condition": "above", "threshold": 58.6,
+                "pinned": False, "enabled": True, "archived_at": None,
+                "recurrence_count": 3, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
+                "expires_at": now + timedelta(days=10),
+            },
+            {
+                # key_levels.yml already has a structural resistance alert at this slot
+                "id": 6, "source": "key_levels_watch", "source_key": "watch:XLE:resistance",
+                "ticker": "XLE", "label": "Resistance: XLE above 58", "condition": "above", "threshold": 58.0,
+                "pinned": False, "enabled": True, "archived_at": None,
+                "recurrence_count": 1, "first_seen_at": None, "last_seen_at": None, "refreshed_at": now,
+                "expires_at": None,
+            },
+        ], next_id=7)
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import promote_recurring_journal_alerts
+            promoted = promote_recurring_journal_alerts()
+
+        self.assertEqual(promoted, 1)
+        journal_row = next(r for r in conn.db if r["id"] == 5)
+        structural_row = next(r for r in conn.db if r["id"] == 6)
+        # journal duplicate retired, not merged into (structural stays authoritative from key_levels.yml)
+        self.assertFalse(journal_row["enabled"])
+        self.assertIsNotNone(journal_row["archived_at"])
+        self.assertEqual(journal_row["source"], "journal_sync")  # never reclassified — would've collided
+        self.assertEqual(structural_row["threshold"], 58.0)  # untouched
+
+    def test_promotion_leaves_alerts_below_threshold_alone(self):
+        now = datetime.now(timezone.utc)
+        conn = _FakeJournalConnection(rows=[{
+            "id": 7, "source": "journal_sync", "source_key": "journal:XLE:above:x",
+            "ticker": "XLE", "label": "XLE breakout", "condition": "above", "threshold": 58.0,
+            "pinned": False, "enabled": True, "archived_at": None,
+            "recurrence_count": 2, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
+            "expires_at": now + timedelta(days=10),
+        }], next_id=8)
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import promote_recurring_journal_alerts
+            promoted = promote_recurring_journal_alerts()
+
+        self.assertEqual(promoted, 0)
+        self.assertEqual(conn.db[0]["source"], "journal_sync")
 
     def test_structural_reconcile_does_not_touch_journal_rows(self):
         now = datetime.now(timezone.utc)

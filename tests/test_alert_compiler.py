@@ -196,6 +196,13 @@ class _FakeJournalCursor:
             matches = [r for r in self.db if r["source"] == source and r["source_key"] == source_key]
             self._fetchone_row = (matches[0]["id"],) if matches else None
 
+        elif sql_l.startswith("select id, ticker, source, condition, threshold::float, label from price_alerts where enabled = true and archived_at is null"):
+            rows = [r for r in self.db if r["enabled"] and r["archived_at"] is None]
+            rows.sort(key=lambda r: (r["ticker"], r["condition"], r["threshold"]))
+            cols = ["id", "ticker", "source", "condition", "threshold", "label"]
+            self.description = [_Col(c) for c in cols]
+            self._fetchall_rows = [tuple(r.get(c) for c in cols) for r in rows]
+
         elif sql_l.startswith("update price_alerts set enabled = false, triggered = false, archived_at = %s, refreshed_at = %s where id = %s"):
             archived_at, refreshed_at, row_id = params
             for r in self.db:
@@ -268,6 +275,75 @@ class AlertCompilerTests(unittest.TestCase):
         self.assertEqual(by_key["watch:SPY:resistance"]["condition"], "above")
         self.assertIn("hold", by_key["position:AAPL:stop"]["label"])
         self.assertIn("watch", by_key["watch:SPY:alert_above"]["label"])
+
+    def test_build_structural_alerts_skips_redundant_alert_above_when_equal_to_resistance(self):
+        key_levels = {
+            "positions": {},
+            "watch": {"^VIX": {"resistance": 20.0, "alert_above": 20.0}},
+        }
+
+        alerts = build_structural_alerts(key_levels)
+        source_keys = {row["source_key"] for row in alerts}
+
+        # only one "above 20" alert, not two identical ones
+        self.assertEqual(source_keys, {"watch:^VIX:resistance"})
+
+    def test_build_structural_alerts_keeps_distinct_resistance_and_alert_above(self):
+        key_levels = {
+            "positions": {},
+            "watch": {"^VIX": {"resistance": 20.0, "alert_above": 22.5}},
+        }
+
+        alerts = build_structural_alerts(key_levels)
+        source_keys = {row["source_key"] for row in alerts}
+
+        self.assertEqual(source_keys, {"watch:^VIX:resistance", "watch:^VIX:alert_above"})
+
+    def test_find_duplicate_alerts_clusters_cross_source_near_matches(self):
+        now = datetime.now(timezone.utc)
+        conn = _FakeJournalConnection(rows=[
+            {"id": 1, "ticker": "^VIX", "source": "key_levels_watch", "condition": "above",
+             "threshold": 20.0, "label": "Resistance", "enabled": True, "archived_at": None,
+             "source_key": "watch:^VIX:resistance", "pinned": False, "recurrence_count": 1,
+             "first_seen_at": now, "last_seen_at": now, "refreshed_at": now},
+            {"id": 2, "ticker": "^VIX", "source": "manual", "condition": "above",
+             "threshold": 20.0, "label": "Vol playbook re-entry", "enabled": True, "archived_at": None,
+             "source_key": None, "pinned": False, "recurrence_count": 1,
+             "first_seen_at": None, "last_seen_at": None, "refreshed_at": now},
+            {"id": 3, "ticker": "^VIX", "source": "manual", "condition": "above",
+             "threshold": 45.0, "label": "Crisis-level spike", "enabled": True, "archived_at": None,
+             "source_key": None, "pinned": False, "recurrence_count": 1,
+             "first_seen_at": None, "last_seen_at": None, "refreshed_at": now},
+        ], next_id=4)
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import find_duplicate_alerts
+            clusters = find_duplicate_alerts()
+
+        self.assertEqual(len(clusters), 1)  # only the 20.0 pair clusters; 45.0 is far away
+        cluster = clusters[0]
+        self.assertEqual(cluster["ticker"], "^VIX")
+        self.assertEqual({r["id"] for r in cluster["rows"]}, {1, 2})
+        self.assertEqual({r["source"] for r in cluster["rows"]}, {"key_levels_watch", "manual"})
+
+    def test_find_duplicate_alerts_ignores_archived_and_disabled_rows(self):
+        now = datetime.now(timezone.utc)
+        conn = _FakeJournalConnection(rows=[
+            {"id": 1, "ticker": "GC=F", "source": "key_levels_watch", "condition": "below",
+             "threshold": 4000.0, "label": "Support", "enabled": True, "archived_at": None,
+             "source_key": "watch:GC=F:support", "pinned": False, "recurrence_count": 1,
+             "first_seen_at": now, "last_seen_at": now, "refreshed_at": now},
+            {"id": 2, "ticker": "GC=F", "source": "journal_sync", "condition": "below",
+             "threshold": 4005.0, "label": "Gold loses support", "enabled": False, "archived_at": now,
+             "source_key": "journal:GC=F:below:x", "pinned": False, "recurrence_count": 1,
+             "first_seen_at": now, "last_seen_at": now, "refreshed_at": now},
+        ], next_id=3)
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import find_duplicate_alerts
+            clusters = find_duplicate_alerts()
+
+        self.assertEqual(clusters, [])  # the archived row is excluded, so there's no active pair to cluster
 
     def test_build_journal_alerts_normalizes_without_keying(self):
         alerts = build_journal_alerts([

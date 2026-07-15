@@ -130,6 +130,11 @@ def build_structural_alerts(key_levels: dict) -> list[dict]:
             })
 
         alert_above = _as_float(vals.get("alert_above"))
+        # alert_above and resistance are the same concept (a level to watch for a
+        # breakout above) — if the user set both to the same price, only emit one
+        # row instead of two identical "above X" alerts for the same ticker.
+        if alert_above is not None and resistance is not None and abs(alert_above - resistance) < 1e-6:
+            alert_above = None
         if alert_above is not None and alert_above > 0:
             label = f"Watch: {ticker} above {_format_threshold(alert_above)}"
             if note:
@@ -761,3 +766,69 @@ def reclassify(
         return True
     finally:
         conn.close()
+
+
+def find_duplicate_alerts(
+    *,
+    tolerance_pct: float = JOURNAL_MATCH_PCT,
+    min_abs: float = JOURNAL_MATCH_MIN_ABS,
+    max_abs: float = JOURNAL_MATCH_MAX_ABS,
+) -> list[dict]:
+    """Review-only report: active alerts clustered by ticker+condition where thresholds
+    fall within tolerance of each other, regardless of source. Read-only — never
+    modifies, archives, or merges anything. Surfaces candidates for a human to review
+    (e.g. cross-source duplicates like a manual alert overlapping a structural one).
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, ticker, source, condition, threshold::float, label
+                FROM price_alerts
+                WHERE enabled = TRUE AND archived_at IS NULL
+                ORDER BY ticker, condition, threshold
+                """
+            )
+            cols = [d.name for d in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+    def _tolerance(threshold: float) -> float:
+        return min(max(abs(threshold) * tolerance_pct, min_abs), max_abs)
+
+    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for row in rows:
+        groups[(row["ticker"], row["condition"])].append(row)
+
+    clusters: list[dict] = []
+    for (ticker, condition), items in groups.items():
+        items.sort(key=lambda r: r["threshold"])
+        current = [items[0]]
+        for item in items[1:]:
+            if abs(item["threshold"] - current[0]["threshold"]) <= _tolerance(current[0]["threshold"]):
+                current.append(item)
+            else:
+                if len(current) > 1:
+                    clusters.append({"ticker": ticker, "condition": condition, "rows": current})
+                current = [item]
+        if len(current) > 1:
+            clusters.append({"ticker": ticker, "condition": condition, "rows": current})
+
+    return clusters
+
+
+def print_duplicate_report() -> None:
+    clusters = find_duplicate_alerts()
+    if not clusters:
+        print("No duplicate/near-duplicate active alert clusters found.")
+        return
+    for cluster in clusters:
+        print(f"\n{cluster['ticker']} {cluster['condition']}:")
+        for row in cluster["rows"]:
+            print(f"  id={row['id']:<4} source={row['source']:<16} threshold={row['threshold']:<10} {row['label']}")
+
+
+if __name__ == "__main__":
+    print_duplicate_report()

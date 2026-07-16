@@ -12,6 +12,7 @@ import yfinance as yf
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from dashboard.db import query, execute
 from dashboard.alert_badges import alert_source_badge
+from dashboard.alert_sorting import sort_active_alerts, sort_archived_alerts
 
 st.set_page_config(page_title="Market Monitor — Fifth Dragon Capital", layout="wide")
 st.title("Market Monitor")
@@ -51,8 +52,24 @@ def _alerts_df(rows):
     } for a in rows])
 
 
+@st.cache_data(ttl=120)
+def fetch_alert_prices(tickers: tuple[str, ...]) -> dict[str, float | None]:
+    """Lightweight last-price lookup for alert ranking — not chart bars, and not limited to GROUPS tickers."""
+    prices: dict[str, float | None] = {}
+    for ticker in tickers:
+        try:
+            prices[ticker] = float(yf.Ticker(ticker).fast_info.last_price)
+        except Exception:
+            prices[ticker] = None
+    return prices
+
+
 active_alerts   = [a for a in alerts if a["enabled"] and not a["archived_at"]]
 archived_alerts = [a for a in alerts if not a["enabled"] or a["archived_at"]]
+
+alert_prices  = fetch_alert_prices(tuple(sorted({a["ticker"] for a in active_alerts})))
+active_alerts   = sort_active_alerts(active_alerts, alert_prices)
+archived_alerts = sort_archived_alerts(archived_alerts)
 
 st.subheader("Active")
 if active_alerts:

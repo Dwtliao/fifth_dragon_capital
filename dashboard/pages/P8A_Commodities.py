@@ -11,6 +11,7 @@ import yfinance as yf
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from etrade_sync.db import get_connection
+from dashboard.alert_badges import alert_source_badge
 
 st.set_page_config(page_title="Commodities — Fifth Dragon Capital", layout="wide")
 st.title("Commodities")
@@ -82,22 +83,25 @@ COLS = 2
 
 @st.cache_data(ttl=60)
 def _load_alerts() -> dict[str, list[dict]]:
-    """Returns {ticker: [{"condition", "threshold", "label"}, ...]} for enabled alerts."""
+    """Returns {ticker: [{"condition", "threshold", "label", "source_badge"}, ...]} for enabled alerts."""
     try:
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT ticker, condition, threshold::float, label "
+                    "SELECT ticker, condition, threshold::float, label, source, tier, pinned "
                     "FROM price_alerts WHERE enabled = TRUE ORDER BY ticker, threshold"
                 )
                 rows = cur.fetchall()
     except Exception:
         return {}
     result: dict[str, list[dict]] = {}
-    for ticker, condition, threshold, label in rows:
-        result.setdefault(ticker, []).append(
-            {"condition": condition, "threshold": threshold, "label": label or ""}
-        )
+    for ticker, condition, threshold, label, source, tier, pinned in rows:
+        result.setdefault(ticker, []).append({
+            "condition": condition,
+            "threshold": threshold,
+            "label": label or "",
+            "source_badge": alert_source_badge(source, tier, pinned),
+        })
     return result
 
 
@@ -605,9 +609,10 @@ def _chart(label: str, ticker: str, df: pd.DataFrame, prev_close: float | None, 
                     legend=None,
                 ),
                 tooltip=[
-                    alt.Tooltip("condition:N", title="Alert"),
-                    alt.Tooltip("threshold:Q", title="Level", format=",.2f"),
-                    alt.Tooltip("label:N",     title="Note"),
+                    alt.Tooltip("condition:N",    title="Alert"),
+                    alt.Tooltip("threshold:Q",    title="Level", format=",.2f"),
+                    alt.Tooltip("label:N",        title="Note"),
+                    alt.Tooltip("source_badge:N", title="Source"),
                 ],
             )
         )

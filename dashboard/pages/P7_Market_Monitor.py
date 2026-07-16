@@ -11,6 +11,7 @@ import yfinance as yf
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from dashboard.db import query, execute
+from dashboard.alert_badges import alert_source_badge
 
 st.set_page_config(page_title="Market Monitor — Fifth Dragon Capital", layout="wide")
 st.title("Market Monitor")
@@ -28,34 +29,47 @@ alerts = query(f"""
     ORDER BY id
 """)
 
-if alerts:
-    def _status(a):
-        if a.get("archived_at"):
-            return "📦 Archived"
-        if not a["enabled"]:
-            return "⚫ Disabled"
-        if a["triggered"]:
-            return "🔴 Triggered"
-        return "🟢 Armed"
+def _status(a):
+    if a.get("archived_at"):
+        return "📦 Archived"
+    if not a["enabled"]:
+        return "⚫ Disabled"
+    if a["triggered"]:
+        return "🔴 Triggered"
+    return "🟢 Armed"
 
-    df = pd.DataFrame([{
+
+def _alerts_df(rows):
+    return pd.DataFrame([{
         "ID":         a["id"],
         "Ticker":     a["ticker"],
         "Label":      a["label"] or "—",
         "Condition":  f"{'>' if a['condition'] == 'above' else '<'} {a['threshold']:,.2f}",
+        "Source":     alert_source_badge(a["source"], a["tier"], a["pinned"]),
         "Status":     _status(a),
         "Last Fired": a["last_fired_at"].strftime("%Y-%m-%d %H:%M") if a["last_fired_at"] else "—",
-    } for a in alerts])
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    } for a in rows])
+
+
+active_alerts   = [a for a in alerts if a["enabled"] and not a["archived_at"]]
+archived_alerts = [a for a in alerts if not a["enabled"] or a["archived_at"]]
+
+st.subheader("Active")
+if active_alerts:
+    st.dataframe(_alerts_df(active_alerts), use_container_width=True, hide_index=True)
+elif alerts:
+    st.caption("No active alerts — see Archived/Expired below.")
 else:
     st.info("No alerts defined yet. Add one below.")
 
+if archived_alerts:
+    with st.expander(f"Archived / Expired ({len(archived_alerts)})"):
+        st.dataframe(_alerts_df(archived_alerts), use_container_width=True, hide_index=True)
+
 st.divider()
 
-col_add, col_manage = st.columns(2)
-
-with col_add:
-    st.subheader("Add Alert")
+with st.expander("➕ Add Manual Alert (exception path)"):
+    st.caption("Most alerts are compiler-managed (structural stops/watch levels, journal promotions). Use this only for one-off manual overrides.")
     with st.form("add_alert_form"):
         a1, a2 = st.columns(2)
         ticker_in    = a1.text_input("Ticker", placeholder="e.g. ^VIX, VIXY, NQ=F")
@@ -75,43 +89,68 @@ with col_add:
                 st.success(f"Alert added: {ticker_in.strip().upper()} {condition_in} {threshold_in:,.2f}")
                 st.rerun()
 
-with col_manage:
-    st.subheader("Manage Alerts")
-    if alerts:
-        options = {
-            f"#{a['id']} {a['ticker']} {'>' if a['condition'] == 'above' else '<'} {a['threshold']:,.2f}  {a['label'] or ''}".strip(): a
-            for a in alerts
-        }
-        chosen_label = st.selectbox("Select alert", list(options.keys()))
-        chosen = options[chosen_label]
+def _alert_options(rows):
+    return {
+        f"#{a['id']} {a['ticker']} {'>' if a['condition'] == 'above' else '<'} {a['threshold']:,.2f}  {a['label'] or ''}".strip(): a
+        for a in rows
+    }
 
-        st.caption(f"Current threshold: **{chosen['threshold']:,.2f}**")
-        new_threshold = st.number_input(
-            "New threshold (leave 0 to keep current)", value=0.0,
-            min_value=0.0, step=0.01, format="%.2f", key=f"manage_threshold_{chosen['id']}"
-        )
-        m1, m2, m3, m4 = st.columns(4)
-        if m1.button("Save", use_container_width=True, type="primary"):
-            if new_threshold > 0:
-                execute("UPDATE price_alerts SET threshold = %s, triggered = FALSE WHERE id = %s",
-                        (new_threshold, chosen["id"]))
-                st.success(f"Threshold updated to {new_threshold:,.2f} and re-armed.")
-            else:
-                st.warning("Enter a value above 0 to change the threshold.")
-            st.rerun()
-        if m2.button("Enable" if not chosen["enabled"] else "Disable", use_container_width=True):
-            execute("UPDATE price_alerts SET enabled = %s WHERE id = %s", (not chosen["enabled"], chosen["id"]))
-            st.rerun()
-        if m3.button("Clear Trigger", use_container_width=True, help="Clear the fired state so an enabled alert can fire again"):
-            execute("UPDATE price_alerts SET triggered = FALSE WHERE id = %s", (chosen["id"],))
-            st.success("Trigger cleared.")
-            st.rerun()
-        if m4.button("Delete", use_container_width=True, type="secondary"):
-            execute("DELETE FROM price_alerts WHERE id = %s", (chosen["id"],))
-            st.success("Alert deleted.")
-            st.rerun()
-    else:
-        st.caption("No alerts to manage.")
+
+st.subheader("Manage Active Alert")
+if active_alerts:
+    options = _alert_options(active_alerts)
+    chosen_label = st.selectbox("Select alert", list(options.keys()), key="manage_active_select")
+    chosen = options[chosen_label]
+
+    st.caption(f"Current threshold: **{chosen['threshold']:,.2f}**")
+    new_threshold = st.number_input(
+        "New threshold (leave 0 to keep current)", value=0.0,
+        min_value=0.0, step=0.01, format="%.2f", key=f"manage_threshold_{chosen['id']}"
+    )
+    m1, m2, m3, m4, m5 = st.columns(5)
+    if m1.button("Save", use_container_width=True, type="primary", key="active_save"):
+        if new_threshold > 0:
+            execute("UPDATE price_alerts SET threshold = %s, triggered = FALSE WHERE id = %s",
+                    (new_threshold, chosen["id"]))
+            st.success(f"Threshold updated to {new_threshold:,.2f} and re-armed.")
+        else:
+            st.warning("Enter a value above 0 to change the threshold.")
+        st.rerun()
+    if m2.button("Disable", use_container_width=True, key="active_disable", help="Turns the alert off but leaves it un-archived — reappears here on re-enable"):
+        execute("UPDATE price_alerts SET enabled = FALSE WHERE id = %s", (chosen["id"],))
+        st.rerun()
+    if m3.button("Clear Trigger", use_container_width=True, key="active_clear_trigger", help="Clear the fired state so an enabled alert can fire again"):
+        execute("UPDATE price_alerts SET triggered = FALSE WHERE id = %s", (chosen["id"],))
+        st.success("Trigger cleared.")
+        st.rerun()
+    if m4.button("📦 Archive", use_container_width=True, key="active_archive", help="Retires the alert and marks archived_at — distinct from a plain Disable"):
+        execute("UPDATE price_alerts SET enabled = FALSE, triggered = FALSE, archived_at = NOW() WHERE id = %s", (chosen["id"],))
+        st.success("Alert archived.")
+        st.rerun()
+    if m5.button("Delete", use_container_width=True, type="secondary", key="active_delete"):
+        execute("DELETE FROM price_alerts WHERE id = %s", (chosen["id"],))
+        st.success("Alert deleted.")
+        st.rerun()
+else:
+    st.caption("No active alerts to manage.")
+
+st.subheader("Manage Archived/Expired Alert")
+if archived_alerts:
+    options = _alert_options(archived_alerts)
+    chosen_label = st.selectbox("Select alert", list(options.keys()), key="manage_archived_select")
+    chosen = options[chosen_label]
+
+    n1, n2 = st.columns(2)
+    if n1.button("↩ Restore to Active", use_container_width=True, type="primary", key="archived_restore", help="Re-enables the alert and clears archived_at"):
+        execute("UPDATE price_alerts SET enabled = TRUE, archived_at = NULL WHERE id = %s", (chosen["id"],))
+        st.success("Alert restored to Active.")
+        st.rerun()
+    if n2.button("Delete", use_container_width=True, type="secondary", key="archived_delete"):
+        execute("DELETE FROM price_alerts WHERE id = %s", (chosen["id"],))
+        st.success("Alert deleted.")
+        st.rerun()
+else:
+    st.caption("No archived/expired alerts to manage.")
 
 st.divider()
 
@@ -670,9 +709,10 @@ def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close:
                     legend=None,
                 ),
                 tooltip=[
-                    alt.Tooltip("condition:N", title="Alert"),
-                    alt.Tooltip("threshold:Q", title="Level", format=",.2f"),
-                    alt.Tooltip("label:N",     title="Note"),
+                    alt.Tooltip("condition:N",    title="Alert"),
+                    alt.Tooltip("threshold:Q",    title="Level", format=",.2f"),
+                    alt.Tooltip("label:N",        title="Note"),
+                    alt.Tooltip("source_badge:N", title="Source"),
                 ],
             )
         )
@@ -827,9 +867,12 @@ def market_panel() -> None:
     alerts_by_ticker: dict[str, list[dict]] = {}
     for a in (alerts or []):
         if a["enabled"]:
-            alerts_by_ticker.setdefault(a["ticker"], []).append(
-                {"condition": a["condition"], "threshold": a["threshold"], "label": a["label"] or ""}
-            )
+            alerts_by_ticker.setdefault(a["ticker"], []).append({
+                "condition": a["condition"],
+                "threshold": a["threshold"],
+                "label": a["label"] or "",
+                "source_badge": alert_source_badge(a["source"], a["tier"], a["pinned"]),
+            })
 
     show_ema = yf_period in ("1mo", "3mo", "6mo")
     for group_name, tickers in GROUPS.items():

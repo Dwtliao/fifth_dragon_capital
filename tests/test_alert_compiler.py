@@ -255,9 +255,9 @@ class _FakeStaleCursor:
     the manual-alert scan against price_alerts, then the open-positions lookup
     against mv_unrealized_pnl."""
 
-    def __init__(self, alert_rows=None, open_symbols=None):
+    def __init__(self, alert_rows=None, position_rows=None):
         self.alert_rows = alert_rows or []
-        self.open_symbols = open_symbols or set()
+        self.position_rows = position_rows or []
         self.executed = []
         self.description = []
         self._fetchall_rows = []
@@ -284,7 +284,13 @@ class _FakeStaleCursor:
             self._fetchall_rows = [tuple(r.get(c) for c in cols) for r in matches]
         elif sql_l.startswith("select distinct symbol from mv_unrealized_pnl"):
             self.description = [_Col("symbol")]
-            self._fetchall_rows = [(s,) for s in self.open_symbols]
+            # mirrors the real query's WHERE quantity IS NOT NULL AND quantity != 0 —
+            # a short position (negative quantity) still counts as open.
+            symbols = {
+                r["symbol"] for r in self.position_rows
+                if r.get("quantity") is not None and r["quantity"] != 0
+            }
+            self._fetchall_rows = [(s,) for s in symbols]
         else:
             self._fetchall_rows = []
 
@@ -293,8 +299,8 @@ class _FakeStaleCursor:
 
 
 class _FakeStaleConnection:
-    def __init__(self, alert_rows=None, open_symbols=None):
-        self.cursor_obj = _FakeStaleCursor(alert_rows=alert_rows, open_symbols=open_symbols)
+    def __init__(self, alert_rows=None, position_rows=None):
+        self.cursor_obj = _FakeStaleCursor(alert_rows=alert_rows, position_rows=position_rows)
 
     @contextmanager
     def cursor(self):
@@ -725,7 +731,7 @@ class AlertCompilerTests(unittest.TestCase):
             {"id": 1, "ticker": "NQ=F", "label": "Breakout watch", "condition": "above",
              "threshold": 22000.0, "source": "manual", "enabled": True, "archived_at": None,
              "last_fired_at": None, "created_at": old},
-        ], open_symbols=set())
+        ], position_rows=[])
 
         with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
             from morning_brief.alert_compiler import find_stale_alerts
@@ -812,7 +818,24 @@ class AlertCompilerTests(unittest.TestCase):
             {"id": 8, "ticker": "NVDA", "label": "Stop watch", "condition": "below",
              "threshold": 130.0, "source": "manual", "enabled": True, "archived_at": None,
              "last_fired_at": None, "created_at": old},
-        ], open_symbols={"NVDA"})
+        ], position_rows=[{"symbol": "NVDA", "quantity": 100}])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import find_stale_alerts
+            report = find_stale_alerts()
+
+        self.assertEqual(len(report), 1)
+        self.assertTrue(report[0]["has_open_position"])
+        self.assertEqual(report[0]["confidence"], "age_only")
+
+    def test_find_stale_alerts_treats_short_position_as_open(self):
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=120)
+        conn = _FakeStaleConnection(alert_rows=[
+            {"id": 10, "ticker": "TSLA", "label": "Cover watch", "condition": "above",
+             "threshold": 300.0, "source": "manual", "enabled": True, "archived_at": None,
+             "last_fired_at": None, "created_at": old},
+        ], position_rows=[{"symbol": "TSLA", "quantity": -50}])
 
         with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
             from morning_brief.alert_compiler import find_stale_alerts

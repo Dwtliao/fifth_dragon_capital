@@ -904,7 +904,7 @@ def find_stale_alerts(*, min_age_days: int = STALE_MANUAL_ALERT_DAYS) -> list[di
             open_symbols: set[str] = set()
             if rows:
                 cur.execute(
-                    "SELECT DISTINCT symbol FROM mv_unrealized_pnl WHERE quantity IS NOT NULL AND quantity > 0"
+                    "SELECT DISTINCT symbol FROM mv_unrealized_pnl WHERE quantity IS NOT NULL AND quantity != 0"
                 )
                 open_symbols = {row[0] for row in cur.fetchall()}
     finally:
@@ -941,5 +941,8 @@ def print_stale_alert_report() -> None:
 
 
 if __name__ == "__main__":
+    import sys
+
     print_duplicate_report()
-    print_stale_alert_report()
+    if "--stale" in sys.argv:
+        print_stale_alert_report()

@@ -862,6 +862,64 @@ def print_duplicate_report() -> None:
             print(f"  id={row['id']:<4} source={row['source']:<16} threshold={row['threshold']:<10} {row['label']}")
 
 
+# Non-structural sources eligible for one-click consolidation against an exact
+# structural match — structural is always the side that wins, per #63.
+CONSOLIDATABLE_SOURCES = ("manual", "journal_sync")
+
+
+def archive_duplicate_alert(candidate_id: int, structural_id: int, *, dry_run: bool = False) -> bool:
+    """Narrow, deterministic consolidation: archive a manual or journal_sync alert
+    that exactly duplicates a structural (key_levels_watch) alert — same ticker,
+    condition, and threshold, both currently active. Structural wins because it's
+    regenerated from key_levels.yml/DB on every reconcile and would just get
+    reverted otherwise (same reasoning promote_recurring_journal_alerts() uses for
+    its own manual/structural and journal/structural collision cases).
+
+    Re-verifies eligibility against live data rather than trusting a caller-supplied
+    cluster — returns False and archives nothing if the pair no longer qualifies
+    (already archived/disabled, sources don't match, or thresholds have diverged).
+    Never touches the structural row.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, ticker, source, condition, threshold::float, enabled, archived_at
+                FROM price_alerts
+                WHERE id = ANY(%s)
+                """,
+                ([candidate_id, structural_id],),
+            )
+            cols = [d.name for d in cur.description]
+            by_id = {row[0]: dict(zip(cols, row)) for row in cur.fetchall()}
+
+            candidate = by_id.get(candidate_id)
+            structural = by_id.get(structural_id)
+            qualifies = (
+                candidate is not None and structural is not None
+                and candidate["source"] in CONSOLIDATABLE_SOURCES and structural["source"] == "key_levels_watch"
+                and candidate["enabled"] and candidate["archived_at"] is None
+                and structural["enabled"] and structural["archived_at"] is None
+                and candidate["ticker"] == structural["ticker"]
+                and candidate["condition"] == structural["condition"]
+                and candidate["threshold"] == structural["threshold"]
+            )
+            if not qualifies:
+                conn.rollback()
+                return False
+
+            _archive_alert(cur, candidate_id)
+
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
 def find_stale_alerts(*, min_age_days: int = STALE_MANUAL_ALERT_DAYS) -> list[dict]:
     """Review-only report: enabled, never-fired manual alerts older than min_age_days.
     Read-only — never modifies, archives, disables, or deletes anything.

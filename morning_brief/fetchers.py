@@ -53,6 +53,38 @@ VOL_PROXIES = {
     "VIXY":  "VIXY",
 }
 
+# Confirmation hierarchy — see PENDING TASKS. Tier 1 = leadership (moves first),
+# Tier 2 = index confirmation (spreading), Tier 3 = macro confirmation (systemic fear).
+# DRAM dropped: no reliable yfinance ticker for spot DRAM pricing: MU + Kioxia cover
+# the memory-chip signal. MOVE (^MOVE) is sometimes spotty on Yahoo's feed — verify
+# before relying on it.
+CONFIRMATION_TIERS = {
+    1: {
+        "SOXS":           "SOXS",
+        "SOXL":           "SOXL",
+        "SMH":            "SMH",
+        "Micron":         "MU",
+        "Kioxia":         "285A.T",
+    },
+    2: {
+        "Nasdaq 100":     "^NDX",
+        "S&P 500":        "^GSPC",
+        "SOX":            "^SOX",
+        "Nikkei 225":     "^N225",
+    },
+    3: {
+        "VIX":            "^VIX",
+        "VVIX":           "^VVIX",
+        "MOVE":           "^MOVE",
+        "DXY":            "DX-Y.NYB",
+    },
+}
+
+# Credit spreads have no single yfinance ticker — HYG/LQD price ratio stands in as a
+# direction proxy (falling ratio ~ widening high-yield spreads) until a real data
+# source (e.g. FRED) is worth the added infrastructure.
+CREDIT_SPREAD_PROXY = ("HYG", "LQD")
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,6 +92,100 @@ def _safe_pct(current: float, prior: float) -> Optional[float]:
     if prior and prior != 0:
         return round((current - prior) / prior * 100, 2)
     return None
+
+
+def _true_range(high: float, low: float, prev_close: float) -> float:
+    return max(high - low, abs(high - prev_close), abs(low - prev_close))
+
+
+def _atr(highs: list[float], lows: list[float], closes: list[float], period: int = 20) -> Optional[float]:
+    """Simple (non-Wilder) average true range over the trailing `period` completed sessions."""
+    if len(closes) < period + 1:
+        return None
+    tr = [_true_range(highs[i], lows[i], closes[i - 1]) for i in range(1, len(closes))]
+    return sum(tr[-period:]) / period
+
+
+def _latest_true_range(highs: list[float], lows: list[float], closes: list[float]) -> Optional[float]:
+    if len(closes) < 2:
+        return None
+    return _true_range(highs[-1], lows[-1], closes[-2])
+
+
+def _move_percentile(returns: list[float], latest_abs_return: float, window: int = 250) -> Optional[float]:
+    """Percentile rank of the latest |return| within the trailing `window` sessions' |returns|."""
+    sample = [abs(r) for r in returns[-window:]]
+    if len(sample) < 30:
+        return None
+    return round(sum(1 for r in sample if r <= latest_abs_return) / len(sample) * 100, 1)
+
+
+def _crossed_level(latest_high: float, latest_low: float,
+                    rolling_high: Optional[float], rolling_low: Optional[float]) -> Optional[str]:
+    """Did the latest completed session take out the prior rolling high/low?"""
+    if rolling_high is not None and latest_high > rolling_high:
+        return "20-day high"
+    if rolling_low is not None and latest_low < rolling_low:
+        return "20-day low"
+    return None
+
+
+def _observation_facts_from_ohlcv(
+    closes: list[float], highs: list[float] | None, lows: list[float] | None,
+    volumes: list[float] | None, current_price: float,
+) -> dict:
+    """Computes Observation-layer facts from a completed daily OHLCV series plus a fresher current price.
+
+    All fields are None when the underlying series doesn't support them (e.g. no
+    high/low/volume for a synthetic ratio series). No network calls — pure math,
+    so this is unit-testable without yfinance.
+    """
+    prior_close = closes[-1]
+    prior_prior_close = closes[-2] if len(closes) >= 2 else None
+
+    facts: dict = {
+        "last":               round(current_price, 4),
+        "prior_close":        round(prior_close, 4),
+        "overnight_return":   _safe_pct(current_price, prior_close),
+        "session_return_1d":  _safe_pct(prior_close, prior_prior_close) if prior_prior_close else None,
+        "dist_from_20dma":    None,
+        "dist_from_50dma":    None,
+        "range_expansion":    None,
+        "volume_ratio":       None,
+        "move_percentile":    None,
+        "crossed_level":      None,
+        "persistence":        None,  # deferred — needs overnight intraday bars, see PENDING TASKS
+    }
+
+    if len(closes) >= 20:
+        facts["dist_from_20dma"] = _safe_pct(current_price, sum(closes[-20:]) / 20)
+    if len(closes) >= 50:
+        facts["dist_from_50dma"] = _safe_pct(current_price, sum(closes[-50:]) / 50)
+
+    if highs and lows:
+        atr20 = _atr(highs, lows, closes, period=20)
+        latest_tr = _latest_true_range(highs, lows, closes)
+        if atr20 and latest_tr is not None:
+            facts["range_expansion"] = round(latest_tr / atr20, 2)
+        if len(highs) >= 21:
+            facts["crossed_level"] = _crossed_level(
+                highs[-1], lows[-1], max(highs[-21:-1]), min(lows[-21:-1])
+            )
+
+    if volumes and len(volumes) >= 20 and sum(volumes[-20:]) > 0:
+        avg_volume20 = sum(volumes[-20:]) / 20
+        facts["volume_ratio"] = round(volumes[-1] / avg_volume20, 2) if avg_volume20 else None
+
+    if len(closes) >= 31:
+        daily_returns = [_pct_change(closes[i - 1], closes[i]) for i in range(1, len(closes))]
+        latest_abs_return = abs(daily_returns[-1])
+        facts["move_percentile"] = _move_percentile(daily_returns[:-1], latest_abs_return)
+
+    return facts
+
+
+def _pct_change(prior: float, current: float) -> float:
+    return (current - prior) / prior if prior else 0.0
 
 
 def _fetch_snapshot(symbols: dict[str, str]) -> list[dict]:
@@ -132,6 +258,76 @@ def fetch_currencies() -> list[dict]:
 def fetch_vol_proxies() -> list[dict]:
     """VIX, VVIX, VIXY."""
     return _fetch_snapshot(VOL_PROXIES)
+
+
+def _fetch_daily_history(ticker: str, period: str = "1y") -> Optional[dict]:
+    """Raw daily OHLCV as plain lists, oldest-first. None if unavailable."""
+    hist = yf.Ticker(ticker).history(period=period, interval="1d", auto_adjust=True)
+    if hist.empty or len(hist) < 25:
+        return None
+    return {
+        "closes":  [float(v) for v in hist["Close"]],
+        "highs":   [float(v) for v in hist["High"]],
+        "lows":    [float(v) for v in hist["Low"]],
+        "volumes": [float(v) for v in hist["Volume"]],
+    }
+
+
+def _fetch_last_price(ticker: str, fallback: float) -> float:
+    """Freshest available price (pre-market included). Falls back to yesterday's close on failure."""
+    try:
+        return float(yf.Ticker(ticker).fast_info.last_price)
+    except Exception:
+        return fallback
+
+
+def _confirmation_instrument(label: str, ticker: str, tier: int) -> dict:
+    try:
+        history = _fetch_daily_history(ticker)
+        if history is None:
+            return {"label": label, "ticker": ticker, "tier": tier, "error": "insufficient history"}
+        current = _fetch_last_price(ticker, fallback=history["closes"][-1])
+        facts = _observation_facts_from_ohlcv(
+            history["closes"], history["highs"], history["lows"], history["volumes"], current
+        )
+        return {"label": label, "ticker": ticker, "tier": tier, **facts}
+    except Exception as exc:
+        return {"label": label, "ticker": ticker, "tier": tier, "error": str(exc)}
+
+
+def _credit_spread_proxy_instrument(tier: int = 3) -> dict:
+    """HYG/LQD price ratio as a stand-in for high-yield vs. investment-grade spread direction."""
+    hy_ticker, ig_ticker = CREDIT_SPREAD_PROXY
+    label = f"Credit Spread Proxy ({hy_ticker}/{ig_ticker})"
+    try:
+        hy_hist = _fetch_daily_history(hy_ticker)
+        ig_hist = _fetch_daily_history(ig_ticker)
+        if hy_hist is None or ig_hist is None:
+            return {"label": label, "ticker": f"{hy_ticker}/{ig_ticker}", "tier": tier, "error": "insufficient history"}
+        n = min(len(hy_hist["closes"]), len(ig_hist["closes"]))
+        ratio_closes = [hy_hist["closes"][-n:][i] / ig_hist["closes"][-n:][i] for i in range(n)]
+        current_hy = _fetch_last_price(hy_ticker, fallback=hy_hist["closes"][-1])
+        current_ig = _fetch_last_price(ig_ticker, fallback=ig_hist["closes"][-1])
+        current_ratio = current_hy / current_ig
+        # No single high/low/volume for a synthetic ratio — range/volume facts stay None.
+        facts = _observation_facts_from_ohlcv(ratio_closes, None, None, None, current_ratio)
+        return {"label": label, "ticker": f"{hy_ticker}/{ig_ticker}", "tier": tier, **facts}
+    except Exception as exc:
+        return {"label": label, "ticker": f"{hy_ticker}/{ig_ticker}", "tier": tier, "error": str(exc)}
+
+
+def fetch_confirmation_observations() -> list[dict]:
+    """Observation layer for the confirmation hierarchy (Tier 1 leadership, 2 index, 3 macro).
+
+    Raw per-instrument facts only — no Quiet/Active/Stressed/Extreme status or
+    Leading/Confirming/Diverging role classification yet (deferred, see PENDING TASKS).
+    """
+    results = []
+    for tier, symbols in CONFIRMATION_TIERS.items():
+        for label, ticker in symbols.items():
+            results.append(_confirmation_instrument(label, ticker, tier))
+    results.append(_credit_spread_proxy_instrument())
+    return results
 
 
 def fetch_positions(key_levels: dict) -> list[dict]:

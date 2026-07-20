@@ -298,18 +298,21 @@ Requires a valid OAuth token (`python -m etrade_sync auth`). Tokens expire at mi
 
 | Job | Schedule | Script | Log |
 |---|---|---|---|
+| DB backup | 5:00 AM every Sunday | `scripts/backup_db.sh` | `logs/backup_db.log` |
 | Daily | 6:00 AM every day | `scripts/sync_daily.sh` | `logs/sync_daily.log` |
 | Weekly | 7:00 AM every Sunday | `scripts/sync_weekly.sh` | `logs/sync_weekly.log` |
 | Auth reminder | 10:00 PM every day | `scripts/auth_reminder.sh` | — |
 
-The daily job runs a full sync (all data types + ledger rebuild + realized P/L + view refresh + reconcile). The weekly job does a full 30-day history refresh.
+The daily job runs a full sync (all data types + ledger rebuild + realized P/L + view refresh + reconcile). The weekly job does a full 30-day history refresh. The DB backup job runs first (5:00 AM), before either sync job touches the database that morning.
 
 ### Install the launchd agents
 
 ```bash
+cp scripts/com.fifthdragon.db-backup.plist ~/Library/LaunchAgents/
 cp scripts/com.fifthdragon.sync-daily.plist ~/Library/LaunchAgents/
 cp scripts/com.fifthdragon.sync-weekly.plist ~/Library/LaunchAgents/
 cp scripts/com.fifthdragon.auth-reminder.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.fifthdragon.db-backup.plist
 launchctl load ~/Library/LaunchAgents/com.fifthdragon.sync-daily.plist
 launchctl load ~/Library/LaunchAgents/com.fifthdragon.sync-weekly.plist
 launchctl load ~/Library/LaunchAgents/com.fifthdragon.auth-reminder.plist
@@ -318,10 +321,26 @@ launchctl load ~/Library/LaunchAgents/com.fifthdragon.auth-reminder.plist
 ### Uninstall
 
 ```bash
+launchctl unload ~/Library/LaunchAgents/com.fifthdragon.db-backup.plist
 launchctl unload ~/Library/LaunchAgents/com.fifthdragon.sync-daily.plist
 launchctl unload ~/Library/LaunchAgents/com.fifthdragon.sync-weekly.plist
 launchctl unload ~/Library/LaunchAgents/com.fifthdragon.auth-reminder.plist
 ```
+
+### Weekly DB backup
+
+`scripts/backup_db.sh` runs a full `pg_dump` (custom format, `-Fc`) every Sunday at 5:00 AM, stored in `~/Library/CloudStorage/Dropbox/Etrade/db_backups/` — the same Dropbox tree `morning_brief.md` already writes to, so backups sync off-machine automatically with no extra setup. Filenames are timestamped (`fifth_dragon_capital_YYYYMMDD_HHMMSS.dump`); anything older than 8 weeks is pruned on each run.
+
+To restore from a backup:
+
+```bash
+# Create a fresh, empty database first if restoring to a new instance
+/Applications/Postgres.app/Contents/Versions/18/bin/pg_restore \
+  --dbname="$DATABASE_URL" --clean --if-exists \
+  ~/Library/CloudStorage/Dropbox/Etrade/db_backups/fifth_dragon_capital_YYYYMMDD_HHMMSS.dump
+```
+
+Run manually any time with `bash scripts/backup_db.sh` — safe to run ad hoc, it doesn't interfere with the scheduled run.
 
 ### Token renewal (required daily)
 

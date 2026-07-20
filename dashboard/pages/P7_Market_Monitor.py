@@ -671,6 +671,11 @@ def _rsi_panel(df: pd.DataFrame, x_fmt: str) -> alt.Chart | None:
 
 
 def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close: float | None, fmt: str = "%H:%M", tooltip_fmt: str = "", alerts: list[dict] | None = None, show_ema: bool = False, indicator: str = "None", show_st: bool = False) -> None:
+    # yfinance sometimes returns a trailing row for the current/most-recent
+    # session with NaN OHLC before the exchange's data is fully consolidated
+    # (seen for 000001.SS — Volume populated, Close/Open/High/Low all NaN).
+    # Drop it so "current price" and the chart itself use the last real bar.
+    today_df = today_df.dropna(subset=["Close"])
     if today_df.empty:
         st.caption(f"**{label}** ({ticker})  —  no data")
         return

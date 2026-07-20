@@ -1,6 +1,7 @@
 #!/bin/bash
 # Daily sync — accounts, balances, positions (fast refresh)
 # Runs every day at 6:00 AM
+# On Sundays, runs a full DB backup (scripts/backup_db.sh) first — see below.
 
 set -euo pipefail
 
@@ -12,6 +13,15 @@ TOKEN_FILE="$HOME/.config/etrade/tokens.json"
 
 cd "$PROJECT_DIR"
 mkdir -p "$PROJECT_DIR/logs"
+
+# Sunday-only DB backup, run in-process as the literal first step — not as a
+# separately-scheduled launchd job. Two independent StartCalendarInterval
+# agents have no guaranteed relative order (launchd can coalesce missed runs
+# after sleep/wake in either order), so the only real guarantee is a
+# sequential call from the job that's scheduled to run first anyway.
+if [[ "$(date '+%w')" == "0" ]]; then
+    bash "$PROJECT_DIR/scripts/backup_db.sh" >> "$LOG_FILE" 2>&1 || true
+fi
 
 echo "======================================" >> "$LOG_FILE"
 echo "$(date '+%Y-%m-%d %H:%M:%S') Daily sync started" >> "$LOG_FILE"

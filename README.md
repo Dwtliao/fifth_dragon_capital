@@ -335,6 +335,27 @@ python -m etrade_sync auth
 
 This opens your browser to the E*TRADE authorization page. After approving, paste the verifier code. The new token is saved to `~/.config/etrade/tokens.json` (mode 600). If the sync scripts detect a stale or missing token at runtime, they send a notification and exit cleanly instead of hitting 401 errors.
 
+### Recovering from a multi-day sync outage
+
+If `daily_sync` fails for more than a day or two (stale token missed for several nights in a row, e.g. while traveling), no `positions` snapshots get recorded for those dates, and `mv_portfolio_timeseries`/`mv_portfolio_timeseries_by_account` will show a gap — P3's equity curve, drawdown, and rolling-return charts jump across it instead of showing a continuous line. See issue #67 for the incident this was built for.
+
+`scripts/backfill_portfolio_history.py` reconstructs the missing days by repricing/flat-carrying the last real snapshot forward — it does **not** replay the ledger. Before it writes anything, it automatically checks the ledger for the gap window and aborts if it finds any real quantity change (buy/sell/split/transfer/redemption — anything with a non-null, non-zero `quantity`), since carrying forward stale holdings across an actual trade would silently misstate the backfill. If that guard fires, this script isn't safe to use as-is for that window — it would need a ledger-replay enhancement first (out of scope as of #67; hasn't been needed yet since no trades occurred during the one outage this has handled so far).
+
+```bash
+# 1. Once the daily sync is catching up again, run the backfill for the gap window
+#    (replace with your actual gap dates — first/last dates with NO positions snapshot):
+python scripts/backfill_portfolio_history.py --start 2026-07-01 --end 2026-07-19 --dry-run
+python scripts/backfill_portfolio_history.py --start 2026-07-01 --end 2026-07-19
+
+# 2. Rebuild just the affected views (targeted — does NOT use `migrate()`,
+#    which would drop/recreate every materialized view in the project):
+python scripts/rebuild_portfolio_views.py
+```
+
+Then restart Streamlit (imported modules, not page scripts, need a restart to pick up code changes — though this specific recovery flow only touches data, not code) and check P3.
+
+Never touches `positions` or anything in `etrade_sync/` — writes only to the new `portfolio_value_backfill` table (`data_model/051b_portfolio_value_backfill.sql`).
+
 ---
 
 ## Sandbox vs Production

@@ -30,6 +30,15 @@ def _reanchor(df, cum_col):
     return df
 
 
+def _coerce_float_columns(df, columns):
+    """Normalize DB numeric columns to float so pandas/Altair never see Decimal."""
+    df = df.copy()
+    for col in columns:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
+    return df
+
+
 # ── accounts ──────────────────────────────────────────────────────────────────
 
 accounts_raw = query("""
@@ -119,6 +128,27 @@ if ts_raw.empty:
 
 ts_raw["date"] = pd.to_datetime(ts_raw["date"])
 bm_raw["date"] = pd.to_datetime(bm_raw["date"])
+
+ts_raw = _coerce_float_columns(
+    ts_raw,
+    [
+        "total_market_value",
+        "daily_return_pct",
+        "rolling_30d_return_pct",
+        "rolling_volatility_30d",
+        "drawdown_from_peak_pct",
+    ],
+)
+bm_raw = _coerce_float_columns(
+    bm_raw,
+    [
+        "portfolio_cumulative_pct",
+        "spy_cumulative_pct",
+        "rolling_30d_portfolio_pct",
+        "rolling_30d_spy_pct",
+        "alpha_pct",
+    ],
+)
 
 # Re-anchor cumulative returns to period start
 bm = _reanchor(bm_raw, "portfolio_cumulative_pct").rename(

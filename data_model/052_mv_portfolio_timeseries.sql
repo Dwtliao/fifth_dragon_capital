@@ -14,7 +14,7 @@ WITH latest_per_account_per_day AS (
     FROM positions
     GROUP BY account_id_key, fetched_at::date
 ),
-daily_values AS (
+real_daily_values AS (
     SELECT
         lp.date,
         ROUND(SUM(p.market_value)::numeric, 2)      AS total_market_value,
@@ -24,6 +24,25 @@ daily_values AS (
     JOIN positions p ON  p.account_id_key = lp.account_id_key
                      AND p.fetched_at     = lp.latest_ts
     GROUP BY lp.date
+),
+-- Reconstructed days with no real positions snapshot (sync outage, #67).
+-- Market value only — cost basis / unrealized P&L are NULL, not zero.
+-- Unioned in here, before with_returns, so LAG/running-peak see a
+-- contiguous series across the gap instead of jumping over it.
+backfill_daily_values AS (
+    SELECT
+        b.date,
+        ROUND(SUM(b.total_market_value)::numeric, 2) AS total_market_value,
+        NULL::numeric                                AS total_cost_basis,
+        NULL::numeric                                AS total_unrealized_pnl
+    FROM portfolio_value_backfill b
+    WHERE NOT EXISTS (SELECT 1 FROM real_daily_values r WHERE r.date = b.date)
+    GROUP BY b.date
+),
+daily_values AS (
+    SELECT * FROM real_daily_values
+    UNION ALL
+    SELECT * FROM backfill_daily_values
 ),
 with_returns AS (
     SELECT

@@ -296,6 +296,8 @@ Requires a valid OAuth token (`python -m etrade_sync auth`). Tokens expire at mi
 
 ## Automated Sync (macOS launchd)
 
+**Status: installed and active** (all three agents loaded via `launchctl`, plists in `~/Library/LaunchAgents/` confirmed identical to the versions in this repo as of 2026-07-20). If you edit a `.plist` file, `cp` the updated version over the installed one and `launchctl unload` + `launchctl load` it again — copying alone doesn't refresh an already-loaded agent. Editing a `.sh` script doesn't require a reload; the agents invoke the script by path and always run whatever's currently on disk.
+
 | Job | Schedule | Script | Log |
 |---|---|---|---|
 | Daily (+ Sunday DB backup) | 6:00 AM every day | `scripts/sync_daily.sh` | `logs/sync_daily.log` |

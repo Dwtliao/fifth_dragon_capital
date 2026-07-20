@@ -28,6 +28,11 @@ JOURNAL_MATCH_MAX_ABS = 25.0
 # before it gets promoted from a tactical journal alert into a structural one.
 PROMOTION_RECURRENCE_THRESHOLD = 3
 
+# A manual alert that's never fired and has sat this long gets flagged in the
+# stale-alert report (see #63). Configurable so the cutoff can be tuned without
+# changing the policy itself.
+STALE_MANUAL_ALERT_DAYS = 90
+
 
 def _utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
@@ -857,5 +862,145 @@ def print_duplicate_report() -> None:
             print(f"  id={row['id']:<4} source={row['source']:<16} threshold={row['threshold']:<10} {row['label']}")
 
 
+# Non-structural sources eligible for one-click consolidation against an exact
+# structural match — structural is always the side that wins, per #63.
+CONSOLIDATABLE_SOURCES = ("manual", "journal_sync")
+
+
+def archive_duplicate_alert(candidate_id: int, structural_id: int, *, dry_run: bool = False) -> bool:
+    """Narrow, deterministic consolidation: archive a manual or journal_sync alert
+    that exactly duplicates a structural (key_levels_watch) alert — same ticker,
+    condition, and threshold, both currently active. Structural wins because it's
+    regenerated from key_levels.yml/DB on every reconcile and would just get
+    reverted otherwise (same reasoning promote_recurring_journal_alerts() uses for
+    its own manual/structural and journal/structural collision cases).
+
+    Re-verifies eligibility against live data rather than trusting a caller-supplied
+    cluster — returns False and archives nothing if the pair no longer qualifies
+    (already archived/disabled, sources don't match, or thresholds have diverged).
+    Never touches the structural row.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, ticker, source, condition, threshold::float, enabled, archived_at
+                FROM price_alerts
+                WHERE id = ANY(%s)
+                """,
+                ([candidate_id, structural_id],),
+            )
+            cols = [d.name for d in cur.description]
+            by_id = {row[0]: dict(zip(cols, row)) for row in cur.fetchall()}
+
+            candidate = by_id.get(candidate_id)
+            structural = by_id.get(structural_id)
+            qualifies = (
+                candidate is not None and structural is not None
+                and candidate["source"] in CONSOLIDATABLE_SOURCES and structural["source"] == "key_levels_watch"
+                and candidate["enabled"] and candidate["archived_at"] is None
+                and structural["enabled"] and structural["archived_at"] is None
+                and candidate["ticker"] == structural["ticker"]
+                and candidate["condition"] == structural["condition"]
+                and candidate["threshold"] == structural["threshold"]
+            )
+            if not qualifies:
+                conn.rollback()
+                return False
+
+            _archive_alert(cur, candidate_id)
+
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def find_stale_alerts(*, min_age_days: int = STALE_MANUAL_ALERT_DAYS) -> list[dict]:
+    """Review-only report: enabled, never-fired manual alerts older than min_age_days.
+    Read-only — never modifies, archives, disables, or deletes anything.
+
+    Structural (key_levels_watch) and journal_sync alerts are out of scope: structural
+    staleness is already handled by reconcile_structural_alerts()'s archive-on-removal
+    behavior, and journal alerts already have TTL pruning (prune_expired_alerts()).
+    Manual alerts are the only source with no expiry mechanism at all.
+
+    Each row is cross-checked against mv_unrealized_pnl (open positions). A ticker
+    with no matching open position is the stronger signal (confidence="no_open_position") —
+    though this means "no open position," not "position was closed": many manual
+    alerts watch futures/macro/vol tickers (e.g. NQ=F, DX-Y.NYB, VIXY) that were never
+    positions to begin with. A ticker that does have an open position falls back to a
+    weaker, age-only signal (confidence="age_only"), since a live position's stop
+    alert may simply be correctly dormant.
+    """
+    now = _utcnow()
+    cutoff = now - dt.timedelta(days=min_age_days)
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, ticker, label, condition, threshold::float, created_at
+                FROM price_alerts
+                WHERE source = 'manual'
+                  AND enabled = TRUE
+                  AND archived_at IS NULL
+                  AND last_fired_at IS NULL
+                  AND created_at <= %s
+                ORDER BY created_at
+                """,
+                (cutoff,),
+            )
+            cols = [d.name for d in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+            open_symbols: set[str] = set()
+            if rows:
+                cur.execute(
+                    "SELECT DISTINCT symbol FROM mv_unrealized_pnl WHERE quantity IS NOT NULL AND quantity != 0"
+                )
+                open_symbols = {row[0] for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+    report = []
+    for row in rows:
+        has_open_position = row["ticker"] in open_symbols
+        report.append({
+            "id": row["id"],
+            "ticker": row["ticker"],
+            "label": row["label"],
+            "condition": row["condition"],
+            "threshold": row["threshold"],
+            "source": "manual",
+            "created_at": row["created_at"],
+            "age_days": (now - row["created_at"]).days,
+            "has_open_position": has_open_position,
+            "confidence": "age_only" if has_open_position else "no_open_position",
+        })
+    return report
+
+
+def print_stale_alert_report() -> None:
+    rows = find_stale_alerts()
+    if not rows:
+        print("No stale manual alerts found.")
+        return
+    for row in rows:
+        print(
+            f"id={row['id']:<4} ticker={row['ticker']:<10} age_days={row['age_days']:<5} "
+            f"confidence={row['confidence']:<17} threshold={row['threshold']:<10} {row['label']}"
+        )
+
+
 if __name__ == "__main__":
+    import sys
+
     print_duplicate_report()
+    if "--stale" in sys.argv:
+        print_stale_alert_report()

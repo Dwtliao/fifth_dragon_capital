@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from dashboard.db import query, execute
 from dashboard.alert_badges import alert_source_badge
 from dashboard.alert_sorting import sort_active_alerts, sort_archived_alerts
+from morning_brief.alert_compiler import find_duplicate_alerts, find_stale_alerts, archive_duplicate_alert
 
 st.set_page_config(page_title="Market Monitor — Fifth Dragon Capital", layout="wide")
 st.title("Market Monitor")
@@ -83,6 +84,82 @@ if archived_alerts:
     with st.expander(f"Archived / Expired ({len(archived_alerts)})"):
         st.dataframe(_alerts_df(archived_alerts), use_container_width=True, hide_index=True)
 
+with st.expander("🧹 Alert Hygiene"):
+    if st.button("↺ Refresh", key="hygiene_refresh"):
+        st.rerun()
+
+    dup_tab, stale_tab = st.tabs(["Duplicate Clusters", "Stale Manual Alerts"])
+
+    with dup_tab:
+        st.caption("Active alerts clustered by ticker+condition where thresholds are within tolerance of each other, regardless of source. Review candidates for a human to reconcile — nothing is consolidated automatically. The one exception: an exact manual/journal + structural match can be consolidated with a click below.")
+        clusters = find_duplicate_alerts()
+        if not clusters:
+            st.caption("No duplicate/near-duplicate active alert clusters found.")
+
+        # Deterministic consolidation candidates: exactly one non-structural row
+        # (manual or journal_sync) paired with exactly one structural row, exact
+        # threshold match. Structural always wins. Everything else — manual+journal,
+        # multiple journals + one structural, near-matches — stays review-only.
+        _BUTTON_LABELS = {"manual": "Archive duplicate manual alert", "journal_sync": "Archive duplicate journal alert"}
+
+        def _consolidation_candidate(rows):
+            if len(rows) != 2:
+                return None
+            sources = {r["source"] for r in rows}
+            if "key_levels_watch" not in sources:
+                return None
+            other_source = (sources - {"key_levels_watch"}).pop() if len(sources) == 2 else None
+            if other_source not in _BUTTON_LABELS:
+                return None
+            if len({r["threshold"] for r in rows}) != 1:
+                return None
+            candidate_row = next(r for r in rows if r["source"] == other_source)
+            structural_row = next(r for r in rows if r["source"] == "key_levels_watch")
+            return candidate_row, structural_row
+
+        for cluster in clusters:
+            low = min(r["threshold"] for r in cluster["rows"])
+            high = max(r["threshold"] for r in cluster["rows"])
+            threshold_range = f"{low:,.2f}" if low == high else f"{low:,.2f} – {high:,.2f}"
+            st.markdown(f"**{cluster['ticker']} {cluster['condition']}** — {len(cluster['rows'])} alerts, threshold range {threshold_range}")
+            st.dataframe(pd.DataFrame([{
+                "ID":        r["id"],
+                "Source":    alert_source_badge(r["source"], None, None),
+                "Threshold": r["threshold"],
+                "Label":     r["label"] or "—",
+            } for r in cluster["rows"]]), use_container_width=True, hide_index=True)
+
+            candidate = _consolidation_candidate(cluster["rows"])
+            if candidate:
+                candidate_row, structural_row = candidate
+                if st.button(
+                    _BUTTON_LABELS[candidate_row["source"]],
+                    key=f"consolidate_{candidate_row['id']}_{structural_row['id']}",
+                    help="Archives the duplicate; the structural alert is untouched and stays authoritative.",
+                ):
+                    if archive_duplicate_alert(candidate_row["id"], structural_row["id"]):
+                        st.success(f"Archived alert id={candidate_row['id']}.")
+                        st.rerun()
+                    else:
+                        st.error("Could not consolidate — the pair no longer qualifies (already changed).")
+
+    with stale_tab:
+        st.caption("Report only — no auto-archive, disable, or delete. Manual alerts that have never fired, past the age cutoff. A human decides what to do with each row.")
+        stale_rows = find_stale_alerts()
+        if not stale_rows:
+            st.caption("No stale manual alerts found.")
+        else:
+            st.dataframe(pd.DataFrame([{
+                "ID":           r["id"],
+                "Ticker":       r["ticker"],
+                "Label":        r["label"] or "—",
+                "Threshold":    r["threshold"],
+                "Created":      r["created_at"].strftime("%Y-%m-%d"),
+                "Age (days)":   r["age_days"],
+                "Confidence":   r["confidence"],
+                "Open position": r["has_open_position"],
+            } for r in stale_rows]), use_container_width=True, hide_index=True)
+
 st.divider()
 
 with st.expander("➕ Add Manual Alert (exception path)"):
@@ -115,7 +192,7 @@ def _alert_options(rows):
 
 st.subheader("Manage Active Alert")
 if active_alerts:
-    options = _alert_options(active_alerts)
+    options = _alert_options(sorted(active_alerts, key=lambda a: a["id"]))
     chosen_label = st.selectbox("Select alert", list(options.keys()), key="manage_active_select")
     chosen = options[chosen_label]
 

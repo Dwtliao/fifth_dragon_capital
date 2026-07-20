@@ -22,6 +22,8 @@
 
 Raw tables are never modified by the BI layers — they stay as the source of truth.
 
+**Every intelligence artifact needs a Layer 4 surface.** Detectors/reports built in `morning_brief`/`alerts` modules (duplicate-alert detection, stale-alert detection, etc.) are intermediate outputs, not deliverables — an issue that adds one isn't done until it also has a corresponding view in a dashboard page. CLI-only output is fine as a development step, not as the final state.
+
 ---
 
 ## Data Model Design Principles
@@ -111,6 +113,7 @@ These apply to all SQL files in `data_model/` and Python analytics modules.
 | — | Design gap | `price_alerts` has two creation paths (journal sync + P10 Watch Levels alert_above) that can create duplicate alerts for same ticker. Options: (A) unique constraint on (ticker, condition), (B) remove alert_above→price_alerts sync from P10, alerts only via journal or P7 manual. |
 | — | Design gap | E*TRADE OAuth tokens expire at midnight ET. Browser login invalidates API token. No automated re-auth possible without Selenium + 2FA interception (not worth the risk). Morning brief uses E*TRADE quotes when token valid, yfinance fallback silently. |
 | — | Future feature | P3 equity curve, drawdown, and attribution timeseries only go back to when daily launchd syncs started (June 2026). Transaction/CSV history exists for 2 years but `mv_portfolio_timeseries` is built from position snapshots, not transactions. Historical equity curve would require replaying `ledger` + `open_lots` holdings through yfinance daily price history — significant build, low urgency. |
+| #63 | Design gap | `find_duplicate_alerts()` and `find_stale_alerts()` are CLI-only (`python -m morning_brief.alert_compiler`) — no P7/P10 UI surface yet, violating the Layer 4 principle above. UI surfacing folded into #63. |
 
 ---
 

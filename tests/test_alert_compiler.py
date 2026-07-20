@@ -250,6 +250,127 @@ class _FakeJournalConnection:
         pass
 
 
+class _FakeStaleCursor:
+    """Fake cursor answering the two-query surface find_stale_alerts() issues:
+    the manual-alert scan against price_alerts, then the open-positions lookup
+    against mv_unrealized_pnl."""
+
+    def __init__(self, alert_rows=None, position_rows=None):
+        self.alert_rows = alert_rows or []
+        self.position_rows = position_rows or []
+        self.executed = []
+        self.description = []
+        self._fetchall_rows = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+        sql_l = " ".join(sql.lower().split())
+        if sql_l.startswith("select id, ticker, label, condition, threshold::float, created_at from price_alerts"):
+            (cutoff,) = params
+            cols = ["id", "ticker", "label", "condition", "threshold", "created_at"]
+            self.description = [_Col(c) for c in cols]
+            matches = [
+                r for r in self.alert_rows
+                if r["source"] == "manual" and r["enabled"] and r["archived_at"] is None
+                and r["last_fired_at"] is None and r["created_at"] <= cutoff
+            ]
+            matches.sort(key=lambda r: r["created_at"])
+            self._fetchall_rows = [tuple(r.get(c) for c in cols) for r in matches]
+        elif sql_l.startswith("select distinct symbol from mv_unrealized_pnl"):
+            self.description = [_Col("symbol")]
+            # mirrors the real query's WHERE quantity IS NOT NULL AND quantity != 0 —
+            # a short position (negative quantity) still counts as open.
+            symbols = {
+                r["symbol"] for r in self.position_rows
+                if r.get("quantity") is not None and r["quantity"] != 0
+            }
+            self._fetchall_rows = [(s,) for s in symbols]
+        else:
+            self._fetchall_rows = []
+
+    def fetchall(self):
+        return self._fetchall_rows
+
+
+class _FakeStaleConnection:
+    def __init__(self, alert_rows=None, position_rows=None):
+        self.cursor_obj = _FakeStaleCursor(alert_rows=alert_rows, position_rows=position_rows)
+
+    @contextmanager
+    def cursor(self):
+        yield self.cursor_obj
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _FakeConsolidateCursor:
+    """Fake cursor for archive_duplicate_alert(): answers the id=ANY(...)
+    eligibility read, then the shared _archive_alert() update-by-id."""
+
+    def __init__(self, db):
+        self.db = db
+        self.executed = []
+        self.description = []
+        self._fetchall_rows = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+        sql_l = " ".join(sql.lower().split())
+        if sql_l.startswith("select id, ticker, source, condition, threshold::float, enabled, archived_at from price_alerts where id = any"):
+            (ids,) = params
+            cols = ["id", "ticker", "source", "condition", "threshold", "enabled", "archived_at"]
+            self.description = [_Col(c) for c in cols]
+            matches = [r for r in self.db if r["id"] in ids]
+            self._fetchall_rows = [tuple(r.get(c) for c in cols) for r in matches]
+        elif sql_l.startswith("update price_alerts set enabled = false, triggered = false, archived_at = %s, refreshed_at = %s where id = %s"):
+            archived_at, refreshed_at, row_id = params
+            for r in self.db:
+                if r["id"] == row_id:
+                    r.update(enabled=False, triggered=False, archived_at=archived_at, refreshed_at=refreshed_at)
+
+    def fetchall(self):
+        return self._fetchall_rows
+
+
+class _FakeConsolidateConnection:
+    def __init__(self, rows):
+        self.db = rows
+        self.committed = False
+        self.rolled_back = False
+
+    @contextmanager
+    def cursor(self):
+        yield _FakeConsolidateCursor(self.db)
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
+
+    def close(self):
+        pass
+
+
 class AlertCompilerTests(unittest.TestCase):
     def test_build_structural_alerts_compiles_all_structural_sources(self):
         key_levels = {
@@ -657,6 +778,243 @@ class AlertCompilerTests(unittest.TestCase):
 
         self.assertEqual(pruned, 1)
         self.assertTrue(conn.committed)
+
+    def test_find_stale_alerts_reports_old_never_fired_manual_alert(self):
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=120)
+        conn = _FakeStaleConnection(alert_rows=[
+            {"id": 1, "ticker": "NQ=F", "label": "Breakout watch", "condition": "above",
+             "threshold": 22000.0, "source": "manual", "enabled": True, "archived_at": None,
+             "last_fired_at": None, "created_at": old},
+        ], position_rows=[])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import find_stale_alerts
+            report = find_stale_alerts()
+
+        self.assertEqual(len(report), 1)
+        row = report[0]
+        self.assertEqual(row["id"], 1)
+        self.assertEqual(row["source"], "manual")
+        self.assertGreaterEqual(row["age_days"], 119)
+        self.assertFalse(row["has_open_position"])
+        self.assertEqual(row["confidence"], "no_open_position")
+
+    def test_find_stale_alerts_excludes_recently_created_manual_alert(self):
+        now = datetime.now(timezone.utc)
+        recent = now - timedelta(days=5)
+        conn = _FakeStaleConnection(alert_rows=[
+            {"id": 2, "ticker": "AAPL", "label": "Stop watch", "condition": "below",
+             "threshold": 180.0, "source": "manual", "enabled": True, "archived_at": None,
+             "last_fired_at": None, "created_at": recent},
+        ])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import find_stale_alerts
+            report = find_stale_alerts()
+
+        self.assertEqual(report, [])
+
+    def test_find_stale_alerts_excludes_fired_manual_alert(self):
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=120)
+        conn = _FakeStaleConnection(alert_rows=[
+            {"id": 3, "ticker": "VIXY", "label": "Fear spike", "condition": "above",
+             "threshold": 25.0, "source": "manual", "enabled": True, "archived_at": None,
+             "last_fired_at": old + timedelta(days=1), "created_at": old},
+        ])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import find_stale_alerts
+            report = find_stale_alerts()
+
+        self.assertEqual(report, [])
+
+    def test_find_stale_alerts_excludes_archived_and_disabled_rows(self):
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=120)
+        conn = _FakeStaleConnection(alert_rows=[
+            {"id": 4, "ticker": "DX-Y.NYB", "label": "Dollar watch", "condition": "above",
+             "threshold": 110.0, "source": "manual", "enabled": False, "archived_at": None,
+             "last_fired_at": None, "created_at": old},
+            {"id": 5, "ticker": "CL=F", "label": "Oil watch", "condition": "below",
+             "threshold": 60.0, "source": "manual", "enabled": True, "archived_at": old,
+             "last_fired_at": None, "created_at": old},
+        ])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import find_stale_alerts
+            report = find_stale_alerts()
+
+        self.assertEqual(report, [])
+
+    def test_find_stale_alerts_ignores_non_manual_sources(self):
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=120)
+        conn = _FakeStaleConnection(alert_rows=[
+            {"id": 6, "ticker": "SPY", "label": "Resistance", "condition": "above",
+             "threshold": 510.0, "source": "key_levels_watch", "enabled": True, "archived_at": None,
+             "last_fired_at": None, "created_at": old},
+            {"id": 7, "ticker": "GC=F", "label": "Gold idea", "condition": "below",
+             "threshold": 4200.0, "source": "journal_sync", "enabled": True, "archived_at": None,
+             "last_fired_at": None, "created_at": old},
+        ])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import find_stale_alerts
+            report = find_stale_alerts()
+
+        self.assertEqual(report, [])
+
+    def test_find_stale_alerts_flags_open_position_as_lower_confidence(self):
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=120)
+        conn = _FakeStaleConnection(alert_rows=[
+            {"id": 8, "ticker": "NVDA", "label": "Stop watch", "condition": "below",
+             "threshold": 130.0, "source": "manual", "enabled": True, "archived_at": None,
+             "last_fired_at": None, "created_at": old},
+        ], position_rows=[{"symbol": "NVDA", "quantity": 100}])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import find_stale_alerts
+            report = find_stale_alerts()
+
+        self.assertEqual(len(report), 1)
+        self.assertTrue(report[0]["has_open_position"])
+        self.assertEqual(report[0]["confidence"], "age_only")
+
+    def test_find_stale_alerts_treats_short_position_as_open(self):
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=120)
+        conn = _FakeStaleConnection(alert_rows=[
+            {"id": 10, "ticker": "TSLA", "label": "Cover watch", "condition": "above",
+             "threshold": 300.0, "source": "manual", "enabled": True, "archived_at": None,
+             "last_fired_at": None, "created_at": old},
+        ], position_rows=[{"symbol": "TSLA", "quantity": -50}])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import find_stale_alerts
+            report = find_stale_alerts()
+
+        self.assertEqual(len(report), 1)
+        self.assertTrue(report[0]["has_open_position"])
+        self.assertEqual(report[0]["confidence"], "age_only")
+
+    def test_find_stale_alerts_cutoff_is_configurable(self):
+        now = datetime.now(timezone.utc)
+        thirty_days_old = now - timedelta(days=30)
+        conn = _FakeStaleConnection(alert_rows=[
+            {"id": 9, "ticker": "SI=F", "label": "Silver watch", "condition": "above",
+             "threshold": 32.0, "source": "manual", "enabled": True, "archived_at": None,
+             "last_fired_at": None, "created_at": thirty_days_old},
+        ])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import find_stale_alerts
+            self.assertEqual(find_stale_alerts(), [])  # default 90-day cutoff, not yet stale
+            report = find_stale_alerts(min_age_days=20)  # tighter cutoff catches it
+
+        self.assertEqual(len(report), 1)
+        self.assertEqual(report[0]["id"], 9)
+
+    def test_archive_duplicate_alert_archives_exact_manual_structural_match(self):
+        conn = _FakeConsolidateConnection([
+            {"id": 1, "ticker": "^VIX", "source": "manual", "condition": "above",
+             "threshold": 20.0, "enabled": True, "archived_at": None},
+            {"id": 2, "ticker": "^VIX", "source": "key_levels_watch", "condition": "above",
+             "threshold": 20.0, "enabled": True, "archived_at": None},
+        ])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import archive_duplicate_alert
+            result = archive_duplicate_alert(1, 2)
+
+        self.assertTrue(result)
+        self.assertTrue(conn.committed)
+        manual_row = next(r for r in conn.db if r["id"] == 1)
+        structural_row = next(r for r in conn.db if r["id"] == 2)
+        self.assertFalse(manual_row["enabled"])
+        self.assertIsNotNone(manual_row["archived_at"])
+        self.assertTrue(structural_row["enabled"])  # structural untouched
+        self.assertIsNone(structural_row["archived_at"])
+
+    def test_archive_duplicate_alert_archives_exact_journal_structural_match(self):
+        conn = _FakeConsolidateConnection([
+            {"id": 3, "ticker": "XLE", "source": "journal_sync", "condition": "above",
+             "threshold": 58.0, "enabled": True, "archived_at": None},
+            {"id": 4, "ticker": "XLE", "source": "key_levels_watch", "condition": "above",
+             "threshold": 58.0, "enabled": True, "archived_at": None},
+        ])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import archive_duplicate_alert
+            result = archive_duplicate_alert(3, 4)
+
+        self.assertTrue(result)
+        journal_row = next(r for r in conn.db if r["id"] == 3)
+        structural_row = next(r for r in conn.db if r["id"] == 4)
+        self.assertFalse(journal_row["enabled"])
+        self.assertIsNotNone(journal_row["archived_at"])
+        self.assertTrue(structural_row["enabled"])  # structural untouched
+
+    def test_archive_duplicate_alert_rejects_threshold_mismatch(self):
+        conn = _FakeConsolidateConnection([
+            {"id": 1, "ticker": "^VIX", "source": "manual", "condition": "above",
+             "threshold": 20.0, "enabled": True, "archived_at": None},
+            {"id": 2, "ticker": "^VIX", "source": "key_levels_watch", "condition": "above",
+             "threshold": 20.5, "enabled": True, "archived_at": None},
+        ])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import archive_duplicate_alert
+            result = archive_duplicate_alert(1, 2)
+
+        self.assertFalse(result)
+        manual_row = next(r for r in conn.db if r["id"] == 1)
+        self.assertTrue(manual_row["enabled"])  # untouched
+
+    def test_archive_duplicate_alert_rejects_non_structural_pair(self):
+        conn = _FakeConsolidateConnection([
+            {"id": 1, "ticker": "GC=F", "source": "manual", "condition": "below",
+             "threshold": 4200.0, "enabled": True, "archived_at": None},
+            {"id": 2, "ticker": "GC=F", "source": "manual", "condition": "below",
+             "threshold": 4200.0, "enabled": True, "archived_at": None},
+        ])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import archive_duplicate_alert
+            result = archive_duplicate_alert(1, 2)
+
+        self.assertFalse(result)
+
+    def test_archive_duplicate_alert_rejects_manual_journal_pair(self):
+        conn = _FakeConsolidateConnection([
+            {"id": 1, "ticker": "GC=F", "source": "manual", "condition": "below",
+             "threshold": 4200.0, "enabled": True, "archived_at": None},
+            {"id": 2, "ticker": "GC=F", "source": "journal_sync", "condition": "below",
+             "threshold": 4200.0, "enabled": True, "archived_at": None},
+        ])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import archive_duplicate_alert
+            result = archive_duplicate_alert(1, 2)
+
+        self.assertFalse(result)  # neither side is structural — stays review-only
+
+    def test_archive_duplicate_alert_rejects_already_archived_row(self):
+        now = datetime.now(timezone.utc)
+        conn = _FakeConsolidateConnection([
+            {"id": 1, "ticker": "NQ=F", "source": "manual", "condition": "above",
+             "threshold": 22000.0, "enabled": False, "archived_at": now},
+            {"id": 2, "ticker": "NQ=F", "source": "key_levels_watch", "condition": "above",
+             "threshold": 22000.0, "enabled": True, "archived_at": None},
+        ])
+
+        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
+            from morning_brief.alert_compiler import archive_duplicate_alert
+            result = archive_duplicate_alert(1, 2)
+
+        self.assertFalse(result)
 
 
 if __name__ == "__main__":

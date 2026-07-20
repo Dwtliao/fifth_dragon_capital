@@ -1,7 +1,14 @@
-"""One-off backfill for the 2026-07 daily_sync outage (issue #67).
+"""Reusable backfill for a daily_sync outage gap — built for the 2026-07
+outage (issue #67), designed to be rerun for any future gap via --start/--end.
 
-No buy/sell/split activity occurred in the ledger during the outage window, so
-holdings were static across the whole gap. For each missing trading day:
+This script assumes holdings were static across the gap — it reprices/flat-
+carries the last real snapshot forward, it does not replay the ledger. That
+assumption is checked automatically (see _check_holdings_static): any ledger
+event with a real quantity change during the window aborts the run before any
+data is touched, rather than silently carrying forward stale holdings across
+a trade. See README.md's "Recovering from a multi-day sync outage" section.
+
+When holdings are confirmed static, for each missing trading day:
 
   - EQ/ETF holdings are repriced using that day's yfinance raw (unadjusted)
     close — raw, not adjusted, because this is a balance-sheet valuation
@@ -54,6 +61,28 @@ def _trading_days(cur, start, end):
         (start, end),
     )
     return [row[0] for row in cur.fetchall()]
+
+
+def _check_holdings_static(cur, start, end):
+    """This script's whole approach assumes holdings didn't change during the
+    gap — it reprices/flat-carries the source snapshot forward, it doesn't
+    replay the ledger. Verify that assumption against the actual ledger rather
+    than trusting the caller: any row with a non-null, non-zero quantity in
+    the window (buy, sell, split, transfer, redemption, whatever the
+    event_type) means a real share-count change happened, and this script
+    would silently carry forward stale holdings across it. Returns the
+    offending ledger rows (empty list if holdings were genuinely static)."""
+    cur.execute(
+        """
+        SELECT event_timestamp, symbol, event_type, quantity
+        FROM ledger
+        WHERE event_timestamp::date BETWEEN %s AND %s
+          AND quantity IS NOT NULL AND quantity != 0
+        ORDER BY event_timestamp
+        """,
+        (start, end),
+    )
+    return cur.fetchall()
 
 
 def _source_snapshot_holdings(cur, before_date):
@@ -154,6 +183,20 @@ def backfill(start, end, dry_run=False):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            trade_activity = _check_holdings_static(cur, start, end)
+            if trade_activity:
+                print(f"ABORTING — holdings were NOT static during {start} to {end}. "
+                      f"This script only reprices/flat-carries a static snapshot forward; "
+                      f"it does not replay the ledger. Found {len(trade_activity)} ledger "
+                      f"event(s) with a real quantity change:")
+                for event_timestamp, symbol, event_type, quantity in trade_activity:
+                    print(f"  {event_timestamp}  {symbol:<12} {event_type:<20} qty={quantity}")
+                print("Do not run this backfill as-is for this window — it would silently "
+                      "carry forward stale holdings across a real trade. Needs a ledger-replay "
+                      "enhancement first (see README.md's 'Recovering from a multi-day sync "
+                      "outage' section).")
+                return
+
             snapshot_date, holdings = _source_snapshot_holdings(cur, start)
             trading_days = _trading_days(cur, start, end)
 

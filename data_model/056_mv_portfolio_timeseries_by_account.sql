@@ -10,7 +10,7 @@ WITH latest_per_account_per_day AS (
     FROM positions
     GROUP BY account_id_key, fetched_at::date
 ),
-daily_values AS (
+real_daily_values AS (
     SELECT
         lp.account_id_key,
         lp.date,
@@ -22,6 +22,27 @@ daily_values AS (
       ON p.account_id_key = lp.account_id_key
      AND p.fetched_at     = lp.latest_ts
     GROUP BY lp.account_id_key, lp.date
+),
+-- Reconstructed days with no real positions snapshot (sync outage, #67).
+-- Already per-account, so no aggregation needed beyond the NOT EXISTS guard.
+-- Unioned in before with_returns so LAG/running-peak stay contiguous.
+backfill_daily_values AS (
+    SELECT
+        b.account_id_key,
+        b.date,
+        ROUND(b.total_market_value, 2) AS total_market_value,
+        NULL::numeric                  AS total_cost_basis,
+        NULL::numeric                  AS total_unrealized_pnl
+    FROM portfolio_value_backfill b
+    WHERE NOT EXISTS (
+        SELECT 1 FROM real_daily_values r
+        WHERE r.account_id_key = b.account_id_key AND r.date = b.date
+    )
+),
+daily_values AS (
+    SELECT * FROM real_daily_values
+    UNION ALL
+    SELECT * FROM backfill_daily_values
 ),
 with_returns AS (
     SELECT

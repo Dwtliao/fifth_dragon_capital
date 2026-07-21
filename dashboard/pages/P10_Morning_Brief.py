@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -25,6 +26,16 @@ from morning_brief.fetchers import (
 
 diary      = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
 brief_path = diary / "morning_brief.md"
+
+TOKEN_FILE = Path.home() / ".config/etrade/tokens.json"
+ET = ZoneInfo("America/New_York")
+
+
+def _token_is_fresh() -> bool:
+    if not TOKEN_FILE.exists():
+        return False
+    token_date = datetime.datetime.fromtimestamp(TOKEN_FILE.stat().st_mtime, tz=ET).date()
+    return token_date == datetime.datetime.now(tz=ET).date()
 
 
 def _save_levels_and_refresh_alerts(key_levels: dict) -> dict:
@@ -58,7 +69,7 @@ if brief_path.exists():
 
 # ── primary: one-click morning pipeline ───────────────────────────────────────
 if st.sidebar.button("▶ Run Morning Pipeline", type="primary", use_container_width=True,
-                     help="1) Sync latest journal (if updated)  2) Generate morning brief"):
+                     help="1) Sync latest journal (if updated)  2) Generate morning brief  3) Sync E*TRADE data (positions/ledger/views)"):
     diary   = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
     journals = sorted(diary.glob("trading_journal_*.md"), key=lambda p: p.stat().st_mtime)
     output_lines = []
@@ -66,7 +77,7 @@ if st.sidebar.button("▶ Run Morning Pipeline", type="primary", use_container_w
     # Step 1: sync latest journal if it exists
     if journals:
         latest = journals[-1]
-        with st.spinner(f"Step 1/2 — syncing {latest.name}…"):
+        with st.spinner(f"Step 1/3 — syncing {latest.name}…"):
             r1 = subprocess.run(
                 [sys.executable, "-m", "morning_brief.journal_sync", "--file", str(latest)],
                 capture_output=True, text=True, cwd=str(PROJECT_ROOT),
@@ -74,12 +85,27 @@ if st.sidebar.button("▶ Run Morning Pipeline", type="primary", use_container_w
         output_lines.append(r1.stdout.strip())
 
     # Step 2: generate brief
-    with st.spinner("Step 2/2 — generating brief…"):
+    with st.spinner("Step 2/3 — generating brief…"):
         r2 = subprocess.run(
             [sys.executable, "-m", "morning_brief.brief"],
             capture_output=True, text=True, cwd=str(PROJECT_ROOT),
         )
     output_lines.append(r2.stderr.strip())
+
+    # Step 3: sync E*TRADE data — accounts/balances/positions/transactions/orders
+    # + ledger rebuild + realized P/L + view refresh + reconcile. Only attempted
+    # if today's token is fresh; a stale token here would just fail loudly across
+    # every data type (same as the 6 AM automated job), so skip with a clear
+    # message instead of burning a run on a doomed attempt.
+    if not _token_is_fresh():
+        output_lines.append("Step 3/3 SKIPPED — E*TRADE token is not fresh today. Run `python -m etrade_sync auth`, then use P1 Pipeline Status to sync.")
+    else:
+        with st.spinner("Step 3/3 — syncing E*TRADE data…"):
+            r3 = subprocess.run(
+                [sys.executable, "-m", "etrade_sync", "sync"],
+                capture_output=True, text=True, cwd=str(PROJECT_ROOT),
+            )
+        output_lines.append(r3.stdout.strip() if r3.returncode == 0 else (r3.stdout + r3.stderr).strip())
 
     st.sidebar.code("\n".join(filter(None, output_lines)), language=None)
     st.rerun()

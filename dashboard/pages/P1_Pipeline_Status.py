@@ -34,11 +34,106 @@ def status_icon(status):
     )
 
 
+fresh, token_date = token_is_fresh()
+
+# ── run jobs ──────────────────────────────────────────────────────────────────
+
+st.subheader("Run Jobs")
+
+JOBS = {
+    "sync":               "Pull latest data from E*TRADE (accounts, balances, positions, transactions, orders)",
+    "migrate":            "Apply SQL schema changes — drop + recreate all materialized views, re-run all SQL files",
+    "refresh-views":      "Refresh all materialized views without re-syncing",
+    "build-ledger":       "Rebuild the ledger table from transactions",
+    "build-realized-pnl": "Recompute FIFO realized P/L from ledger",
+    "seed-symbols":       "Fetch symbol metadata (sector, asset class) from yfinance",
+    "seed-prices":        "Fetch SPY benchmark prices from yfinance",
+    "seed-dates":         "Regenerate the dim_dates date spine",
+    "reconcile":          "Compare ledger positions to latest API snapshot",
+    "cleanup-audit":      "Collapse duplicate transaction_ingest_audit rows (safe to run anytime)",
+}
+
+NEEDS_TOKEN = {"sync"}
+
+col_job, col_btn = st.columns([3, 1])
+with col_job:
+    job = st.selectbox("Job", list(JOBS.keys()),
+                       format_func=lambda j: f"{j}  —  {JOBS[j]}")
+with col_btn:
+    st.write("")
+    st.write("")
+    run_btn = st.button("▶ Run", type="primary", use_container_width=True)
+
+# Per-job options
+cmd_extra = []
+
+if job == "sync":
+    if not fresh:
+        st.error("Token is expired — re-authenticate before running sync.")
+        run_btn = False
+    c1, c2 = st.columns(2)
+    with c1:
+        only = st.selectbox("Data type", ["all", "accounts", "balances", "positions", "transactions", "orders"])
+        if only != "all":
+            cmd_extra += ["--only", only]
+    with c2:
+        date_range = st.selectbox("Date range (transactions + orders)", ["default (90d)", "30 days", "365 days", "from beginning"])
+        if date_range == "30 days":
+            cmd_extra += ["--days", "30"]
+        elif date_range == "365 days":
+            cmd_extra += ["--days", "365"]
+        elif date_range == "from beginning":
+            cmd_extra += ["--from-beginning"]
+
+elif job == "build-ledger":
+    full_rebuild = st.checkbox("Full rebuild (truncate ledger before repopulating)")
+    if full_rebuild:
+        cmd_extra += ["--full-rebuild"]
+
+elif job == "cleanup-audit":
+    dry_run = st.checkbox("Dry run (inspect without deleting)", value=True)
+    if dry_run:
+        cmd_extra += ["--dry-run"]
+
+if run_btn:
+    cmd = [PYTHON, "-m", "etrade_sync", job] + cmd_extra
+    output_box = st.empty()
+    lines = []
+    with st.spinner(f"Running {job}…"):
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=str(Path(__file__).parent.parent.parent),
+        )
+        for line in proc.stdout:
+            lines.append(line.rstrip())
+            output_box.code("\n".join(lines), language=None)
+        proc.wait()
+
+    st.session_state["last_job_output"] = "\n".join(lines)
+    st.session_state["last_job_name"]   = job
+    st.session_state["last_job_ok"]     = proc.returncode == 0
+    st.rerun()
+
+# Show persisted result from previous run
+if "last_job_output" in st.session_state:
+    ok = st.session_state["last_job_ok"]
+    name = st.session_state["last_job_name"]
+    if ok:
+        st.success(f"{name} completed successfully.")
+    else:
+        st.error(f"{name} failed.")
+    with st.expander("Output", expanded=not ok):
+        st.code(st.session_state["last_job_output"], language=None)
+
+st.divider()
+
 # ── alerts ────────────────────────────────────────────────────────────────────
 
 st.subheader("Alerts")
 
-fresh, token_date = token_is_fresh()
 if not fresh:
     label = "Token file not found." if token_date == "missing" else f"Token last written {token_date} ET."
     st.error(f"🔐 **E*TRADE token expired.** {label}  Run `python -m etrade_sync auth` then retry.")
@@ -183,97 +278,3 @@ if sync_times:
     )
 else:
     st.info("No sync_state entries yet.")
-
-st.divider()
-
-# ── run jobs ──────────────────────────────────────────────────────────────────
-
-st.subheader("Run Jobs")
-
-JOBS = {
-    "sync":               "Pull latest data from E*TRADE (accounts, balances, positions, transactions, orders)",
-    "migrate":            "Apply SQL schema changes — drop + recreate all materialized views, re-run all SQL files",
-    "refresh-views":      "Refresh all materialized views without re-syncing",
-    "build-ledger":       "Rebuild the ledger table from transactions",
-    "build-realized-pnl": "Recompute FIFO realized P/L from ledger",
-    "seed-symbols":       "Fetch symbol metadata (sector, asset class) from yfinance",
-    "seed-prices":        "Fetch SPY benchmark prices from yfinance",
-    "seed-dates":         "Regenerate the dim_dates date spine",
-    "reconcile":          "Compare ledger positions to latest API snapshot",
-    "cleanup-audit":      "Collapse duplicate transaction_ingest_audit rows (safe to run anytime)",
-}
-
-NEEDS_TOKEN = {"sync"}
-
-col_job, col_btn = st.columns([3, 1])
-with col_job:
-    job = st.selectbox("Job", list(JOBS.keys()),
-                       format_func=lambda j: f"{j}  —  {JOBS[j]}")
-with col_btn:
-    st.write("")
-    st.write("")
-    run_btn = st.button("▶ Run", type="primary", use_container_width=True)
-
-# Per-job options
-cmd_extra = []
-
-if job == "sync":
-    if not fresh:
-        st.error("Token is expired — re-authenticate before running sync.")
-        run_btn = False
-    c1, c2 = st.columns(2)
-    with c1:
-        only = st.selectbox("Data type", ["all", "accounts", "balances", "positions", "transactions", "orders"])
-        if only != "all":
-            cmd_extra += ["--only", only]
-    with c2:
-        date_range = st.selectbox("Date range (transactions + orders)", ["default (90d)", "30 days", "365 days", "from beginning"])
-        if date_range == "30 days":
-            cmd_extra += ["--days", "30"]
-        elif date_range == "365 days":
-            cmd_extra += ["--days", "365"]
-        elif date_range == "from beginning":
-            cmd_extra += ["--from-beginning"]
-
-elif job == "build-ledger":
-    full_rebuild = st.checkbox("Full rebuild (truncate ledger before repopulating)")
-    if full_rebuild:
-        cmd_extra += ["--full-rebuild"]
-
-elif job == "cleanup-audit":
-    dry_run = st.checkbox("Dry run (inspect without deleting)", value=True)
-    if dry_run:
-        cmd_extra += ["--dry-run"]
-
-if run_btn:
-    cmd = [PYTHON, "-m", "etrade_sync", job] + cmd_extra
-    output_box = st.empty()
-    lines = []
-    with st.spinner(f"Running {job}…"):
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            cwd=str(Path(__file__).parent.parent.parent),
-        )
-        for line in proc.stdout:
-            lines.append(line.rstrip())
-            output_box.code("\n".join(lines), language=None)
-        proc.wait()
-
-    st.session_state["last_job_output"] = "\n".join(lines)
-    st.session_state["last_job_name"]   = job
-    st.session_state["last_job_ok"]     = proc.returncode == 0
-    st.rerun()
-
-# Show persisted result from previous run
-if "last_job_output" in st.session_state:
-    ok = st.session_state["last_job_ok"]
-    name = st.session_state["last_job_name"]
-    if ok:
-        st.success(f"{name} completed successfully.")
-    else:
-        st.error(f"{name} failed.")
-    with st.expander("Output", expanded=not ok):
-        st.code(st.session_state["last_job_output"], language=None)

@@ -22,6 +22,8 @@ GROUPS = {
         ("Silver",    "SI=F"),
         ("Platinum",  "PL=F"),
         ("Palladium", "PA=F"),
+        ("PPLT", "PPLT"),
+        ("PALL", "PALL"),
     ],
     "Energy Futures": [
         ("Crude Oil (WTI)", "CL=F"),
@@ -46,7 +48,6 @@ GROUPS = {
         ("AEM",  "AEM"),
         ("RGLD", "RGLD"),
         ("GROY", "GROY"),
-        ("PPLT", "PPLT"),
         ("SBSW", "SBSW"),
         ("ARIS", "ARIS"),
         ("EQX", "EQX"),

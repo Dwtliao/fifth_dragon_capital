@@ -177,10 +177,16 @@ with st.expander("Update Spot Prices"):
 # ── Add Holding ────────────────────────────────────────────────────────────────
 
 with st.expander("Add Holding"):
+    existing_accounts = sorted({r["account_name"] for r in query("SELECT DISTINCT account_name FROM physical_holdings_pm")})
+    NEW_ACCOUNT_OPTION = "+ Add new account…"
+    account_choice = st.selectbox("Account Name", existing_accounts + [NEW_ACCOUNT_OPTION], key="add_account_choice")
+    new_account_name = ""
+    if account_choice == NEW_ACCOUNT_OPTION:
+        new_account_name = st.text_input("New Account Name", placeholder="e.g. Home Safe", key="add_account_new")
+
     with st.form("add_form"):
-        c1, c2 = st.columns(2)
-        account_name = c1.text_input("Account Name", placeholder="e.g. Home Safe")
-        location     = c2.text_input("Location",     placeholder="e.g. San Francisco, CA")
+        account_name = new_account_name if account_choice == NEW_ACCOUNT_OPTION else account_choice
+        location = st.text_input("Location", placeholder="e.g. San Francisco, CA")
         c3, c4, c5 = st.columns(3)
         metal          = c3.selectbox("Metal", METALS, format_func=lambda m: METAL_LABEL[m])
         weight_oz      = c4.number_input("Weight (oz)",              min_value=0.001, step=0.001, format="%.3f")
@@ -203,6 +209,51 @@ with st.expander("Add Holding"):
                 ))
                 st.success(f"Added {weight_oz:.3f} oz {METAL_LABEL[metal]}.")
                 st.rerun()
+
+
+# ── Update Holding ─────────────────────────────────────────────────────────────
+
+if not holdings.empty:
+    with st.expander("Update Holding"):
+        rows = query("""
+            SELECT id, account_name, location, metal, weight_oz::float,
+                   purchase_price::float, purchase_date, description
+            FROM physical_holdings_pm ORDER BY id
+        """)
+        options = {
+            f"#{r['id']} — {r['account_name']} / {r['location']} / {METAL_LABEL[r['metal']]} {r['weight_oz']:.3f} oz": r
+            for r in rows
+        }
+        chosen = st.selectbox("Select holding to update", list(options.keys()), key="update_holding_select")
+        row = options[chosen]
+        rid = row["id"]
+        with st.form(f"update_form_{rid}"):
+            c1, c2 = st.columns(2)
+            account_name = c1.text_input("Account Name", value=row["account_name"], key=f"upd_account_{rid}")
+            location     = c2.text_input("Location",     value=row["location"],     key=f"upd_location_{rid}")
+            c3, c4, c5 = st.columns(3)
+            metal          = c3.selectbox("Metal", METALS, index=METALS.index(row["metal"]), format_func=lambda m: METAL_LABEL[m], key=f"upd_metal_{rid}")
+            weight_oz      = c4.number_input("Weight (oz)",              min_value=0.001, step=0.001, format="%.3f", value=row["weight_oz"],      key=f"upd_weight_{rid}")
+            purchase_price = c5.number_input("Total Purchase Price ($)", min_value=0.0,   step=0.01,  format="%.2f", value=row["purchase_price"], key=f"upd_price_{rid}")
+            c6, c7 = st.columns(2)
+            purchase_date = c6.date_input("Purchase Date", value=row["purchase_date"], min_value=date(2000, 1, 1), max_value=date.today(), key=f"upd_date_{rid}")
+            description   = c7.text_input("Description", value=row["description"] or "", key=f"upd_desc_{rid}")
+            if st.form_submit_button("Save Changes", type="primary"):
+                if not account_name.strip() or not location.strip():
+                    st.error("Account Name and Location are required.")
+                else:
+                    execute("""
+                        UPDATE physical_holdings_pm
+                        SET account_name = %s, location = %s, metal = %s, weight_oz = %s,
+                            purchase_price = %s, purchase_date = %s, description = %s
+                        WHERE id = %s
+                    """, (
+                        account_name.strip(), location.strip(), metal,
+                        weight_oz, purchase_price, purchase_date,
+                        description.strip() or None, row["id"],
+                    ))
+                    st.success("Holding updated.")
+                    st.rerun()
 
 
 # ── Delete Holding ─────────────────────────────────────────────────────────────

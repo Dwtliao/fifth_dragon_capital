@@ -48,6 +48,9 @@ GROUPS = {
         ("GROY", "GROY"),
         ("PPLT", "PPLT"),
         ("SBSW", "SBSW"),
+        ("ARIS", "ARIS"),
+        ("EQX", "EQX"),
+        ("SGD.TO", "SGD.TO"),
     ],
     "Uranium": [
         ("SRUUF (Spot Proxy)", "SRUUF"),

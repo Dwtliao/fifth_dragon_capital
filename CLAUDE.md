@@ -1,5 +1,5 @@
 # Fifth Dragon Capital — Claude Context
-_Last updated: June 18, 2026. Read this at the start of every session._
+_Last updated: July 24, 2026. Read this at the start of every session._
 
 ---
 
@@ -7,9 +7,9 @@ _Last updated: June 18, 2026. Read this at the start of every session._
 Personal trading infrastructure. PostgreSQL DB + Python + Streamlit dashboard.
 Owner: David Liao (david.liao@precisetarget.com)
 
-**Active branch:** `feature/morning_brief1`
-**Push when done:** `git push --set-upstream origin feature/morning_brief1`
+**Workflow:** short-lived `feature/*` or `fix/*` branches off `main`, one PR per change, merge immediately once verified. Don't commit directly to `main`.
 **Git identity for commits:** always use `-c user.email="david.liao@precisetarget.com" -c user.name="David Liao"`
+**morning_brief WIP:** the Confirmation Hierarchy feature (#66) Part 1 lives on branch `update_morning_brief1` (committed, pushed, NOT merged into main) — has a known blocking bug, see "Known open items" below. Don't build Part 2 on top of it until that's fixed.
 
 ---
 
@@ -20,7 +20,10 @@ fifth_dragon_capital/
 ├── alerts/              # existing — DO NOT MODIFY
 ├── dashboard/
 │   └── pages/
-│       └── P10_Morning_Brief.py  # Streamlit page — user-built, Claude added sync features
+│       ├── P10_Morning_Brief.py  # Streamlit page — user-built, Claude added sync features
+│       └── P1-P9                # other actively-maintained pages (Pipeline Status, Portfolio
+│                                 # Overview, Physical Metals, Market Monitor, Commodities, etc.)
+│                                 # — not just morning_brief scope; see git log for recent changes
 ├── etrade_sync/         # existing — DO NOT MODIFY
 ├── morning_brief/       # NEW module — all new work goes here
 │   ├── __init__.py
@@ -66,38 +69,16 @@ fifth_dragon_capital/
 
 ---
 
-## KNOWN BUG — MUST FIX
+## Known open items (as of 2026-07-24)
 
-**`brief.py` calls `fetchers.load_key_levels_from_db()` — this function does not exist in fetchers.py.**
+- **`events.yml` still doesn't exist** — the FOMC/data-release events section in the Morning Brief is silent without it.
+- **Confirmation Hierarchy (#66) Part 1 has a blocking bug**, on branch `update_morning_brief1`: `range_expansion`/`move_percentile`/`crossed_level` compute off yesterday's completed daily bar instead of the current price, inconsistent with `overnight_return`/`dist_from_*dma` which correctly use the fresher price. Fix before any Part 2 scoring work — see issue #66.
+- **Alert system (#63) has 3 deferred, unscoped items**: a dismissal/acknowledgment mechanism for reviewed stale alerts, a decision on auto-archive vs. permanent review-only for stale detection, and a `key_levels.updated_at`-based freshness check for structural rows. None blocking, just not built yet.
+- **`sync-daily` (the 6am launchd job) fails every morning by design** — E*TRADE tokens expire at midnight ET, so an unattended 6am job can never have a fresh token. This is accepted, not a bug (see commit fd27d9a). To sync positions without the full Morning Pipeline, use P1 Pipeline Status → Run Jobs → `sync` (data type: positions) after re-authenticating.
+- **No market buy order capability exists** — only `preview_market_sell`/`place_market_sell` are implemented in `etrade_sync/trading/orders.py`. A buy would mirror the sell implementation's shape.
+- **Live E*TRADE order placement is currently enabled** (`ETRADE_DEV=false`, `ETRADE_LIVE_ORDERS=true` in `.env`) — be careful with anything touching `etrade_sync/trading/orders.py` or P2's Quick Sell panel; it hits the real account, not sandbox.
 
-User modified `brief.py` to call a DB-backed key levels loader, but the function was never implemented. The original function was `_load_key_levels()` (reads from YAML file).
-
-**Fix needed:** Implement `load_key_levels_from_db()` and `save_key_levels_to_db()` in `fetchers.py`.
-
-These functions are also called in `P10_Morning_Brief.py`:
-```python
-from morning_brief.fetchers import (
-    fetch_positions_from_db, sync_positions_from_db,
-    load_key_levels_from_db, save_key_levels_to_db,
-)
-```
-
-**Decision needed:** Store key_levels in DB (new table) or keep in YAML? P10 currently uses DB-backed versions. The simplest fix is to implement these as YAML read/write wrappers so the interface matches what P10 expects.
-
----
-
-## PENDING TASKS
-
-1. **Implement `load_key_levels_from_db()` / `save_key_levels_to_db()`** in fetchers.py (see bug above)
-2. **Create `events.yml`** with upcoming FOMC/data release dates (events section in brief is silent without it)
-3. **Add `pyyaml` to `requirements.txt`** (used throughout morning_brief but not in requirements)
-4. **Create `morning_brief/journal_sync.py`** — P10 sidebar has "Sync Latest Journal" button that calls this module; it doesn't exist yet
-5. **Create `journal_sync_log` DB table** — P10 Tab 3 queries this table; schema needed
-6. **Fix `ETRADE_DEV=true`** in .env — currently pointed at sandbox, not live E*TRADE
-7. **Git push from Mac terminal** (sandbox can't auth to GitHub over HTTPS):
-   ```
-   git push --set-upstream origin feature/morning_brief1
-   ```
+Resolved since the last pass (previously listed here as pending, now done): `load_key_levels_from_db()`/`save_key_levels_to_db()` are implemented in `fetchers.py`; `pyyaml` is in `requirements.txt`; `morning_brief/journal_sync.py` and the `journal_sync_log` table both exist.
 
 ---
 
@@ -108,7 +89,7 @@ Streamlit page at `dashboard/pages/P10_Morning_Brief.py`. User-built, Claude add
 **Tabs:**
 - **Tab 1 (Brief):** Renders `trading_diary/morning_brief.md` (output of `python -m morning_brief.brief`)
 - **Tab 2 (Key Levels):** Editable UI for positions (stops/notes) and watch levels. DB snapshot read-only table at top. Save All button syncs `alert_above` values to `price_alerts` DB table.
-- **Tab 3 (Sync History):** Reads `journal_sync_log` table (DB table not yet created)
+- **Tab 3 (Sync History):** Reads `journal_sync_log` table.
 
 **Sidebar buttons:**
 - ▶ Run Morning Brief — runs `python -m morning_brief.brief`
@@ -180,12 +161,7 @@ watch:
 
 ## Network Note
 
-Sandbox (bash tool) cannot authenticate to GitHub over HTTPS. All `git push` commands must be run from the Mac terminal. Always include the push command in output so user can copy-paste:
-```
-git push --set-upstream origin feature/morning_brief1
-```
-
-Sandbox also blocks outbound network (yfinance fetches return 403). Code is structurally correct — yfinance works on Mac.
+As of 2026-07-24, the sandbox (bash tool) can reach GitHub over HTTPS directly — `git push`/`pull` and `gh pr create`/`merge` all work without needing the Mac terminal — and yfinance fetches succeed too. Older versions of this note said otherwise; if a session ever hits 403s or auth failures again, fall back to asking the user to run the command from their Mac terminal rather than assuming this is permanently fixed.
 
 ---
 

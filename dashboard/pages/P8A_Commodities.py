@@ -51,6 +51,7 @@ GROUPS = {
         ("SBSW", "SBSW"),
         ("ARIS", "ARIS"),
         ("EQX", "EQX"),
+        ("NFGC", "NFGC"),
         ("SGD.TO", "SGD.TO"),
     ],
     "Uranium": [

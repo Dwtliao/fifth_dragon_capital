@@ -404,7 +404,7 @@ with st.expander("⚡ Quick Sell — Market Order", expanded=False):
           AND p.quantity > 0
         GROUP BY p.account_id_key, acct_label, p.symbol
         HAVING SUM(p.quantity) > 0
-        ORDER BY acct_label, p.symbol
+        ORDER BY p.symbol, acct_label
     """)
 
     if not sellable_raw:

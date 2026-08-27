@@ -547,7 +547,47 @@ with st.expander("⚡ Quick Sell — Market Order", expanded=False):
 
 _lot_where = "AND ol.account_id_key = %(acct)s" if account_filter else ""
 
-lots_df = pd.DataFrame(query(f"""
+# E*TRADE broker lots are the authoritative current tax lots when their total
+# matches the aggregate E*TRADE position snapshot. FIFO lots stay available as
+# a clearly labelled local fallback for positions without broker lot coverage.
+broker_lots_df = pd.DataFrame(query(f"""
+    SELECT
+        b.account_id_key,
+        a.account_id,
+        b.symbol,
+        b.acquired_date                                                AS buy_date,
+        b.price::float                                                 AS buy_price,
+        b.remaining_quantity::float                                    AS quantity,
+        b.total_cost::float                                            AS cost_basis,
+        (p.market_value / NULLIF(p.quantity, 0))::float               AS current_price,
+        (b.remaining_quantity * p.market_value / NULLIF(p.quantity, 0))::float
+                                                                      AS current_value,
+        (b.remaining_quantity * p.market_value / NULLIF(p.quantity, 0)
+            - b.total_cost)::float                                    AS unrealized_pnl,
+        (CURRENT_DATE - b.acquired_date)                               AS days_held,
+        'etrade'                                                       AS source_system,
+        NULL::text                                                     AS classification,
+        'E*TRADE broker lots'                                          AS lot_source,
+        b.position_fetched_at                                          AS lot_snapshot_at
+    FROM broker_position_lots b
+    JOIN broker_lot_coverage c
+      ON c.account_id_key = b.account_id_key
+     AND c.symbol = b.symbol
+     AND c.position_fetched_at = b.position_fetched_at
+     AND c.quantity_complete
+    JOIN accounts a ON a.account_id_key = b.account_id_key
+    JOIN (
+        SELECT account_id_key, symbol, market_value, quantity
+        FROM positions
+        WHERE (account_id_key, fetched_at) IN (
+            SELECT account_id_key, MAX(fetched_at) FROM positions GROUP BY account_id_key
+        )
+    ) p ON p.account_id_key = b.account_id_key AND p.symbol = b.symbol
+    WHERE 1=1 {_lot_where.replace('ol.account_id_key', 'b.account_id_key')}
+    ORDER BY b.symbol, b.acquired_date
+""", _params))
+
+fifo_lots_df = pd.DataFrame(query(f"""
     SELECT
         ol.account_id_key,
         a.account_id,
@@ -562,7 +602,9 @@ lots_df = pd.DataFrame(query(f"""
             - ol.cost_basis)::float                                AS unrealized_pnl,
         (CURRENT_DATE - ol.buy_date)                               AS days_held,
         COALESCE(t.source_system, 'unknown')                       AS source_system,
-        ia.classification
+        ia.classification,
+        'FIFO reconstructed lots'                                  AS lot_source,
+        NULL::timestamptz                                           AS lot_snapshot_at
     FROM open_lots ol
     JOIN accounts a USING (account_id_key)
     JOIN (
@@ -585,6 +627,26 @@ lots_df = pd.DataFrame(query(f"""
       {_lot_where}
     ORDER BY ol.symbol, ol.buy_date
 """, _params))
+
+broker_keys = set()
+if not broker_lots_df.empty:
+    broker_keys = set(zip(broker_lots_df["account_id_key"], broker_lots_df["symbol"]))
+
+if broker_keys and not fifo_lots_df.empty:
+    fifo_lots_df = fifo_lots_df[
+        ~fifo_lots_df.apply(lambda row: (row["account_id_key"], row["symbol"]) in broker_keys, axis=1)
+    ]
+
+lots_df = pd.concat([broker_lots_df, fifo_lots_df], ignore_index=True)
+
+broker_lot_gaps = query(f"""
+    SELECT c.symbol, a.account_name, c.position_quantity, c.broker_lot_quantity
+    FROM broker_lot_coverage c
+    JOIN accounts a USING (account_id_key)
+    WHERE NOT c.quantity_complete
+      {_lot_where.replace('ol.account_id_key', 'c.account_id_key')}
+    ORDER BY a.account_name, c.symbol
+""", _params)
 
 # Position quantities from E*TRADE for reconciliation check
 pos_qty = {}
@@ -614,7 +676,19 @@ if not lots_df.empty:
     if not multi_lots.empty:
         st.divider()
         st.subheader("Position Lot Detail")
-        st.caption("Symbols with multiple purchase lots — buy prices are split-adjusted.")
+        st.caption(
+            "E*TRADE broker lots are shown when their quantities cover the current "
+            "E*TRADE position; otherwise this uses explicitly labelled local FIFO lots."
+        )
+
+        for gap in broker_lot_gaps:
+            st.warning(
+                f"E*TRADE lot coverage is incomplete for {gap['account_name']} · {gap['symbol']}: "
+                f"lots total {float(gap['broker_lot_quantity']):,.0f} shares vs. "
+                f"position {float(gap['position_quantity']):,.0f} shares. "
+                "Showing local estimated lots instead.",
+                icon="⚠️",
+            )
 
         for symbol in sorted(multi_lots["symbol"].unique()):
             sym_lots = multi_lots[multi_lots["symbol"] == symbol].copy()
@@ -649,6 +723,12 @@ if not lots_df.empty:
                 f"{flags}"
             )
             with st.expander(label):
+                broker_snapshot = sym_lots.loc[
+                    sym_lots["lot_source"] == "E*TRADE broker lots", "lot_snapshot_at"
+                ].dropna()
+                if not broker_snapshot.empty:
+                    timestamp = pd.Timestamp(broker_snapshot.max()).strftime("%Y-%m-%d %H:%M %Z")
+                    st.caption(f"Authoritative E*TRADE broker-lot snapshot: {timestamp}")
                 if not reconciled:
                     missing = position_qty - lot_total_qty
                     st.warning(
@@ -671,6 +751,8 @@ if not lots_df.empty:
                     )
 
                 def _provenance_label(row):
+                    if row["lot_source"] == "E*TRADE broker lots":
+                        return "E*TRADE broker lot"
                     c = row["classification"]
                     s = row["source_system"]
                     if c in _SUSPECT_CLASSES:

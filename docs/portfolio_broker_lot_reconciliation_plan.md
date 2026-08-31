@@ -65,7 +65,7 @@ oldest shares.
 - [x] Run the migration and a safe verification sync with a valid token; verify
   Rollover IRA NFGC displays the three E*TRADE lots: 700 (2025-04-30), 350
   (2026-07-22), and 450 (2026-07-24).
-- [ ] Update project documentation and this plan with implementation decisions,
+- [x] Update project documentation and this plan with implementation decisions,
   verification results, and any API limitations discovered.
 
 ## Progress Log
@@ -98,3 +98,11 @@ oldest shares.
   `account_id_key` join. The corrected query returns 77 covered broker lots,
   including Rollover IRA NFGC at 700 / 350 / 450 shares.
 - Automated tests: 47 passing.
+
+### 2026-08-31 — Session Handoff
+
+- PR #81 is merged into `main` as commit `f33a247`.
+- Added the durable operational handoff to root `CLAUDE.md`.
+- Remaining follow-up: add unit tests for broker-lot request-error handling and
+  coverage statuses; the core live path, fallback behavior, and NFGC acceptance
+  case are verified.

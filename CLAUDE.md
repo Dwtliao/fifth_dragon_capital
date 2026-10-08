@@ -51,6 +51,36 @@ fifth_dragon_capital/
 
 ---
 
+## Broker-Lot Sync — Handoff (updated 2026-08-31)
+
+PR #81 (`fix/portfolio-sync-errors`) is merged into `main`. Current E*TRADE
+broker lots are now the authority for P2's Position Lot Detail whenever their
+sum matches the current aggregate E*TRADE position.
+
+- `data_model/073_broker_position_lots.sql` stores append-only broker-lot
+  snapshots; `074_broker_lot_coverage.sql` validates lot quantity coverage.
+- `etrade_sync/sync/positions.py` saves the aggregate position snapshot and,
+  for active equities, follows E*TRADE's `lotsDetails` URL to save broker lots
+  with the same snapshot timestamp.
+- P2 never merges broker lots with FIFO lots. When broker coverage is complete,
+  it shows **E*TRADE broker lots**. Otherwise it falls back to explicitly
+  labelled local FIFO/CSV/manual lots.
+- E*TRADE can return a 500 for an individual lot endpoint (seen for Trading
+  Account `G0137D118`). This is a non-fatal warning: aggregate positions and
+  all available broker lots still sync, and the failed symbol uses the local
+  fallback.
+- NFGC acceptance case: Rollover IRA must show 700 shares from 2025-04-30,
+  350 from 2026-07-22, and 450 from 2026-07-24 (1,500 total). Do not treat
+  the legacy FIFO reconstruction (200 / 500 / 350 / 450) as broker lot data.
+- The detailed design, verification history, backup record, and outstanding
+  test hardening are in `docs/portfolio_broker_lot_reconciliation_plan.md`.
+
+Before further database/schema changes, run `bash scripts/backup_db.sh`.
+The latest confirmed pre-follow-up backup was
+`fifth_dragon_capital_20260826_111630.dump`.
+
+---
+
 ## Key Functions (fetchers.py)
 
 | Function | Purpose |

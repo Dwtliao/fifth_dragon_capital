@@ -91,6 +91,91 @@ def render_events(events: list[dict]) -> str:
     return "\n".join(lines) + "\n\n---\n"
 
 
+def _market_value(value, unit="price") -> str:
+    if value is None:
+        return "—"
+    if unit == "yield_pct":
+        return f"{value:.3f}%"
+    return f"{value:,.3f}" if abs(value) < 10 else f"{value:,.2f}"
+
+
+def _market_change(value, unit="price") -> str:
+    if value is None:
+        return "—"
+    suffix = " bp" if unit in ("yield_pct", "bp") else " USD/bbl" if unit == "USD/barrel" else "%"
+    return f"{value:+.2f}{suffix}"
+
+
+def render_market_overview(overview: dict) -> str:
+    """Render daily context with honest units, dates and missing data."""
+    fetched = datetime.datetime.fromisoformat(overview["fetched_at"])
+    lines = [
+        "## Market context\n",
+        f"_Yahoo Finance daily history, fetched {fetched.strftime('%Y-%m-%d %H:%M %Z')}._\n",
+        "Changes use 1, 5 and 20 trading observations. The latest daily bar may still be forming; "
+        "these are not guaranteed live pre-market quotes. Dates vary by exchange. "
+        "⚠ marks a bar older than four calendar days.\n",
+    ]
+    titles = {
+        "global": "Global equity indices", "us_futures": "US equity futures",
+        "rates": "Rates & Treasury markets", "energy": "Energy futures",
+        "commodities": "Metals, agriculture & uranium equity proxies",
+        "currencies": "Currencies & dollar", "volatility": "Volatility",
+        "risk": "Equity leadership, defensive sectors & credit proxies",
+    }
+    for group, title in titles.items():
+        lines.extend([
+            f"### {title}\n",
+            "| Market | Latest | 1 session | 5 sessions | 20 sessions | vs 20 / 50 MA | 20-session close range | Bar date |",
+            "|---|---:|---:|---:|---:|---|---|---|",
+        ])
+        for row in overview["groups"].get(group, []):
+            if "error" in row:
+                # Keep arbitrary fetch messages from breaking Markdown tables.
+                error = str(row["error"]).replace("|", "/").replace("\n", " ")
+                lines.append(f"| {row['label']} | Unavailable: {error} | — | — | — | — | — | — |")
+                continue
+            unit = row["unit"]
+            trend = " / ".join(
+                "—" if row.get(f"above_ma{days}") is None else
+                "above" if row[f"above_ma{days}"] else "at/below"
+                for days in (20, 50)
+            )
+            low, high = row.get("low_20d"), row.get("high_20d")
+            close_range = f"{_market_value(low, unit)} – {_market_value(high, unit)}" if low is not None else "—"
+            date = row["as_of"] + (" ⚠" if row.get("stale") else "")
+            changes = " | ".join(_market_change(row.get(f"change_{days}d"), unit) for days in (1, 5, 20))
+            lines.append(f"| {row['label']} | {_market_value(row['last'], unit)} | {changes} | {trend} | {close_range} | {date} |")
+        lines.append("")
+        if group == "rates":
+            lines.append("_Yield levels are percentages; yield changes are basis points. "
+                         "Treasury futures and bond ETFs show price changes, not yields. "
+                         "The 13-week bill is a quoted discount yield; TIP prices are not inflation expectations._\n")
+        elif group in ("energy", "commodities"):
+            lines.append("_Futures use Yahoo's front-contract series; contract rolls can affect comparisons. "
+                         "URA and URNM track uranium equities, not spot uranium._\n")
+
+    lines.extend([
+        "### Cross-market comparisons\n",
+        "| Comparison | Latest | 1 session change | 5 session change | 20 session change | Shared bar date |",
+        "|---|---:|---:|---:|---:|---|",
+    ])
+    for row in overview.get("signals", []):
+        if "error" in row:
+            lines.append(f"| {row['label']} | Unavailable | — | — | — | — |")
+            continue
+        unit = row["unit"]
+        value = _market_value(row["last"]) + (" bp" if unit == "bp" else " USD/bbl" if unit == "USD/barrel" else "")
+        changes = " | ".join(_market_change(row.get(f"change_{days}d"), unit) for days in (1, 5, 20))
+        date = row["as_of"] + (" ⚠" if row.get("stale") else "")
+        lines.append(f"| {row['label']} | {value} | {changes} | {date} |")
+    lines.append("\n_Ratios use dates shared by both instruments. Rising RSP/SPY means equal weight "
+                 "outperformed the capitalization-weighted ETF; it is a participation proxy, not an advance/decline count. "
+                 "HYG/LQD is relative ETF performance, not a measured credit spread. "
+                 "ETF histories are adjusted for distributions and splits._\n\n---\n")
+    return "\n".join(lines)
+
+
 def render_global_indices(data: list[dict]) -> str:
     lines = ["## 🌏  OVERNIGHT GLOBAL\n"]
     for row in data:

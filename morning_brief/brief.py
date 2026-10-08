@@ -33,6 +33,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 from morning_brief.alert_compiler import prune_expired_alerts, refresh_structural_alerts_from_db
 from morning_brief import fetchers, formatter
+from morning_brief.market_context import fetch_market_overview
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
@@ -63,35 +64,11 @@ def generate_brief() -> str:
     except Exception as exc:
         sections.append(f"_Events fetch failed: {exc}_\n\n---\n")
 
-    # Global indices
+    # Market context uses one batched history download across all groups.
     try:
-        sections.append(formatter.render_global_indices(fetchers.fetch_global_indices()))
+        sections.append(formatter.render_market_overview(fetch_market_overview()))
     except Exception as exc:
-        sections.append(f"_Global indices fetch failed: {exc}_\n\n---\n")
-
-    # US futures
-    try:
-        sections.append(formatter.render_us_futures(fetchers.fetch_us_futures()))
-    except Exception as exc:
-        sections.append(f"_US futures fetch failed: {exc}_\n\n---\n")
-
-    # Commodities
-    try:
-        sections.append(formatter.render_commodities(fetchers.fetch_commodities()))
-    except Exception as exc:
-        sections.append(f"_Commodities fetch failed: {exc}_\n\n---\n")
-
-    # Currencies
-    try:
-        sections.append(formatter.render_currencies(fetchers.fetch_currencies()))
-    except Exception as exc:
-        sections.append(f"_Currencies fetch failed: {exc}_\n\n---\n")
-
-    # Volatility
-    try:
-        sections.append(formatter.render_vol(fetchers.fetch_vol_proxies()))
-    except Exception as exc:
-        sections.append(f"_Vol proxies fetch failed: {exc}_\n\n---\n")
+        sections.append(f"_Market context fetch failed: {exc}_\n\n---\n")
 
     # Positions (from key_levels.yml)
     try:

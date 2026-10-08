@@ -340,6 +340,7 @@ def main():
         ]
 
         errors = []
+        error_details = []
         for name, fn in steps:
             if args.only and args.only != name:
                 continue
@@ -350,14 +351,17 @@ def main():
                 if isinstance(result, dict) and result.get("errors"):
                     for err in result["errors"]:
                         print(f"[{_ts()}] WARNING: {name} partial failure — {err}")
+                        error_details.append(f"{name}: {err}")
                     errors.append(name)
             except RuntimeError as e:
                 print(f"[{_ts()}] ERROR: {e}")
-                finish_run(log_id, "failed", error_msg=str(e))
+                error_details.append(f"{name}: {e}")
+                finish_run(log_id, "failed", error_msg="\n".join(error_details))
                 sys.exit(1)
             except Exception as e:
                 print(f"[{_ts()}] WARNING: {name} failed — {e}")
                 errors.append(name)
+                error_details.append(f"{name}: {e}")
             elapsed = time.time() - t0
             print(f"[{_ts()}] {name} done ({elapsed:.1f}s)")
 
@@ -369,6 +373,7 @@ def main():
             except Exception as e:
                 print(f"[{_ts()}] WARNING: ledger rebuild failed — {e}")
                 errors.append("ledger")
+                error_details.append(f"ledger: {e}")
             print(f"[{_ts()}] ledger done")
 
             print(f"[{_ts()}] realized pnl...")
@@ -378,6 +383,7 @@ def main():
             except Exception as e:
                 print(f"[{_ts()}] WARNING: realized pnl failed — {e}")
                 errors.append("realized_pnl")
+                error_details.append(f"realized_pnl: {e}")
             print(f"[{_ts()}] realized pnl done")
 
             print(f"[{_ts()}] benchmark prices...")
@@ -387,6 +393,7 @@ def main():
             except Exception as e:
                 print(f"[{_ts()}] WARNING: benchmark price fetch failed — {e}")
                 errors.append("benchmark_prices")
+                error_details.append(f"benchmark_prices: {e}")
             print(f"[{_ts()}] benchmark prices done")
 
             print(f"[{_ts()}] refreshing views...")
@@ -395,6 +402,7 @@ def main():
             except Exception as e:
                 print(f"[{_ts()}] WARNING: view refresh failed — {e}")
                 errors.append("view_refresh")
+                error_details.append(f"view_refresh: {e}")
             print(f"[{_ts()}] views done")
 
             print(f"[{_ts()}] reconciling positions...")
@@ -404,6 +412,7 @@ def main():
             except Exception as e:
                 print(f"[{_ts()}] WARNING: reconcile failed — {e}")
                 errors.append("reconcile")
+                error_details.append(f"reconcile: {e}")
             print(f"[{_ts()}] reconcile done")
 
         # Summary + sync_log
@@ -415,7 +424,7 @@ def main():
                 print(f"  {table:<15} {n:>6} rows")
 
         status = "failed" if errors else "success"
-        error_msg = f"errors in: {', '.join(errors)}" if errors else None
+        error_msg = (f"errors in: {', '.join(errors)}\n" + "\n".join(error_details)) if errors else None
         finish_run(log_id, status, rows_synced=counts, error_msg=error_msg)
 
         if errors:

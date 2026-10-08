@@ -1,6 +1,5 @@
 import datetime
 import os
-import subprocess
 import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -19,6 +18,7 @@ DEFAULT_DIARY = Path.home() / "Library/CloudStorage/Dropbox/Etrade/trading_diary
 
 load_dotenv(PROJECT_ROOT / ".env")
 from morning_brief.alert_compiler import reconcile_structural_alerts
+from dashboard.morning_pipeline import run_command, run_morning_pipeline
 from morning_brief.fetchers import (
     fetch_positions_from_db, sync_positions_from_db,
     load_key_levels_from_db, save_key_levels_to_db,
@@ -53,12 +53,17 @@ def _save_levels_and_refresh_alerts(key_levels: dict) -> dict:
         }
 
 
-def _run_brief() -> str:
-    result = subprocess.run(
-        [sys.executable, "-m", "morning_brief.brief"],
-        capture_output=True, text=True, cwd=str(PROJECT_ROOT),
-    )
-    return result.stdout + result.stderr
+def _remember_results(name, steps):
+    st.session_state["p10_pipeline_result"] = {
+        "name": name,
+        "finished_at": datetime.datetime.now(tz=ET).strftime("%Y-%m-%d %H:%M:%S ET"),
+        "steps": steps,
+    }
+
+
+def _pipeline_step(name, command, project_root):
+    with st.spinner(f"Running {name}…"):
+        return run_command(name, command, project_root)
 
 
 # ── sidebar ────────────────────────────────────────────────────────────────────
@@ -69,45 +74,9 @@ if brief_path.exists():
 
 # ── primary: one-click morning pipeline ───────────────────────────────────────
 if st.sidebar.button("▶ Run Morning Pipeline", type="primary", use_container_width=True,
-                     help="1) Sync latest journal (if updated)  2) Generate morning brief  3) Sync E*TRADE data (positions/ledger/views)"):
-    diary   = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
-    journals = sorted(diary.glob("trading_journal_*.md"), key=lambda p: p.stat().st_mtime)
-    output_lines = []
-
-    # Step 1: sync latest journal if it exists
-    if journals:
-        latest = journals[-1]
-        with st.spinner(f"Step 1/3 — syncing {latest.name}…"):
-            r1 = subprocess.run(
-                [sys.executable, "-m", "morning_brief.journal_sync", "--file", str(latest)],
-                capture_output=True, text=True, cwd=str(PROJECT_ROOT),
-            )
-        output_lines.append(r1.stdout.strip())
-
-    # Step 2: generate brief
-    with st.spinner("Step 2/3 — generating brief…"):
-        r2 = subprocess.run(
-            [sys.executable, "-m", "morning_brief.brief"],
-            capture_output=True, text=True, cwd=str(PROJECT_ROOT),
-        )
-    output_lines.append(r2.stderr.strip())
-
-    # Step 3: sync E*TRADE data — accounts/balances/positions/transactions/orders
-    # + ledger rebuild + realized P/L + view refresh + reconcile. Only attempted
-    # if today's token is fresh; a stale token here would just fail loudly across
-    # every data type (same as the 6 AM automated job), so skip with a clear
-    # message instead of burning a run on a doomed attempt.
-    if not _token_is_fresh():
-        output_lines.append("Step 3/3 SKIPPED — E*TRADE token is not fresh today. Run `python -m etrade_sync auth`, then use P1 Pipeline Status to sync.")
-    else:
-        with st.spinner("Step 3/3 — syncing E*TRADE data…"):
-            r3 = subprocess.run(
-                [sys.executable, "-m", "etrade_sync", "sync"],
-                capture_output=True, text=True, cwd=str(PROJECT_ROOT),
-            )
-        output_lines.append(r3.stdout.strip() if r3.returncode == 0 else (r3.stdout + r3.stderr).strip())
-
-    st.sidebar.code("\n".join(filter(None, output_lines)), language=None)
+                     help="1) Sync latest journal  2) Sync E*TRADE data (positions/ledger/views)  3) Generate morning brief"):
+    steps = run_morning_pipeline(PROJECT_ROOT, diary, _token_is_fresh, runner=_pipeline_step)
+    _remember_results("Morning Pipeline", steps)
     st.rerun()
 
 st.sidebar.divider()
@@ -116,8 +85,9 @@ st.sidebar.divider()
 if st.sidebar.button("▶ Brief only", use_container_width=True,
                      help="Regenerate brief without re-syncing journal"):
     with st.spinner("Fetching market data…"):
-        output = _run_brief()
-    st.sidebar.code(output.strip(), language=None)
+        result = run_command("Brief", [sys.executable, "-m", "morning_brief.brief"], PROJECT_ROOT,
+                             source="p10_brief_only")
+    _remember_results("Brief only", [result])
     st.rerun()
 
 if st.sidebar.button("🔄 Sync Latest Journal", use_container_width=True,
@@ -130,13 +100,12 @@ if st.sidebar.button("🔄 Sync Latest Journal", use_container_width=True,
         latest = journals[-1]
         with st.sidebar:
             with st.spinner(f"Reading {latest.name}…"):
-                result = subprocess.run(
+                result = run_command("Journal",
                     [sys.executable, "-m", "morning_brief.journal_sync",
                      "--file", str(latest)],
-                    capture_output=True, text=True, cwd=str(PROJECT_ROOT),
+                    PROJECT_ROOT, source="p10_journal_only",
                 )
-        output = result.stdout + (result.stderr if result.returncode != 0 else "")
-        st.sidebar.code(output.strip(), language=None)
+        _remember_results("Sync Latest Journal", [result])
         st.rerun()
 
 if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
@@ -176,12 +145,32 @@ if st.sidebar.button("🔄 Sync All Journals", use_container_width=True,
                      help="Process all unsynced journals"):
     with st.sidebar:
         with st.spinner("Syncing all journals…"):
-            result = subprocess.run(
+            result = run_command("Journals",
                 [sys.executable, "-m", "morning_brief.journal_sync"],
-                capture_output=True, text=True, cwd=str(PROJECT_ROOT),
+                PROJECT_ROOT, source="p10_journals_only",
             )
-    st.sidebar.code((result.stdout + result.stderr).strip(), language=None)
+    _remember_results("Sync All Journals", [result])
     st.rerun()
+
+# Persist results across reruns and navigation, including both output streams.
+last_result = st.session_state.get("p10_pipeline_result")
+if last_result:
+    st.sidebar.caption(f"{last_result['name']} — {last_result['finished_at']}")
+    for step in last_result["steps"]:
+        label = f"{step['name']}: {step['status']}"
+        if step["status"] == "success":
+            st.sidebar.success(label)
+        elif step["status"] == "failed":
+            st.sidebar.error(label)
+        else:
+            st.sidebar.warning(label)
+        with st.sidebar.expander(f"{step['name']} output", expanded=step["status"] != "success"):
+            st.code(step["output"] or "No output.", language=None)
+    sync_step = next((s for s in last_result["steps"] if s["name"] == "E*TRADE sync"), None)
+    brief_step = next((s for s in last_result["steps"] if s["name"] == "Brief"), None)
+    if sync_step and sync_step["status"] != "success" and brief_step and brief_step["status"] == "success":
+        st.warning("The brief was generated, but E*TRADE sync failed or was skipped. "
+                   "Some data may be stale or incomplete. Review the sync output and rerun the pipeline.")
 
 # ── tabs ───────────────────────────────────────────────────────────────────────
 

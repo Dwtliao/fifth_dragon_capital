@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -106,6 +107,7 @@ if run_btn:
             stderr=subprocess.STDOUT,
             text=True,
             cwd=str(Path(__file__).parent.parent.parent),
+            env={**os.environ, "SYNC_TRIGGERED_BY": "p1_pipeline_status"},
         )
         for line in proc.stdout:
             lines.append(line.rstrip())
@@ -186,7 +188,7 @@ with col_limit:
 where = "" if job_filter == "all" else "WHERE job_name = %(job)s"
 runs = query(
     f"""
-    SELECT job_name, started_at, status, duration_s, rows_synced, triggered_by
+    SELECT job_name, started_at, status, duration_s, rows_synced, triggered_by, error_msg
     FROM sync_log {where}
     ORDER BY started_at DESC LIMIT %(limit)s
     """,
@@ -208,7 +210,7 @@ if runs:
         lambda x: ", ".join(f"{k}: {v:,}" for k, v in x.items()) if x else "—"
     )
     st.dataframe(
-        df[["icon", "started_at", "job_name", "status", "duration_s", "rows_synced", "triggered_by"]],
+        df[["icon", "started_at", "job_name", "status", "duration_s", "rows_synced", "triggered_by", "error_msg"]],
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -219,6 +221,7 @@ if runs:
             "duration_s":   "Duration",
             "rows_synced":  "Rows Synced",
             "triggered_by": "Source",
+            "error_msg":    "Error details",
         },
     )
 else:

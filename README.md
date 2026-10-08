@@ -247,6 +247,41 @@ streamlit run dashboard/app.py
 | P7 Market Monitor | Intraday candlestick + volume charts for US indices, global indices, ETFs, volatility/rates/bond futures, and defensive sectors. Auto-refresh via `st.fragment(run_every=...)`. Price alerts management — add/edit/delete alert levels, status board (🟢 Armed / 🔴 Triggered / ⚫ Disabled). |
 | P8 Commodities | Candlestick + volume charts with period selector (Intraday / 5D / 1M / 3M / 6M) for precious metals futures, energy futures, metals & miners, uranium, copper, and agriculture. Auto-refresh on intraday only. |
 | P9 Symbol Admin | Three tabs: **Symbol Overrides** — set sector, asset class, and vehicle type per symbol; **Exposure Tags** — manage thematic tags per symbol via multiselect; **Manage Sectors** — add custom sectors. All saves auto-refresh `mv_allocations`. |
+| P10 Morning Brief | Runs latest journal sync, E*TRADE sync, then brief generation. Preserves each step's result across reruns and warns after a failed/skipped E*TRADE sync. Shows the brief, editable key levels, and journal sync history. |
+
+### Morning brief market context
+
+Each brief downloads six months of Yahoo Finance daily history in a single
+batched `yfinance.download` invocation, covering global equity indices, US
+equity futures, Treasury yields and bond futures/ETFs, energy, metals,
+agriculture, uranium equity ETFs, currencies, volatility, and equity/credit
+proxies. Each instrument shows its latest daily bar, 1/5/20-session changes,
+position relative to its 20/50-session moving averages, a 20-session close
+range, and the bar date. Yield levels are percentages and yield changes are
+basis points; futures and ETF prices are not yields.
+
+Cross-market comparisons include Treasury yield gaps, Brent–WTI, gold/silver,
+equal weight versus S&P 500, small caps, Nasdaq and semiconductor leadership,
+and high-yield versus investment-grade bond ETFs. Comparisons align dates
+between both histories. HYG/LQD is an ETF performance proxy, not a credit
+spread; uranium ETFs are not spot uranium. Yahoo front-contract futures can
+be affected by contract rolls. Daily bars may be in progress and should not
+be treated as guaranteed live pre-market quotes. Missing symbols are shown
+as unavailable; bars older than four calendar days are marked with a warning.
+
+History is fetched when a brief is generated and kept in memory. No new
+database tables or raw-history archive are created. Displayed metrics are
+saved with the existing `morning_brief.md` and dated
+`briefs/morning_brief_YYYYMMDD.md` archive; regenerating on the same date
+overwrites that day's archive. The calculations do not make an LLM call.
+
+### Journal extraction with Claude
+
+`python -m morning_brief.journal_sync` uses the existing Anthropic integration
+(`ANTHROPIC_API_KEY`) to extract stops, notes, watch levels and conditional
+alerts from new or modified `trading_journal_*.md` files. An unchanged file
+is skipped using `journal_sync_log`; `--all` forces reprocessing. Market
+context generation works even when there is no new journal.
 
 ---
 

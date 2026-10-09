@@ -134,6 +134,11 @@ def fetch_vol_proxies() -> list[dict]:
     return _fetch_snapshot(VOL_PROXIES)
 
 
+# Brief-only exclusions: internal broker codes RBL/RPI and user-requested BR.
+# Do not delete their broker history or treat this as a global symbol blacklist.
+BRIEF_POSITION_EXCLUSIONS = frozenset({'RBL', 'RPI', 'BR'})
+
+
 def fetch_positions(key_levels: dict) -> list[dict]:
     """
     Fetch positions for the morning brief.
@@ -141,7 +146,7 @@ def fetch_positions(key_levels: dict) -> list[dict]:
     Source priority:
       1. DB (mv_unrealized_pnl) — authoritative ticker list + cost basis
       2. key_levels.yml positions section — stop levels and notes layered on top
-      3. Fallback: YAML-only if DB is unavailable
+      Saved metadata never adds tickers absent from current holdings.
 
     Each returned dict includes:
       label, ticker, last, prior, pct,        ← from yfinance
@@ -153,15 +158,12 @@ def fetch_positions(key_levels: dict) -> list[dict]:
     # ── Try DB first ──────────────────────────────────────────────────────────
     db_rows    = fetch_positions_from_db()
     db_by_sym  : dict[str, dict] = {}
-    db_ok      = db_rows and "error" not in db_rows[0]
-
-    if db_ok:
-        for row in db_rows:
+    if any('error' in row for row in db_rows):
+        raise RuntimeError('Current holdings unavailable; refusing to display saved metadata as holdings')
+    for row in db_rows:
+        if float(row.get('quantity') or 0) > 0 and row['symbol'].upper() not in BRIEF_POSITION_EXCLUSIONS:
             db_by_sym[row["symbol"].upper()] = row
-        # Union: DB tickers + any YAML tickers not in DB (carry-over / non-brokerage)
-        all_tickers = sorted(set(db_by_sym.keys()) | set(pos_config.keys()))
-    else:
-        all_tickers = sorted(pos_config.keys())
+    all_tickers = sorted(db_by_sym)
 
     if not all_tickers:
         return []
@@ -309,7 +311,9 @@ def fetch_positions_from_db() -> list[dict]:
                 ORDER BY u.market_value DESC NULLS LAST
             """)
             cols = [d.name for d in cur.description]
+            # Skip internal broker codes and explicit brief display exclusions.
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+            rows = [row for row in rows if row['symbol'].upper() not in BRIEF_POSITION_EXCLUSIONS]
         conn.close()
         return rows
     except Exception as exc:

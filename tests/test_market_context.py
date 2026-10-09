@@ -114,6 +114,23 @@ class MarketContextTests(unittest.TestCase):
         self.assertIn("not a measured credit spread", output)
         self.assertIn("not spot uranium", output)
 
+    def test_session_colors_and_percentage_boundaries(self):
+        for value, color in ((0.01, 'green'), (0, 'orange'), (-0.01, 'orange'),
+                             (-2.5, 'orange'), (-2.51, 'red')):
+            self.assertTrue(formatter._market_change(value).startswith(f':{color}['))
+        self.assertEqual(formatter._market_change(None), '—')
+        self.assertEqual(formatter._market_change(-1, 'bp'), ':red[-1.00 bp]')
+        self.assertEqual(formatter._market_change(1, 'yield_pct'), ':green[+1.00 bp]')
+
+    def test_moving_average_colors_are_independent_and_missing_is_neutral(self):
+        row = {'label': 'Test', 'unit': 'price', 'last': 100, 'as_of': self.today.isoformat(),
+               'above_ma20': True, 'above_ma50': False}
+        overview = {'fetched_at': '2026-10-08T12:00:00-04:00',
+                    'groups': {'global': [row]}, 'signals': []}
+        self.assertIn(':green[above] / :red[at/below]', formatter.render_market_overview(overview))
+        row['above_ma20'] = None
+        self.assertIn('— / :red[at/below]', formatter.render_market_overview(overview))
+
     def test_market_failure_does_not_prevent_positions_or_watch_sections(self):
         from morning_brief import brief
 

@@ -1,4 +1,3 @@
-import subprocess
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -10,242 +9,30 @@ import streamlit as st
 import yfinance as yf
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from dashboard.db import query, execute
 from dashboard.alert_badges import alert_source_badge
-from dashboard.alert_sorting import sort_active_alerts, sort_archived_alerts
-from morning_brief.alert_compiler import find_duplicate_alerts, find_stale_alerts, archive_duplicate_alert
+from alerts.lifecycle import is_eligible, state
+from dashboard.alerts_workspace import current_alerts as _current_alerts
+from psycopg2.errors import UndefinedTable
 
 st.set_page_config(page_title="Market Monitor — Fifth Dragon Capital", layout="wide")
 st.title("Market Monitor")
 
 
-# ── Price Alerts ───────────────────────────────────────────────────────────────
+# Detailed management lives on P11; P7 never fetches alert-ranking quotes.
+@st.fragment
+def alert_summary():
+    st.subheader("Price Alerts")
+    try:
+        rows = _current_alerts()
+    except UndefinedTable:
+        st.warning("Alert-controls migration is required; charts remain available.")
+        return
+    active = sum(is_eligible(a) for a in rows)
+    paused = sum(state(a) in ("Paused", "Snoozed") for a in rows)
+    st.caption(f"{active} active · {paused} paused/snoozed · {len(rows)} total. Manage alerts without refreshing charts:")
+    st.page_link("pages/P11_Alerts.py", label="Open Alerts workspace", icon="🔔")
 
-st.header("Price Alerts")
-st.caption("Alerts fire once when the threshold is crossed, then re-arm when price moves back. Run `python -m alerts.poller` to start the background poller.")
-
-alerts = query(f"""
-    SELECT id, ticker, label, condition, threshold::float, enabled, triggered,
-           last_fired_at, archived_at, source, tier, pinned
-    FROM price_alerts
-    ORDER BY id
-""")
-
-def _status(a):
-    if a.get("archived_at"):
-        return "📦 Archived"
-    if not a["enabled"]:
-        return "⚫ Disabled"
-    if a["triggered"]:
-        return "🔴 Triggered"
-    return "🟢 Armed"
-
-
-def _alerts_df(rows):
-    return pd.DataFrame([{
-        "ID":         a["id"],
-        "Ticker":     a["ticker"],
-        "Label":      a["label"] or "—",
-        "Condition":  f"{'>' if a['condition'] == 'above' else '<'} {a['threshold']:,.2f}",
-        "Source":     alert_source_badge(a["source"], a["tier"], a["pinned"]),
-        "Status":     _status(a),
-        "Last Fired": a["last_fired_at"].strftime("%Y-%m-%d %H:%M") if a["last_fired_at"] else "—",
-    } for a in rows])
-
-
-@st.cache_data(ttl=120)
-def fetch_alert_prices(tickers: tuple[str, ...]) -> dict[str, float | None]:
-    """Lightweight last-price lookup for alert ranking — not chart bars, and not limited to GROUPS tickers."""
-    prices: dict[str, float | None] = {}
-    for ticker in tickers:
-        try:
-            prices[ticker] = float(yf.Ticker(ticker).fast_info.last_price)
-        except Exception:
-            prices[ticker] = None
-    return prices
-
-
-active_alerts   = [a for a in alerts if a["enabled"] and not a["archived_at"]]
-archived_alerts = [a for a in alerts if not a["enabled"] or a["archived_at"]]
-
-alert_prices  = fetch_alert_prices(tuple(sorted({a["ticker"] for a in active_alerts})))
-active_alerts   = sort_active_alerts(active_alerts, alert_prices)
-archived_alerts = sort_archived_alerts(archived_alerts)
-
-st.subheader("Active")
-if active_alerts:
-    st.dataframe(_alerts_df(active_alerts), use_container_width=True, hide_index=True)
-elif alerts:
-    st.caption("No active alerts — see Archived/Expired below.")
-else:
-    st.info("No alerts defined yet. Add one below.")
-
-if archived_alerts:
-    with st.expander(f"Archived / Expired ({len(archived_alerts)})"):
-        st.dataframe(_alerts_df(archived_alerts), use_container_width=True, hide_index=True)
-
-with st.expander("🧹 Alert Hygiene"):
-    if st.button("↺ Refresh", key="hygiene_refresh"):
-        st.rerun()
-
-    dup_tab, stale_tab = st.tabs(["Duplicate Clusters", "Stale Manual Alerts"])
-
-    with dup_tab:
-        st.caption("Active alerts clustered by ticker+condition where thresholds are within tolerance of each other, regardless of source. Review candidates for a human to reconcile — nothing is consolidated automatically. The one exception: an exact manual/journal + structural match can be consolidated with a click below.")
-        clusters = find_duplicate_alerts()
-        if not clusters:
-            st.caption("No duplicate/near-duplicate active alert clusters found.")
-
-        # Deterministic consolidation candidates: exactly one non-structural row
-        # (manual or journal_sync) paired with exactly one structural row, exact
-        # threshold match. Structural always wins. Everything else — manual+journal,
-        # multiple journals + one structural, near-matches — stays review-only.
-        _BUTTON_LABELS = {"manual": "Archive duplicate manual alert", "journal_sync": "Archive duplicate journal alert"}
-
-        def _consolidation_candidate(rows):
-            if len(rows) != 2:
-                return None
-            sources = {r["source"] for r in rows}
-            if "key_levels_watch" not in sources:
-                return None
-            other_source = (sources - {"key_levels_watch"}).pop() if len(sources) == 2 else None
-            if other_source not in _BUTTON_LABELS:
-                return None
-            if len({r["threshold"] for r in rows}) != 1:
-                return None
-            candidate_row = next(r for r in rows if r["source"] == other_source)
-            structural_row = next(r for r in rows if r["source"] == "key_levels_watch")
-            return candidate_row, structural_row
-
-        for cluster in clusters:
-            low = min(r["threshold"] for r in cluster["rows"])
-            high = max(r["threshold"] for r in cluster["rows"])
-            threshold_range = f"{low:,.2f}" if low == high else f"{low:,.2f} – {high:,.2f}"
-            st.markdown(f"**{cluster['ticker']} {cluster['condition']}** — {len(cluster['rows'])} alerts, threshold range {threshold_range}")
-            st.dataframe(pd.DataFrame([{
-                "ID":        r["id"],
-                "Source":    alert_source_badge(r["source"], None, None),
-                "Threshold": r["threshold"],
-                "Label":     r["label"] or "—",
-            } for r in cluster["rows"]]), use_container_width=True, hide_index=True)
-
-            candidate = _consolidation_candidate(cluster["rows"])
-            if candidate:
-                candidate_row, structural_row = candidate
-                if st.button(
-                    _BUTTON_LABELS[candidate_row["source"]],
-                    key=f"consolidate_{candidate_row['id']}_{structural_row['id']}",
-                    help="Archives the duplicate; the structural alert is untouched and stays authoritative.",
-                ):
-                    if archive_duplicate_alert(candidate_row["id"], structural_row["id"]):
-                        st.success(f"Archived alert id={candidate_row['id']}.")
-                        st.rerun()
-                    else:
-                        st.error("Could not consolidate — the pair no longer qualifies (already changed).")
-
-    with stale_tab:
-        st.caption("Report only — no auto-archive, disable, or delete. Manual alerts that have never fired, past the age cutoff. A human decides what to do with each row.")
-        stale_rows = find_stale_alerts()
-        if not stale_rows:
-            st.caption("No stale manual alerts found.")
-        else:
-            st.dataframe(pd.DataFrame([{
-                "ID":           r["id"],
-                "Ticker":       r["ticker"],
-                "Label":        r["label"] or "—",
-                "Threshold":    r["threshold"],
-                "Created":      r["created_at"].strftime("%Y-%m-%d"),
-                "Age (days)":   r["age_days"],
-                "Confidence":   r["confidence"],
-                "Open position": r["has_open_position"],
-            } for r in stale_rows]), use_container_width=True, hide_index=True)
-
-st.divider()
-
-with st.expander("➕ Add Manual Alert (exception path)"):
-    st.caption("Most alerts are compiler-managed (structural stops/watch levels, journal promotions). Use this only for one-off manual overrides.")
-    with st.form("add_alert_form"):
-        a1, a2 = st.columns(2)
-        ticker_in    = a1.text_input("Ticker", placeholder="e.g. ^VIX, VIXY, NQ=F")
-        label_in     = a2.text_input("Label (optional)", placeholder="e.g. VIX Fear Spike")
-        a3, a4 = st.columns(2)
-        condition_in = a3.selectbox("Condition", ["above", "below"])
-        threshold_in = a4.number_input("Threshold", min_value=0.0, step=0.01, format="%.2f")
-        if st.form_submit_button("Add Alert", type="primary"):
-            if not ticker_in.strip():
-                st.error("Ticker is required.")
-            else:
-                execute("""
-                    INSERT INTO price_alerts
-                        (ticker, label, condition, threshold, source, source_key, tier, pinned)
-                    VALUES (%s, %s, %s, %s, 'manual', NULL, 2, TRUE)
-                """, (ticker_in.strip().upper(), label_in.strip() or None, condition_in, threshold_in))
-                st.success(f"Alert added: {ticker_in.strip().upper()} {condition_in} {threshold_in:,.2f}")
-                st.rerun()
-
-def _alert_options(rows):
-    return {
-        f"#{a['id']} {a['ticker']} {'>' if a['condition'] == 'above' else '<'} {a['threshold']:,.2f}  {a['label'] or ''}".strip(): a
-        for a in rows
-    }
-
-
-st.subheader("Manage Active Alert")
-if active_alerts:
-    options = _alert_options(sorted(active_alerts, key=lambda a: a["id"]))
-    chosen_label = st.selectbox("Select alert", list(options.keys()), key="manage_active_select")
-    chosen = options[chosen_label]
-
-    st.caption(f"Current threshold: **{chosen['threshold']:,.2f}**")
-    new_threshold = st.number_input(
-        "New threshold (leave 0 to keep current)", value=0.0,
-        min_value=0.0, step=0.01, format="%.2f", key=f"manage_threshold_{chosen['id']}"
-    )
-    m1, m2, m3, m4, m5 = st.columns(5)
-    if m1.button("Save", use_container_width=True, type="primary", key="active_save"):
-        if new_threshold > 0:
-            execute("UPDATE price_alerts SET threshold = %s, triggered = FALSE WHERE id = %s",
-                    (new_threshold, chosen["id"]))
-            st.success(f"Threshold updated to {new_threshold:,.2f} and re-armed.")
-        else:
-            st.warning("Enter a value above 0 to change the threshold.")
-        st.rerun()
-    if m2.button("Disable", use_container_width=True, key="active_disable", help="Turns the alert off but leaves it un-archived — reappears here on re-enable"):
-        execute("UPDATE price_alerts SET enabled = FALSE WHERE id = %s", (chosen["id"],))
-        st.rerun()
-    if m3.button("Clear Trigger", use_container_width=True, key="active_clear_trigger", help="Clear the fired state so an enabled alert can fire again"):
-        execute("UPDATE price_alerts SET triggered = FALSE WHERE id = %s", (chosen["id"],))
-        st.success("Trigger cleared.")
-        st.rerun()
-    if m4.button("📦 Archive", use_container_width=True, key="active_archive", help="Retires the alert and marks archived_at — distinct from a plain Disable"):
-        execute("UPDATE price_alerts SET enabled = FALSE, triggered = FALSE, archived_at = NOW() WHERE id = %s", (chosen["id"],))
-        st.success("Alert archived.")
-        st.rerun()
-    if m5.button("Delete", use_container_width=True, type="secondary", key="active_delete"):
-        execute("DELETE FROM price_alerts WHERE id = %s", (chosen["id"],))
-        st.success("Alert deleted.")
-        st.rerun()
-else:
-    st.caption("No active alerts to manage.")
-
-st.subheader("Manage Archived/Expired Alert")
-if archived_alerts:
-    options = _alert_options(archived_alerts)
-    chosen_label = st.selectbox("Select alert", list(options.keys()), key="manage_archived_select")
-    chosen = options[chosen_label]
-
-    n1, n2 = st.columns(2)
-    if n1.button("↩ Restore to Active", use_container_width=True, type="primary", key="archived_restore", help="Re-enables the alert and clears archived_at"):
-        execute("UPDATE price_alerts SET enabled = TRUE, archived_at = NULL WHERE id = %s", (chosen["id"],))
-        st.success("Alert restored to Active.")
-        st.rerun()
-    if n2.button("Delete", use_container_width=True, type="secondary", key="archived_delete"):
-        execute("DELETE FROM price_alerts WHERE id = %s", (chosen["id"],))
-        st.success("Alert deleted.")
-        st.rerun()
-else:
-    st.caption("No archived/expired alerts to manage.")
-
+alert_summary()
 st.divider()
 
 
@@ -675,7 +462,8 @@ def _intraday_chart(label: str, ticker: str, today_df: pd.DataFrame, prev_close:
     # session with NaN OHLC before the exchange's data is fully consolidated
     # (seen for 000001.SS — Volume populated, Close/Open/High/Low all NaN).
     # Drop it so "current price" and the chart itself use the last real bar.
-    today_df = today_df.dropna(subset=["Close"])
+    if not today_df.empty:
+        today_df = today_df.dropna(subset=["Close"])
     if today_df.empty:
         st.caption(f"**{label}** ({ticker})  —  no data")
         return
@@ -936,19 +724,7 @@ if st.session_state.last_period != period_choice:
     st.session_state.last_period = period_choice
 
 st.sidebar.divider()
-st.sidebar.markdown("**Price Alerts**")
-if st.sidebar.button("▶ Run Alert Poll", use_container_width=True, type="primary"):
-    venv_python  = sys.executable
-    project_root = str(Path(__file__).parent.parent.parent)
-    with st.sidebar:
-        with st.spinner("Polling…"):
-            result = subprocess.run(
-                [venv_python, "-m", "alerts.poller", "--once"],
-                capture_output=True, text=True, cwd=project_root,
-            )
-    output = result.stdout + (result.stderr if result.returncode != 0 else "")
-    st.sidebar.code(output.strip() or "No output.", language=None)
-    st.rerun()
+st.sidebar.page_link("pages/P11_Alerts.py", label="Manage Price Alerts", icon="🔔")
 
 # ── market data fragment (auto-refreshes independently) ───────────────────────
 
@@ -964,8 +740,12 @@ def market_panel() -> None:
         st.rerun(scope="fragment")
 
     alerts_by_ticker: dict[str, list[dict]] = {}
-    for a in (alerts or []):
-        if a["enabled"]:
+    try:
+        overlay_alerts = _current_alerts()
+    except UndefinedTable:
+        overlay_alerts = []
+    for a in overlay_alerts:
+        if is_eligible(a):
             alerts_by_ticker.setdefault(a["ticker"], []).append({
                 "condition": a["condition"],
                 "threshold": a["threshold"],

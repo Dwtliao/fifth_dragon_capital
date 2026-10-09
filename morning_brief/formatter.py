@@ -103,7 +103,14 @@ def _market_change(value, unit="price") -> str:
     if value is None:
         return "—"
     suffix = " bp" if unit in ("yield_pct", "bp") else " USD/bbl" if unit == "USD/barrel" else "%"
-    return f"{value:+.2f}{suffix}"
+    text = f"{value:+.2f}{suffix}"
+    if value > 0:
+        color = 'green'
+    elif value == 0 or (suffix == '%' and value >= -2.5):
+        color = 'orange'  # Streamlit's theme-aware amber/yellow text.
+    else:
+        color = 'red'
+    return f":{color}[{text}]"
 
 
 def render_market_overview(overview: dict) -> str:
@@ -115,6 +122,9 @@ def render_market_overview(overview: dict) -> str:
         "Changes use 1, 5 and 20 trading observations. The latest daily bar may still be forming; "
         "these are not guaranteed live pre-market quotes. Dates vary by exchange. "
         "⚠ marks a bar older than four calendar days.\n",
+        "_Session colors: green > 0%; yellow −2.5% to 0%; red < −2.5%. "
+        "Non-percentage changes (bp / USD per barrel) use green positive, red negative, "
+        "yellow zero. Colors indicate direction, not whether the move is favorable._\n",
     ]
     titles = {
         "global": "Global equity indices", "us_futures": "US equity futures",
@@ -138,7 +148,7 @@ def render_market_overview(overview: dict) -> str:
             unit = row["unit"]
             trend = " / ".join(
                 "—" if row.get(f"above_ma{days}") is None else
-                "above" if row[f"above_ma{days}"] else "at/below"
+                ":green[above]" if row[f"above_ma{days}"] else ":red[at/below]"
                 for days in (20, 50)
             )
             low, high = row.get("low_20d"), row.get("high_20d")

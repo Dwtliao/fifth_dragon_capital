@@ -380,9 +380,12 @@ LIMIT 20;
 
 ## Current plan: P7 alert management
 
-Date: October 8, 2026. Status: Priority 1 implemented and locally migrated; awaiting user
-browser acceptance. Priorities 2–4 have not started. Development branch:
-`feature/p7-alert-management`, created from `main`. Changes are not committed or merged.
+Date: October 8, 2026; acceptance updated October 9, 2026.
+Status: Priorities 1–2 accepted by the user (Release A). Priority 1 was pushed as `a2e6b7d`;
+Priority 2 and the October 9 extensions are approved for commit, PR, and merge after full tests.
+Release branch: `feature/p7-alert-management`, created from `main`.
+Next-stage branch: `feature/brief-alert-suggestions`, to be created from updated `main` after merge.
+Priorities 3–4 have not started; acceptance does not authorize unattended alert changes.
 
 ### Objective and scope
 
@@ -413,10 +416,10 @@ work is a prerequisite, not a separate feature release.
    - [x] Separate condition state from delivery success; expose failures and prevent
      concurrent workers from claiming the same notification.
 2. **Priority 2 — Everyday management (Phases 5–6).**
-   - [ ] Replace long dropdowns with searchable/selectable rows and a detail editor.
-   - [ ] Display current price, distance, source, lifecycle, expiry, and poll health.
-   - [ ] Provide safe manual creation/editing and confirmed scoped bulk actions.
-   - [ ] Keep P7 charts/overlays, moving detailed management to an Alerts workspace.
+   - [x] Replace long dropdowns with searchable/selectable rows and a detail editor.
+   - [x] Display current price, distance, source, lifecycle, expiry, and poll health.
+   - [x] Provide safe manual creation/editing and confirmed scoped bulk actions.
+   - [x] Keep P7 charts/overlays, moving detailed management to an Alerts workspace.
 3. **Priority 3 — Opt-in brief assistance (Phases 7–8).**
    - [ ] Default manual alerts to Manual / locked; allow explicit Brief-assisted opt-in.
    - [ ] Generate suggestions only from explicit, cited, fresh, direction-compatible levels.
@@ -619,6 +622,38 @@ and recoverable rather than incorrectly reported as successful delivery.
 
 ### Priority 2 — Everyday management
 
+Implementation record — October 8, 2026:
+
+- Added `P11_Alerts.py`, shared `dashboard/alerts_workspace.py` presentation helpers,
+  and `alerts/management.py` validated mutations. No new migration or production alert
+  edits were needed for the initial workspace task. The October 9 purge extension added
+  migration 076; later user-directed holdings cleanup is recorded below. Scheduler is unchanged.
+- Table provides All alerts / Needs attention / History, combined search/filters, native
+  row selection, manual details, price/distance/retrieval time, source, lifecycle, expiry,
+  and delivery/attention state. Quotes refresh explicitly, not on selection or filter changes.
+- Bulk operations preview exact IDs, block invalid mixed selections, require confirmation,
+  lock/revalidate configuration and lifecycle, and commit all-or-nothing. Cancel is read-only.
+  Manual create/edit detects exact duplicates and preserves operator suppression.
+- Exact duplicate consolidation preserves the structural row and archives/suppresses only
+  the confirmed manual/journal duplicate. Changed pairs are rejected; near matches stay
+  review-only. Hygiene queries load on demand and exclude ineligible alerts.
+- P7 retains charts and fresh eligible overlays with links to P11. Detailed management and
+  alert-ranking quote requests were removed. No numerical latency improvement is claimed;
+  automated checks verify selection/actions do not invoke quote fetches or chart rendering.
+- Verification: 102 unit tests plus 24 isolated PostgreSQL/Streamlit tests. The grid-selection
+  event is simulated in AppTest (native selection is checked separately by pure mapping tests);
+  real button flows and database mutations are exercised. SMTP/quotes are mocked in tests.
+
+User browser acceptance:
+
+- [ ] Restart Streamlit and open P11 Alerts from the sidebar or P7 link.
+- [ ] Refresh quotes once; search/filter/select a row and confirm charts/quotes do not reload.
+- [ ] Select two appropriate alerts, preview Pause, cancel once, then confirm/apply. Verify
+  only the previewed IDs changed. Select paused rows and repeat with Resume.
+- [ ] Inspect a manual row, edit its label/level, and verify source-managed rows remain read-only.
+- [ ] Verify Needs attention/History, on-demand hygiene reports, and P7 chart overlays.
+- [ ] Confirm native grid sorting/selection identifies the intended IDs before applying actions.
+
 ### Phase 5 — Dedicated Alerts workspace
 
 - [ ] Extract alert-management logic from P7 into shared services/components and add a
@@ -639,8 +674,9 @@ and recoverable rather than incorrectly reported as successful delivery.
   retained. Warn that a currently satisfied condition can notify again on the next poll.
 - [ ] Add confirmed bulk Pause/Snooze/Resume/Archive where permitted, showing counts,
   identities, source restrictions, and outcomes. Revalidate targets at execution time.
-- [ ] Make permanent deletion exceptional and separately confirmed; prefer recoverable
-  archive. Do not allow managed-row deletion to masquerade as source removal.
+- [x] Per October 9 user direction, provide bulk permanent Purge for every source/state,
+  with selected-ID preview and confirmation. Retain audit snapshots and block recreation
+  of purged managed identities/ideas; do not remove authoritative trading levels.
 - [ ] Show latest poll health/output and quote timestamps; distinguish delivery failure
   from a healthy poll with no satisfied conditions.
 
@@ -819,3 +855,51 @@ Requires a new design review and explicit implementation approval after Release 
 Release B additionally requires explicit assistance opt-in, validated evidence, a durable
 review queue, guarded local acceptance, and no unattended alert/source updates. Deferred
 source-following automation is not required to complete Releases A or B.
+
+### October 9 — Task 2 bulk-purge extension
+
+User explicitly requested removing any selected alerts, including managed, archived, and
+expired rows. This supersedes the initial preference for archive-only management.
+
+- [x] Implement all-or-nothing bulk Purge with locked targets and stale-preview checks.
+- [x] Retain alert/notification snapshots in audit history; delete workspace rows.
+- [x] Add additive migration 076 to prevent compiler recreation of purged managed ideas.
+- [x] Add minimum-distance filtering and flag levels at least 100% from the quote.
+- [x] Test all sources/states, compiler refresh/promotion, invalid levels, stale targets,
+  notification snapshots, and transaction rollback in an isolated database.
+- [x] User browser acceptance: refresh quotes, select multiple rows, preview/confirm Purge,
+  verify count decreases and managed alerts remain absent after source refresh.
+- [ ] Commit/push only after acceptance and explicit instruction.
+
+### October 9 — Held-symbol alert policy (user-approved)
+
+- [x] Use actual broker holdings rather than retained Positions metadata.
+- [x] Exclude held symbols from structural watch/support/resistance and journal generation.
+- [x] Archive existing managed non-stop alerts on reconciliation; retain saved levels.
+- [x] Preserve configured position-stop alerts, manual alerts, and durable operator controls.
+- [x] Allow watch alerts to return after exit unless purged/suppressed; journal ideas need sync.
+- [x] Verify holdings-error abort, dry-run rollback, held/unheld transitions, and source
+  isolation. 106 unit tests and 31 isolated PostgreSQL tests passed; no live emails sent.
+- [x] Browser acceptance: P10 Save All, P11 refresh, check held watch/journal alerts are
+  archived while stop/manual alerts remain; non-held watch alerts remain available.
+
+### October 9 — Release A acceptance and next-stage handoff
+
+- [x] User reports alert management/purge and held-symbol policy working and accepts release.
+- [x] Brief Positions now displays actual holdings only; saved metadata cannot add closed
+  positions. Removed obsolete saved VIXY entry after backup; broker history was not deleted.
+- [x] Centralized brief-only exclusions RBL/RPI/BR in `BRIEF_POSITION_EXCLUSIONS`.
+- [x] User accepted 1/5/20-session colors and independently colored 20/50-MA comparisons.
+  Percentage returns use green positive, amber −2.5% through zero, red below −2.5%;
+  non-percentage changes use sign only. Colors describe direction, not investment advice.
+- [x] User authorized full regression, commit/push, PR merge, and a fresh development branch.
+- [x] Final full regression: 142 tests passed, including 31 isolated PostgreSQL/Streamlit
+  tests; none skipped in the full run. Restored backup verification applied migrations
+  075/076 twice with existing alert rows unchanged. SMTP and quote dependencies mocked.
+  `git diff --check` passed. Production data was not modified during regression.
+- [ ] Merge Release A through GitHub PR; do not commit directly to main.
+- [ ] Create `feature/brief-alert-suggestions` from updated main for Priority 3.
+
+Next stage remains opt-in structured suggestions with provenance, local validation, and
+explicit Accept/Keep/Snooze review. Priorities 3–4 remain unimplemented. The original June 2
+plan is preserved above; earlier implementation test totals are historical checkpoints.

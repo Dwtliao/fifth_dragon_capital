@@ -281,7 +281,8 @@ with tab_levels:
     # ── Watch Levels ───────────────────────────────────────────────────────────
 
     st.subheader("Watch Levels")
-    st.caption("Support, resistance, and alert levels shown in the Key Levels section of the brief.")
+    st.caption("Support, resistance, and alert levels shown in the brief. Held symbols do not "
+               "generate automatic watch/journal alerts; position stop alerts and manual alerts remain enabled.")
 
     watch_dict = dict(kl.get("watch") or {})
     new_watch = {}
@@ -346,10 +347,12 @@ with tab_levels:
         )
         if compiler_stats.get("backfilled"):
             msg += f" backfilled={compiler_stats['backfilled']}"
+        if compiler_stats.get("held_archived"):
+            msg += f" held-symbol alerts archived={compiler_stats['held_archived']}"
         if compiler_stats.get("error"):
             msg += f" alert refresh error={compiler_stats['error']}"
         if synced:
-            msg += f"  Active watch levels: {', '.join(synced)}"
+            msg += f"  Configured watch levels (held symbols excluded from alerts): {', '.join(synced)}"
         st.session_state["p10_save_all_flash"] = {"level": "success", "message": msg}
         st.rerun()
 

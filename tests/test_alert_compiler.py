@@ -372,6 +372,33 @@ class _FakeConsolidateConnection:
 
 
 class AlertCompilerTests(unittest.TestCase):
+    def setUp(self):
+        from morning_brief.alert_compiler import _held_symbols
+        self.original_held = _held_symbols
+        self.held = self.enterContext(patch('morning_brief.alert_compiler._held_symbols', return_value=set()))
+
+    def test_held_symbols_keep_stops_but_skip_all_watch_levels(self):
+        levels = {'positions': {'AAPL': {'stop': 190}},
+                  'watch': {'AAPL': {'support': 180, 'resistance': 210, 'alert_above': 220},
+                            'CL=F': {'support': 60}}}
+        rows = build_structural_alerts(levels, held_symbols={'AAPL'})
+        self.assertEqual({r['source_key'] for r in rows}, {'position:AAPL:stop', 'watch:CL=F:support'})
+        self.assertEqual(len(build_structural_alerts(levels, held_symbols=set())), 5)
+
+    def test_holdings_failure_aborts_before_any_alert_write(self):
+        from morning_brief.alert_compiler import reconcile_structural_alerts
+        self.held.side_effect = RuntimeError('holdings unavailable')
+        with patch('morning_brief.alert_compiler.get_connection') as connect:
+            with self.assertRaises(RuntimeError):
+                reconcile_structural_alerts({})
+            connect.assert_not_called()
+
+    def test_holdings_loader_ignores_zero_quantity_and_normalizes(self):
+        with patch('morning_brief.fetchers.fetch_positions_from_db', return_value=[
+                {'symbol': ' aapl ', 'quantity': 2}, {'symbol': 'OLD', 'quantity': 0}]):
+            # Call the original implementation behind the mock.
+            self.assertEqual(self.original_held(), {'AAPL'})
+
     def test_build_structural_alerts_compiles_all_structural_sources(self):
         key_levels = {
             "positions": {

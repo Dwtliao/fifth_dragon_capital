@@ -67,7 +67,41 @@ def _append_unique(desired: list[dict], seen: set[tuple[str, str]], alert: dict)
     desired.append(alert)
 
 
-def build_structural_alerts(key_levels: dict) -> list[dict]:
+def _held_symbols() -> set[str]:
+    """Use actual broker holdings, not retained position metadata. Fail without writes."""
+    from morning_brief.fetchers import fetch_positions_from_db
+    rows = fetch_positions_from_db()
+    if any('error' in row for row in rows):
+        raise RuntimeError('Cannot apply held-symbol alert policy: holdings unavailable')
+    return {str(row['symbol']).strip().upper() for row in rows
+            if float(row.get('quantity') or 0) > 0}
+
+
+def _archive_held_nonstop(held: set[str], *, dry_run: bool = False) -> int:
+    """Retire managed watch/journal alerts, never manual or configured position stops."""
+    if not held:
+        return 0
+    conn = get_connection()
+    count = 0
+    try:
+        with conn.cursor() as cur:
+            for row in _load_managed_alerts(cur, MANAGED_SOURCES):
+                ticker = str(row['ticker']).strip().upper()
+                stop = (row['source'] == 'key_levels_watch'
+                        and row.get('source_key') == f"position:{row['ticker']}:stop")
+                if ticker in held and not stop and row['archived_at'] is None:
+                    _archive_alert(cur, row['id'])
+                    count += 1
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        return count
+    finally:
+        conn.close()
+
+
+def build_structural_alerts(key_levels: dict, *, held_symbols: set[str] | None = None) -> list[dict]:
     """Compile structural alerts from positions and watch levels."""
     desired: list[dict] = []
     seen: set[tuple[str, str]] = set()
@@ -97,6 +131,8 @@ def build_structural_alerts(key_levels: dict) -> list[dict]:
         })
 
     for ticker in sorted(watch):
+        if ticker.strip().upper() in (held_symbols or set()):
+            continue
         vals = watch.get(ticker) or {}
         note = str(vals.get("note") or "").strip()
 
@@ -273,7 +309,7 @@ def upsert_journal_alert(
             """,
             (ticker, label or None, condition, threshold, source_key, expires_at, now, now, now),
         )
-        return "created"
+        return "purged" if getattr(cur, "statusmessage", "") == "INSERT 0 0" else "created"
 
     cur.execute(
         """
@@ -354,7 +390,7 @@ def _apply_upsert(cur, existing: dict | None, desired: dict) -> str:
             (ticker, label or None, condition, threshold, source, source_key, tier,
              expires_at, pinned, now),
         )
-        return "created"
+        return "purged" if getattr(cur, "statusmessage", "") == "INSERT 0 0" else "created"
 
     if _unchanged(existing, desired):
         return "unchanged"
@@ -513,6 +549,7 @@ def reconcile_alerts(
 
     stats = {
         "created": 0,
+        "purged": 0,
         "updated": 0,
         "unchanged": 0,
         "archived": 0,
@@ -569,10 +606,12 @@ def reconcile_alerts(
 
 def reconcile_structural_alerts(key_levels: dict, *, dry_run: bool = False) -> dict:
     """Reconcile structural alerts from key_levels."""
+    held = _held_symbols()
     backfilled = backfill_legacy_structural_alerts(dry_run=dry_run)
     stats = reconcile_alerts(
-        build_structural_alerts(key_levels), dry_run=dry_run, sources=("key_levels_watch",)
+        build_structural_alerts(key_levels, held_symbols=held), dry_run=dry_run, sources=("key_levels_watch",)
     )
+    stats['held_archived'] = _archive_held_nonstop(held, dry_run=dry_run)
     stats["backfilled"] = backfilled
     return stats
 
@@ -581,8 +620,12 @@ def reconcile_journal_alerts(
     alerts: list[dict], *, dry_run: bool = False, ttl_days: int = DEFAULT_JOURNAL_ALERT_TTL_DAYS,
 ) -> dict:
     """Match/refresh journal-derived alerts in place, then promote recurring ideas."""
-    candidates = build_journal_alerts(alerts)
-    stats = {"created": 0, "updated": 0, "skipped_structural": 0, "promoted": 0, "desired": len(candidates)}
+    held = _held_symbols()
+    all_candidates = build_journal_alerts(alerts)
+    candidates = [a for a in all_candidates if a['ticker'].upper() not in held]
+    stats = {"created": 0, "updated": 0, "purged": 0, "skipped_structural": 0, "promoted": 0, "desired": len(candidates)}
+    stats['skipped_held'] = len(all_candidates) - len(candidates)
+    stats['held_archived'] = _archive_held_nonstop(held, dry_run=dry_run)
 
     conn = get_connection()
     try:
@@ -609,6 +652,7 @@ def promote_recurring_journal_alerts(
     *, threshold: int = PROMOTION_RECURRENCE_THRESHOLD, dry_run: bool = False,
 ) -> int:
     """Move journal alerts that have recurred `threshold`+ times into structural (key_levels_watch) alerts."""
+    held = _held_symbols()
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -631,6 +675,8 @@ def promote_recurring_journal_alerts(
 
     promoted = 0
     for row in rows:
+        if row['ticker'].strip().upper() in held:
+            continue
         field = "resistance" if row["condition"] == "above" else "support"
         new_key = f"watch:{row['ticker']}:{field}"
 
@@ -790,6 +836,9 @@ def reclassify(
                     existing["id"],
                 ),
             )
+            if getattr(cur, "statusmessage", "") == "UPDATE 0":
+                conn.rollback()
+                return False
 
         if dry_run:
             conn.rollback()

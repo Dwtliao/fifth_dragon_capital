@@ -228,6 +228,12 @@ All tables are created automatically on first sync. Schema definitions live in `
 | Materialized views | `REFRESH CONCURRENTLY` | Auto-runs after full sync |
 | Reconciliation | Full rebuild | Compares ledger qty to API positions; auto-runs after full sync |
 
+Orders HTTP failures retain the response body alongside the exception and
+status in console output and `sync_log.error_msg` (P1's Error details). This
+captures E*TRADE's own error code/message on a 404 or 500. An unsuccessful
+account does not advance its orders watermark. A 404 remains an error until
+its meaning is understood; it is not automatically treated as an empty list.
+
 ---
 
 ## Dashboard
@@ -274,14 +280,50 @@ database tables or raw-history archive are created. Displayed metrics are
 saved with the existing `morning_brief.md` and dated
 `briefs/morning_brief_YYYYMMDD.md` archive; regenerating on the same date
 overwrites that day's archive. The calculations do not make an LLM call.
+Brief generation then makes one Claude call to produce **What matters this
+morning** above the tables: key developments, implications for current
+DB-backed holdings when enabled, and conditions to watch. It uses the same calculated
+snapshot, requires valid evidence references, and does not
+change alerts. Failed analysis leaves the tables available. No web news is fetched.
+By default, analysis sends only public market context to Anthropic. Set
+`CLAUDE_BRIEF_INCLUDE_PORTFOLIO=true` to opt in to sending current holdings and
+saved levels for personalized commentary.
 
-### Journal extraction with Claude
+### Morning brief analysis V1.0 and journal extraction with Claude
 
 `python -m morning_brief.journal_sync` uses the existing Anthropic integration
 (`ANTHROPIC_API_KEY`) to extract stops, notes, watch levels and conditional
 alerts from new or modified `trading_journal_*.md` files. An unchanged file
 is skipped using `journal_sync_log`; `--all` forces reprocessing. Market
 context generation works even when there is no new journal.
+
+The default model is `claude-sonnet-5-5` with `low` journal effort. Set
+`CLAUDE_MODEL` and `CLAUDE_JOURNAL_EFFORT` in `.env` to override them; accepted
+effort values are `low`, `medium`, and `high`. Logs show the returned model,
+effort, and input/output token usage. Thinking blocks are excluded from the
+parsed answer, and truncated responses fail before extraction is applied.
+
+Test an existing journal without reading or writing the database (unchanged
+files are also processed in this mode):
+
+```bash
+python -m morning_brief.journal_sync --file /path/to/journal.md --dry-run
+python -m morning_brief.journal_sync --file /path/to/journal.md --dry-run --model claude-sonnet-4-6 --effort low
+```
+
+Run two small API calls using synthetic data to check extraction at low effort
+and market interpretation at medium effort:
+
+```bash
+python -m morning_brief.llm_smoke
+```
+
+This test prints answers and token usage and does not change journals, briefs,
+levels, alerts or the database. `CLAUDE_BRIEF_EFFORT` controls the interpretation
+test and real brief analysis (default `medium`). Set `CLAUDE_BRIEF_ANALYSIS=false`
+to generate tables without interpretation. **P10 → Brief only** refreshes
+market data and analysis; **Sync Latest Journal** only extracts journal levels
+and skips unchanged files. No new journal is needed for brief analysis.
 
 ---
 

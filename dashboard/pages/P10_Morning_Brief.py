@@ -83,7 +83,7 @@ st.sidebar.divider()
 
 # ── manual controls ────────────────────────────────────────────────────────────
 if st.sidebar.button("▶ Brief only", use_container_width=True,
-                     help="Regenerate brief without re-syncing journal"):
+                     help="Refresh market data and generate Claude analysis without re-syncing journal or E*TRADE holdings"):
     with st.spinner("Fetching market data…"):
         result = run_command("Brief", [sys.executable, "-m", "morning_brief.brief"], PROJECT_ROOT,
                              source="p10_brief_only")
@@ -91,7 +91,7 @@ if st.sidebar.button("▶ Brief only", use_container_width=True,
     st.rerun()
 
 if st.sidebar.button("🔄 Sync Latest Journal", use_container_width=True,
-                     help="Extract stops/levels/alerts from latest journal via Claude API"):
+                     help="Extract levels from a new or modified journal. Use Brief only for market analysis."):
     diary = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
     journals = sorted(diary.glob("trading_journal_*.md"), key=lambda p: p.stat().st_mtime)
     if not journals:

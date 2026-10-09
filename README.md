@@ -250,7 +250,7 @@ streamlit run dashboard/app.py
 | P4 Trading History | Monthly P/L heatmap, cash flow and income charts. Trades tab: KPI strip, Return % vs Holding Days scatter, Return % vs Trade Date scatter, closed trades table, trade tagging form. Ledger tab: full event log with type and period filters. |
 | P5 Risk & Exposure | Concentration risk (sector + asset class bar charts, thematic exposure callout). Position sizing with configurable overweight/concentrated thresholds. Unrealized loss watch. Realized P/L summary with by-year chart. Holding period risk bucketed by days held. |
 | P6 Physical Metals | Physical precious metals tracker — fully separate from E*TRADE data. Spot prices auto-fetched via yfinance (GC=F, SI=F, PL=F, PA=F) with manual override. Holdings table with live spot value and unrealized G/L. Add/delete holdings form. Stores to `physical_holdings_pm` and `physical_prices_pm`. |
-| P7 Market Monitor | Intraday candlestick + volume charts for US indices, global indices, ETFs, volatility/rates/bond futures, and defensive sectors. Auto-refresh via `st.fragment(run_every=...)`. Price alerts management — add/edit/delete alert levels, status board (🟢 Armed / 🔴 Triggered / ⚫ Disabled). |
+| P7 Market Monitor | Intraday candlestick + volume charts for US indices, global indices, ETFs, volatility/rates/bond futures, and defensive sectors. Auto-refresh via `st.fragment(run_every=...)`. Price alerts: manual levels, durable Pause/Snooze/Resume, condition/delivery status, poll health, and read-only checks. |
 | P8 Commodities | Candlestick + volume charts with period selector (Intraday / 5D / 1M / 3M / 6M) for precious metals futures, energy futures, metals & miners, uranium, copper, and agriculture. Auto-refresh on intraday only. |
 | P9 Symbol Admin | Three tabs: **Symbol Overrides** — set sector, asset class, and vehicle type per symbol; **Exposure Tags** — manage thematic tags per symbol via multiselect; **Manage Sectors** — add custom sectors. All saves auto-refresh `mv_allocations`. |
 | P10 Morning Brief | Runs latest journal sync, E*TRADE sync, then brief generation. Preserves each step's result across reruns and warns after a failed/skipped E*TRADE sync. Shows the brief, editable key levels, and journal sync history. |
@@ -329,10 +329,66 @@ and skips unchanged files. No new journal is needed for brief analysis.
 
 ## Price Alerts
 
-User-defined price level alerts — polled via yfinance, notified by email. Alerts fire once on threshold crossing and re-arm when price moves back (no spam).
+Price level alerts are polled via yfinance and notified by email. Eligible conditions use
+strict `above`/`below` comparisons: an already satisfied condition can notify without a
+witnessed crossing. An alert re-arms after its condition becomes false. Yahoo quotes may
+be delayed; this is not a real-time trading execution system.
 
 ### Manage alerts
-Add, enable/disable, and delete alerts from the **P7 Market Monitor** dashboard (Price Alerts section at the bottom of the page).
+Use **P7 Market Monitor → Price Alerts**:
+
+- **Pause** suppresses notifications indefinitely. **Snooze** suppresses for the selected
+  duration. Both survive brief/journal refreshes, managed-row recreation, and journal
+  promotion. They do not edit the source level.
+- **Resume / Restore** clears suppression and re-arms the selected alert after confirmation;
+  it may notify on the next poll if its condition is already met. Expired alerts cannot
+  resume; update their source or create a new alert. Managed archived alerts require a
+  source refresh first.
+- Snooze expiry resumes eligibility without repeating an already delivered, continuously
+  satisfied condition. A pending failed notification cancelled by suppression can create
+  a new notification after snooze expiry if the condition still holds.
+- Only manual thresholds are editable here. Managed stops/watch/journal levels must be
+  changed at their authoritative source. Manual archive and rearm require confirmation;
+  permanent deletion is not exposed in this initial controls release.
+- **Inactive** distinguishes Paused, Snoozed, Archived, Expired, and Disabled. Condition
+  state is separate from delivery status. Old alerts without notification events have no
+  recorded delivery outcome; their historical trigger flag is not proof of email delivery.
+- **Check Alerts — No Emails** is read-only and retains output across reruns. **Run Alert
+  Poll** is live and can send email. The existing scheduled poller remains live as well.
+
+### Alert-controls migration
+
+Before first use, back up the database and apply only the targeted migration:
+
+```bash
+bash scripts/backup_db.sh --no-prune
+python -m alerts.migrate
+```
+
+This creates controls, action history, notification events, poll history, and an identity
+transfer trigger. It preserves original alert rows and backfills durable suppression for
+legacy disabled/archived records. Reapplying is safe. Do not use the general `migrate`
+command for this rollout: older backfills have side effects and it rebuilds unrelated views.
+Restart Streamlit after updating the imported alert modules.
+
+Concurrent new pollers skip instead of double-claiming notifications. Coordinate migration
+with any older, continuously running poller; it cannot respect these controls. Do not roll
+back to legacy polling code while suppressed alerts exist without stopping notifications
+or providing a compatible fallback. No destructive schema rollback is needed.
+
+### Delivery behavior and diagnostics
+
+`sent`, `failed`, `not_configured`, and `unknown` are separate outcomes. `last_fired_at` is
+updated only after successful email delivery. Failed deliveries retry at most three attempts
+per condition episode, waiting five minutes after the first failure and ten after the
+second, and only while the alert remains eligible and its condition holds. Incomplete email
+configuration is recorded without repeated attempts until configuration becomes available.
+
+A worker interrupted during SMTP delivery leaves an `unknown` outcome on the next poll:
+review before explicitly rearming because mail may already have been accepted. SMTP and
+database commits cannot guarantee exactly-once delivery. Rearm can send another email;
+it is not merely an acknowledgment. Latest poll health, summary, quote failures, and per-alert
+delivery outcomes are visible in P7; detailed events/actions remain in the database.
 
 ### Run the poller
 
@@ -343,9 +399,18 @@ python -m alerts.poller
 # Single poll and exit (for cron)
 python -m alerts.poller --once
 
+# Read-only diagnostic: no emails, trigger updates, or poll-history writes
+python -m alerts.poller --dry-run
+
 # Custom interval (seconds)
 python -m alerts.poller --interval 180
 ```
+
+Automated verification: `python -m unittest discover -s tests -q`. PostgreSQL integration
+tests additionally require `ALERT_TEST_DATABASE_URL` pointing at an isolated test database;
+they create/remove only uniquely named fixture schemas and mock SMTP and quotes. Do not
+point them at production. They cover compiler reconciliation/promotion, expiry, retries,
+concurrency, read-only checks, migration preservation, and Streamlit Pause/Resume controls.
 
 ### Email notifications
 

@@ -13,6 +13,13 @@ NOTIFY="/opt/homebrew/bin/terminal-notifier"
 BACKUP_DIR="$HOME/Library/CloudStorage/Dropbox/Etrade/db_backups"
 LOG_FILE="$PROJECT_DIR/logs/backup_db.log"
 RETENTION_WEEKS=8
+PRUNE_BACKUPS=true
+if [[ "${1:-}" == "--no-prune" ]]; then
+    PRUNE_BACKUPS=false
+elif [[ $# -gt 0 ]]; then
+    echo "Usage: $0 [--no-prune]" >&2
+    exit 2
+fi
 
 cd "$PROJECT_DIR"
 mkdir -p "$BACKUP_DIR" "$PROJECT_DIR/logs"
@@ -42,7 +49,10 @@ else
 fi
 
 # Retention: remove backups older than RETENTION_WEEKS.
-deleted=$(find "$BACKUP_DIR" -name "fifth_dragon_capital_*.dump" -mtime "+$((RETENTION_WEEKS * 7))" -print -delete)
+deleted=""
+if [[ "$PRUNE_BACKUPS" == true ]]; then
+    deleted=$(find "$BACKUP_DIR" -name "fifth_dragon_capital_*.dump" -mtime "+$((RETENTION_WEEKS * 7))" -print -delete)
+fi
 if [[ -n "$deleted" ]]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') Pruned backups older than ${RETENTION_WEEKS} weeks:" >> "$LOG_FILE"
     echo "$deleted" >> "$LOG_FILE"

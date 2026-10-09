@@ -28,11 +28,10 @@ if str(PROJECT_ROOT) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
 
-import anthropic
-
 from etrade_sync.db import get_connection
 from morning_brief.alert_compiler import prune_expired_alerts, reconcile_journal_alerts, reconcile_structural_alerts
 from morning_brief.fetchers import load_key_levels_from_db, save_key_levels_to_db
+from morning_brief.llm import call_claude, print_usage
 
 # ── config ────────────────────────────────────────────────────────────────────
 
@@ -40,8 +39,6 @@ DEFAULT_DIARY = Path.home() / "Library/CloudStorage/Dropbox/Etrade/trading_diary
 
 def _diary_path() -> Path:
     return Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
-
-CLAUDE_MODEL = "claude-sonnet-4-6"
 
 EXTRACTION_PROMPT = """You are parsing a personal trading journal to extract ACTIONABLE trading levels.
 
@@ -83,21 +80,22 @@ Journal text:
 
 # ── Claude extraction ─────────────────────────────────────────────────────────
 
-def extract_from_journal(text: str) -> dict:
+def extract_from_journal(text: str, *, model=None, effort=None) -> dict:
     """Call Claude API and return parsed extraction dict."""
-    client = anthropic.Anthropic()
-    message = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=4096,
-        messages=[{"role": "user", "content": EXTRACTION_PROMPT + text}],
-    )
-    raw = message.content[0].text.strip()
+    result = call_claude(EXTRACTION_PROMPT + text, "journal", model=model, effort=effort)
+    print_usage(result)
+    raw = result["text"]
     # Strip markdown code fence if present
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
-    return json.loads(raw)
+    extracted = json.loads(raw)
+    if not isinstance(extracted, dict) or any(
+        not isinstance(extracted.get(key), list) for key in ("positions", "watch_levels", "price_alerts")
+    ):
+        raise ValueError("Claude extraction must contain positions, watch_levels and price_alerts arrays")
+    return extracted
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -235,9 +233,9 @@ def apply_extraction(extracted: dict, dry_run: bool = False) -> dict:
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
-def process_file(path: Path, dry_run: bool = False, force: bool = False) -> dict:
+def process_file(path: Path, dry_run: bool = False, force: bool = False, *, model=None, effort=None) -> dict:
     mtime = path.stat().st_mtime
-    if not force and _already_synced(str(path), mtime):
+    if not (force or dry_run) and _already_synced(str(path), mtime):
         print(f"  skip (already synced): {path.name}")
         return {}
 
@@ -245,11 +243,15 @@ def process_file(path: Path, dry_run: bool = False, force: bool = False) -> dict
     text = path.read_text(encoding="utf-8")
 
     print("  calling Claude API…")
-    extracted = extract_from_journal(text)
+    extracted = extract_from_journal(text, model=model, effort=effort)
 
     if dry_run:
         print("  extraction (dry-run):")
         print(json.dumps(extracted, indent=2))
+        # Model evaluation must not require DB reads or modify sync history.
+        return {"positions": len(extracted["positions"]),
+                "watch": len(extracted["watch_levels"]),
+                "alerts": len(extracted["price_alerts"])}
 
     counts = apply_extraction(extracted, dry_run=dry_run)
 
@@ -265,6 +267,8 @@ def main():
     parser.add_argument("--file",    help="Process a specific journal file")
     parser.add_argument("--dry-run", action="store_true", help="Print extraction, do not write to DB")
     parser.add_argument("--all",     action="store_true", help="Reprocess all journals (ignore sync log)")
+    parser.add_argument("--model", help="Override CLAUDE_MODEL for this run")
+    parser.add_argument("--effort", choices=["low", "medium", "high"], help="Override journal effort for this run")
     args = parser.parse_args()
 
     if args.file:
@@ -278,7 +282,7 @@ def main():
 
     total = {"positions": 0, "watch": 0, "alerts": 0}
     for f in files:
-        counts = process_file(f, dry_run=args.dry_run, force=args.all)
+        counts = process_file(f, dry_run=args.dry_run, force=args.all, model=args.model, effort=args.effort)
         for k in total:
             total[k] += counts.get(k, 0)
 

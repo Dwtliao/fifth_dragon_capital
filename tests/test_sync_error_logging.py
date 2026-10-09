@@ -40,12 +40,13 @@ class SyncErrorLoggingTests(unittest.TestCase):
             return exit_code, finish.call_args
 
     def test_partial_orders_errors_retain_each_account_and_message(self):
-        code, logged = self.run_sync(orders_result={"errors": ["account1: read timeout", "account2: HTTP 500"]})
+        code, logged = self.run_sync(orders_result={"errors": ["account1: read timeout", "account2: HTTP 500\nHTTP 500 response body: upstream error"]})
         self.assertEqual(code, 1)
         self.assertEqual(logged.args, (42, "failed"))
         self.assertEqual(logged.kwargs["rows_synced"], {"positions": 3})
         self.assertIn("orders: account1: read timeout", logged.kwargs["error_msg"])
         self.assertIn("orders: account2: HTTP 500", logged.kwargs["error_msg"])
+        self.assertIn("HTTP 500 response body: upstream error", logged.kwargs["error_msg"])
 
     def test_exception_and_downstream_failure_details_are_retained(self):
         code, logged = self.run_sync(orders_error=ValueError("bad order payload"),

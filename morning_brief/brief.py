@@ -34,6 +34,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 from morning_brief.alert_compiler import prune_expired_alerts, refresh_structural_alerts_from_db
 from morning_brief import fetchers, formatter
 from morning_brief.market_context import fetch_market_overview
+from morning_brief.analysis import render_analysis
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
@@ -52,6 +53,8 @@ def generate_brief() -> str:
     now        = datetime.datetime.now()
 
     sections = []
+    overview = None
+    pos_data = []
 
     # Header
     sections.append(formatter.render_header(now))
@@ -66,7 +69,8 @@ def generate_brief() -> str:
 
     # Market context uses one batched history download across all groups.
     try:
-        sections.append(formatter.render_market_overview(fetch_market_overview()))
+        overview = fetch_market_overview()
+        sections.append(formatter.render_market_overview(overview))
     except Exception as exc:
         sections.append(f"_Market context fetch failed: {exc}_\n\n---\n")
 
@@ -85,6 +89,17 @@ def generate_brief() -> str:
             sections.append(formatter.render_key_levels(watch_data))
     except Exception as exc:
         sections.append(f"_Key levels fetch failed: {exc}_\n\n---\n")
+
+    # Use the exact snapshot displayed by the tables, independently of journals.
+    if overview is not None:
+        try:
+            analysis = render_analysis(overview, pos_data, key_levels)
+            if analysis:
+                sections.insert(1, analysis)
+        except Exception as exc:
+            sections.insert(1, f"## What matters this morning\n\n"
+                            f"_Claude analysis unavailable: {exc}. Market tables remain available._\n\n---\n")
+            print(f"Claude analysis failed: {exc}", file=sys.stderr)
 
     # Footer
     sections.append(formatter.render_footer())

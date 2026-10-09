@@ -69,6 +69,16 @@ def _first_placed_time(order):
     return None
 
 
+def _request_error_message(error, response):
+    """Retain the broker's error payload, which raise_for_status omits."""
+    message = str(error)
+    # Error responses are falsey in requests; test presence explicitly.
+    if response is not None and response.status_code >= 400:
+        body = response.text.strip() or "<empty response body>"
+        message += f"\nHTTP {response.status_code} response body: {body}"
+    return message
+
+
 def sync_orders(account_filter=None, only=None,
                 start_date=None, end_date=None, from_beginning=False):
     """
@@ -117,6 +127,8 @@ def sync_orders(account_filter=None, only=None,
                         params["fromDate"] = acct_start.strftime("%m%d%Y")
                         params["toDate"] = end.strftime("%m%d%Y")
 
+                    # Do not reuse an earlier page's response on network errors.
+                    resp = None
                     try:
                         resp = client.session.get(
                             f"{BASE_URL}/v1/accounts/{key}/orders.json",
@@ -129,8 +141,9 @@ def sync_orders(account_filter=None, only=None,
                         resp.raise_for_status()
                         data = resp.json()
                     except Exception as e:
-                        errors.append(f"{key}: {e}")
-                        print(f"  orders: skipping {key} — {e}")
+                        detail = _request_error_message(e, resp)
+                        errors.append(f"{key}: {detail}")
+                        print(f"  orders: skipping {key} — {detail}")
                         acct_had_error = True
                         break
 

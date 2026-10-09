@@ -399,6 +399,17 @@ allowed after purging; purged managed identities and matching journal ideas stay
 
 ### Alert-controls migration
 
+P11's **Hygiene reports → Review alert exceptions — refresh data** provides an on-demand,
+journal-independent check. Local rules flag expired ideas, invalid levels, old recorded
+evidence (default 90 days), and large price gaps (default 25%). Archived rows are excluded
+unless requested. Quotes refresh only on request; distant equity levels get a two-year
+split-history check. Possible split mismatches are heuristic, not confirmed errors or
+proposed replacement prices. Futures/index levels are not checked as stock splits.
+No LLM calls, emails, alert changes, or trades occur. Reports remain session snapshots;
+refresh after actions/settings changes. Use the reported ID in the main table to review.
+Routine compiler refresh does not prove the trading level is fresh, and age does not
+prove it is stale. Automatic daily summaries and a persistent review queue are not yet built.
+
 Managed alerts exclude watch/support/resistance and journal ideas for currently held
 symbols, using the broker holdings snapshot. Existing non-stop managed alerts for those
 symbols are archived on reconciliation. Position stop alerts and manual alerts are preserved.

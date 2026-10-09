@@ -12,8 +12,9 @@ from psycopg2.errors import UndefinedTable
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from alerts.lifecycle import is_eligible, state, valid_price
 from alerts.management import apply_bulk, consolidation_preview, fingerprint, preview_action, save_manual
+from alerts.hygiene import review_exceptions
 from dashboard.alerts_workspace import (current_alerts, filter_alerts, quote_snapshot,
-                                        selected_alerts, table_records)
+                                        selected_alerts, table_records, split_snapshot, distance_percent)
 from dashboard.db import query
 from morning_brief.alert_compiler import find_duplicate_alerts, find_stale_alerts
 
@@ -192,6 +193,47 @@ with st.expander('Add manual alert'):
                 notify(f'Manual alert #{alert_id} created. Refresh quotes if this ticker is new.')
 
 with st.expander('Hygiene reports — load on demand'):
+    st.subheader('Journal-independent exception review')
+    st.caption('Local rules only: no journal or LLM needed. No levels, alerts, emails, or trades '
+               'are changed. Review identifies exceptions, not buy/sell recommendations.')
+    r1, r2 = st.columns(2)
+    review_distance = r1.number_input('Review distance (%)', min_value=5.0, max_value=1000.0,
+                                     value=25.0, step=5.0, key='review_distance')
+    review_age = r2.number_input('Review age (days)', min_value=1, max_value=3650,
+                                value=90, key='review_age')
+    include_archived = st.checkbox('Include archived alerts in exception review', key='review_archived')
+    if st.button('Review alert exceptions — refresh data', key='workspace_exception_review'):
+        review_alerts = current_alerts()
+        scoped = [a for a in review_alerts if include_archived or state(a) != 'Archived']
+        with st.spinner('Refreshing quotes and checking outlier split evidence…'):
+            quote_snapshot.clear()
+            review_quotes = quote_snapshot(tuple(sorted({a['ticker'] for a in scoped})))
+            outliers = {a['ticker'] for a in scoped
+                        if (distance_percent(a, review_quotes.get(a['ticker'])) or 0) >= review_distance
+                        and not a['ticker'].startswith('^') and '=' not in a['ticker']}
+            split_snapshot.clear()
+            splits = split_snapshot(tuple(sorted(outliers))) if outliers else {}
+            review_time = datetime.now(timezone.utc)
+            findings = review_exceptions(review_alerts, review_quotes, splits, now=review_time,
+                distance_limit=review_distance, age_days=review_age, include_archived=include_archived)
+        st.session_state['workspace_quotes'] = review_quotes
+        st.session_state['workspace_exception_report'] = dict(rows=findings, at=review_time,
+            count=len(scoped), distance=review_distance, age=review_age, archived=include_archived)
+        st.rerun()
+    report = st.session_state.get('workspace_exception_report')
+    if report:
+        st.caption(f"Snapshot {report['at']:%Y-%m-%d %H:%M UTC}: {len(report['rows'])} exceptions "
+                   f"from {report['count']} alerts; distance ≥ {report['distance']:g}%, age ≥ {report['age']} days. "
+                   'Refresh after editing alerts or changing review settings.')
+        if report['rows']:
+            st.dataframe(pd.DataFrame(report['rows']), hide_index=True, width='stretch')
+        else:
+            st.success('No exceptions under the selected rules.')
+        st.caption('Use the ID in the main table to review and act. Split evidence covers the last '
+                   'two years and is heuristic; futures rolls and index levels are not stock splits. '
+                   'Quote timestamps are retrieval times, not exchange trade times. '
+                   'Alert age is not proof that a level is stale; routine compiler refreshes do not reset it.')
+    st.divider()
     st.caption('No automatic archive/delete. Only an exact manual/journal + structural pair can be consolidated with confirmation; nearby levels remain review-only. Macro/futures alerts can be valid without portfolio positions.')
     if st.button('Load / refresh hygiene reports', key='workspace_hygiene'):
         active_ids = {r['id'] for r in current_alerts() if is_eligible(r)}

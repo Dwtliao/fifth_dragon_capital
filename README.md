@@ -408,7 +408,24 @@ proposed replacement prices. Futures/index levels are not checked as stock split
 No LLM calls, emails, alert changes, or trades occur. Reports remain session snapshots;
 refresh after actions/settings changes. Use the reported ID in the main table to review.
 Routine compiler refresh does not prove the trading level is fresh, and age does not
-prove it is stale. Automatic daily summaries and a persistent review queue are not yet built.
+prove it is stale. A persistent review queue is not yet built.
+
+The Morning Brief now starts with a read-only **What needs my attention?** snapshot:
+**Protect holdings**, **Watch opportunities**, and **Resolve ambiguity**, capped at five
+items per group with total counts. Old position-stop alerts without a holding are flagged
+for an explicit re-entry-watch/update/retire decision, not presented as buy signals.
+Displayed daily-bar condition, last-poll flag, lifecycle, and delivery outcome are separate.
+Archived rows are omitted; suppressed/expired alerts cannot appear as active opportunities.
+The snapshot uses Yahoo daily bars (possibly forming/delayed), not live quotes; bars older
+than four calendar days are not used to claim a current condition. Missing holdings or
+alert data produces an unavailable notice instead of silently classifying symbols as unheld.
+No alert/source writes, emails, trades, or additional LLM calls occur; these local alert
+details are not added to the existing LLM payload. Regenerate the brief to refresh this
+saved snapshot. Use alert IDs in P11 for management and P10 Key Levels for source edits.
+Attention items label the Alert threshold and Price snapshot separately. Red marks a held
+stop breach, green an active unheld watch crossing (not a buy signal), amber review/near-stop
+items, and gray unmet/unknown/inactive conditions. Poll/delivery details are on a quieter
+second line; the section includes its retrieval timestamp. Status colors do not change rules.
 
 Managed alerts exclude watch/support/resistance and journal ideas for currently held
 symbols, using the broker holdings snapshot. Existing non-stop managed alerts for those

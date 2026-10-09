@@ -81,6 +81,7 @@ class BriefAnalysisTests(unittest.TestCase):
         with ExitStack() as stack:
             for target, result in (
                 ("morning_brief.fetchers.load_key_levels_from_db", {}),
+                ("morning_brief.brief.attention_summary", "ATTENTION SUMMARY"),
                 ("morning_brief.fetchers.fetch_fed_events", []),
                 ("morning_brief.brief.fetch_market_overview", self.overview),
                 ("morning_brief.fetchers.fetch_positions", self.positions),
@@ -98,6 +99,7 @@ class BriefAnalysisTests(unittest.TestCase):
     def test_real_brief_path_calls_analysis_without_a_journal(self):
         output = self.generate()
         self.assertLess(output.index("WHAT MATTERS"), output.index("MARKET TABLES"))
+        self.assertLess(output.index("ATTENTION SUMMARY"), output.index("WHAT MATTERS"))
 
     def test_api_failure_leaves_a_visible_message_and_market_tables(self):
         output = self.generate(RuntimeError("API unavailable"))

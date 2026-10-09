@@ -726,7 +726,27 @@ below is retained as a deferred proposal, not the current implementation commitm
   filtering, and sends no emails. Migration repeat checks and `git diff --check` passed.
 - [ ] User browser acceptance: open P11 Hygiene reports, run exception review, check
   evidence/reasons and adjustable distance/age rules; confirm existing alerts stay unchanged.
-- [ ] Assess usefulness before adding daily brief summaries or a durable review queue.
+- [x] User approved a small read-only brief summary after discovering old UUUU stop #46
+  was not visible in the brief. Add Protect holdings / Watch opportunities / Resolve
+  ambiguity near the top, with per-group caps/counts, source-level review intent,
+  daily-bar date, independent last-poll flag, lifecycle and delivery outcome.
+- [x] Keep old stops without holdings visible as ambiguous re-entry-watch/update/retire
+  decisions; do not infer buy intent or automatically archive/delete them.
+- [x] Missing/stale prices cannot claim current condition; missing holdings produce an
+  unavailable notice. Local alert snapshot is never appended to the LLM payload.
+- [x] Attention-summary verification: full suite 161 tests passed, including 32 isolated
+  database/browser tests. Added closed-stop ambiguity, held stops/nearby levels, watch
+  crossings, stale/missing prices, suppression/expiry, list caps, price/poll disagreement,
+  read-only connection, holdings failure, and top-of-brief placement checks.
+- [x] Browser acceptance: regenerate Brief only, verify UUUU #46 under Resolve ambiguity,
+  review protection/opportunity groups and price/poll distinctions; no alert changes.
+- [x] User-requested presentation refinement: separate Alert and Price snapshot labels;
+  color status badges (red held stop breach, green unheld watch crossing, amber review,
+  gray unmet/unknown/inactive); keep poll/delivery details quieter and show retrieval time.
+- [x] User accepted the colored, labeled summary after regeneration and requested commit/push.
+  Full regression: 163 tests passed, including 32 isolated database/browser tests;
+  `git diff --check` passed. Summary remains read-only; no extra LLM calls.
+- [ ] Assess usefulness before a durable review queue or more UI redesign.
 - [ ] Optional later stage: calculated highs/lows or moving-average proposals, explicitly
   labeled calculations rather than journal/trading intent. Requires separate approval.
 

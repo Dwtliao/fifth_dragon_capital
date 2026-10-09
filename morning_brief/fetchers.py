@@ -100,6 +100,7 @@ def _fetch_snapshot(symbols: dict[str, str]) -> list[dict]:
                 "last":   round(last, 2),
                 "prior":  round(prior, 2),
                 "pct":    pct,
+                "as_of": closes.index[-1].date().isoformat(),
             })
         except Exception as exc:
             results.append({"label": label, "ticker": ticker, "error": str(exc)})

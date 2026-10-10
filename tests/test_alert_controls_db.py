@@ -511,6 +511,35 @@ class AlertControlsDatabaseTests(unittest.TestCase):
             self.assertNotIn('manage_active_select', [s.key for s in app.selectbox])
             quotes.assert_not_called()
 
+    def test_exception_review_is_explicit_read_only_and_survives_filters(self):
+        import streamlit as st
+        from streamlit.testing.v1 import AppTest
+        self.add_alert()
+        before = self.execute('SELECT * FROM price_alerts ORDER BY id', fetch=True)
+        st.cache_data.clear()
+        with patch('dashboard.db.get_connection', self.connect), \
+             patch('dashboard.alerts_workspace.quote_snapshot', return_value={
+                 'TEST': dict(price=10, retrieved_at=datetime.now(timezone.utc))}) as quotes, \
+             patch('dashboard.alerts_workspace.split_snapshot', return_value={
+                 'TEST': dict(events=[], error=None)}) as splits:
+            app = AppTest.from_file(str(ROOT / 'dashboard/pages/P11_Alerts.py'), default_timeout=20).run()
+            self.assertEqual(len(app.exception), 0)
+            quotes.assert_not_called()
+            splits.assert_not_called()
+            app.button(key='workspace_exception_review').click().run()
+            self.assertEqual(len(app.exception), 0)
+            report = app.session_state['workspace_exception_report']
+            self.assertEqual(report['rows'][0]['Distance %'], 900)
+            quotes.assert_called_once_with(('TEST',))
+            splits.assert_called_once_with(('TEST',))
+            app.text_input(key='workspace_search').input('no matches').run()
+            self.assertEqual(len(app.exception), 0)
+            self.assertEqual(app.session_state['workspace_exception_report'], report)
+            self.assertEqual(quotes.call_count, 1)
+        self.assertEqual(before, self.execute('SELECT * FROM price_alerts ORDER BY id', fetch=True))
+        self.assertEqual(self.execute('SELECT count(*) FROM alert_action_history', fetch=True)[0][0], 0)
+        self.delivery.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

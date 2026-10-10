@@ -41,6 +41,23 @@ def distance_percent(alert, quote):
     return abs(float(price) - float(alert['threshold'])) / float(price) * 100
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def split_snapshot(tickers):
+    """Fetch public split evidence only for outliers, on explicit review request."""
+    def fetch(ticker):
+        try:
+            history = yf.Ticker(ticker).history(period='2y', auto_adjust=False, actions=True)
+            if history.empty or 'Stock Splits' not in history:
+                return ticker, dict(events=[], error='Split history unavailable')
+            events = [dict(date=date.date(), ratio=float(ratio))
+                      for date, ratio in history['Stock Splits'].items() if valid_price(ratio)]
+            return ticker, dict(events=events, error=None)
+        except Exception as exc:
+            return ticker, dict(events=[], error=type(exc).__name__)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        return dict(pool.map(fetch, tickers))
+
+
 def attention_reasons(alert, quote, nearby_percent=2.0, now=None):
     now = now or datetime.now(timezone.utc)
     reasons = []

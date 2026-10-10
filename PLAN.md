@@ -384,8 +384,9 @@ Date: October 8, 2026; acceptance updated October 9, 2026.
 Status: Priorities 1–2 accepted by the user (Release A). Priority 1 was pushed as `a2e6b7d`;
 Priority 2 and the October 9 extensions are approved for commit, PR, and merge after full tests.
 Release branch: `feature/p7-alert-management`, created from `main`.
-Next-stage branch: `feature/brief-alert-suggestions`, to be created from updated `main` after merge.
-Priorities 3–4 have not started; acceptance does not authorize unattended alert changes.
+Release A merged through PR #85; next-stage branch `feature/brief-alert-suggestions`
+was created and pushed from updated main. Priority 3 was revised below on October 9;
+Priority 4 remains deferred. Acceptance does not authorize unattended alert changes.
 
 ### Objective and scope
 
@@ -704,7 +705,52 @@ duplicate consolidation cannot archive an unrelated or newly changed record; mac
 alerts are not incorrectly treated as obsolete. Gate: P7 charts remain functional and
 alert management no longer dominates the page.
 
-### Priority 3 — Opt-in brief-assisted maintenance
+### Priority 3 — Journal-independent hygiene first (revised October 9)
+
+The user is not maintaining daily journals and approved a journal-independent approach.
+Start with deterministic exception review using stored alerts and current market data,
+without extra LLM calls or automatically changing levels. The original Phases 7–8 design
+below is retained as a deferred proposal, not the current implementation commitment.
+
+- [x] Implement on-demand P11 exception review for invalid levels, expired ideas, old
+  recorded evidence, and configurable large price distances (default 25% / 90 days).
+- [x] Exclude archived alerts by default; provide an explicit inclusion option.
+- [x] Fetch quotes explicitly and investigate distant equity alerts using up to two years
+  of split evidence; exclude futures/indices from stock-split checks. Clearly label split
+  mismatches as heuristics, with dates/ratios and no automatic numerical correction.
+- [x] Do not treat routine compiler refreshed_at as evidence of fresh trading intent.
+- [x] Preserve all alert/lifecycle settings; snapshot report survives reruns and contains
+  IDs, source, status, reasons, evidence dates, price distances, and suggested review steps.
+- [x] Full regression: 152 tests passed, including 32 isolated PostgreSQL/Streamlit tests.
+  Browser automation verified review is explicit, read-only, retains its snapshot across
+  filtering, and sends no emails. Migration repeat checks and `git diff --check` passed.
+- [ ] User browser acceptance: open P11 Hygiene reports, run exception review, check
+  evidence/reasons and adjustable distance/age rules; confirm existing alerts stay unchanged.
+- [x] User approved a small read-only brief summary after discovering old UUUU stop #46
+  was not visible in the brief. Add Protect holdings / Watch opportunities / Resolve
+  ambiguity near the top, with per-group caps/counts, source-level review intent,
+  daily-bar date, independent last-poll flag, lifecycle and delivery outcome.
+- [x] Keep old stops without holdings visible as ambiguous re-entry-watch/update/retire
+  decisions; do not infer buy intent or automatically archive/delete them.
+- [x] Missing/stale prices cannot claim current condition; missing holdings produce an
+  unavailable notice. Local alert snapshot is never appended to the LLM payload.
+- [x] Attention-summary verification: full suite 161 tests passed, including 32 isolated
+  database/browser tests. Added closed-stop ambiguity, held stops/nearby levels, watch
+  crossings, stale/missing prices, suppression/expiry, list caps, price/poll disagreement,
+  read-only connection, holdings failure, and top-of-brief placement checks.
+- [x] Browser acceptance: regenerate Brief only, verify UUUU #46 under Resolve ambiguity,
+  review protection/opportunity groups and price/poll distinctions; no alert changes.
+- [x] User-requested presentation refinement: separate Alert and Price snapshot labels;
+  color status badges (red held stop breach, green unheld watch crossing, amber review,
+  gray unmet/unknown/inactive); keep poll/delivery details quieter and show retrieval time.
+- [x] User accepted the colored, labeled summary after regeneration and requested commit/push.
+  Full regression: 163 tests passed, including 32 isolated database/browser tests;
+  `git diff --check` passed. Summary remains read-only; no extra LLM calls.
+- [ ] Assess usefulness before a durable review queue or more UI redesign.
+- [ ] Optional later stage: calculated highs/lows or moving-average proposals, explicitly
+  labeled calculations rather than journal/trading intent. Requires separate approval.
+
+### Deferred original Priority 3 — Opt-in brief-assisted maintenance
 
 This work starts after Release A is accepted. It is not a prerequisite for fixing today's
 alert-management problems. Symbol coverage or explicit trading levels may be absent from
@@ -897,8 +943,8 @@ expired rows. This supersedes the initial preference for archive-only management
   tests; none skipped in the full run. Restored backup verification applied migrations
   075/076 twice with existing alert rows unchanged. SMTP and quote dependencies mocked.
   `git diff --check` passed. Production data was not modified during regression.
-- [ ] Merge Release A through GitHub PR; do not commit directly to main.
-- [ ] Create `feature/brief-alert-suggestions` from updated main for Priority 3.
+- [x] Merge Release A through GitHub PR #85; do not commit directly to main.
+- [x] Create/push `feature/brief-alert-suggestions` from updated main for Priority 3.
 
 Next stage remains opt-in structured suggestions with provenance, local validation, and
 explicit Accept/Keep/Snooze review. Priorities 3–4 remain unimplemented. The original June 2

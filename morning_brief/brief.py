@@ -35,6 +35,7 @@ from morning_brief.alert_compiler import prune_expired_alerts, refresh_structura
 from morning_brief import fetchers, formatter
 from morning_brief.market_context import fetch_market_overview
 from morning_brief.analysis import render_analysis
+from morning_brief.attention import attention_summary
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
@@ -100,6 +101,15 @@ def generate_brief() -> str:
             sections.insert(1, f"## What matters this morning\n\n"
                             f"_Claude analysis unavailable: {exc}. Market tables remain available._\n\n---\n")
             print(f"Claude analysis failed: {exc}", file=sys.stderr)
+
+    # Local read-only attention view; never included in the analysis payload.
+    try:
+        sections.insert(1, attention_summary())
+    except Exception as exc:
+        sections.insert(1, '## What needs my attention?\n\n'
+                        '_Alert attention snapshot unavailable; check P11. '
+                        'Holdings/price status has not been verified._\n\n---\n')
+        print(f'Attention summary unavailable: {exc}', file=sys.stderr)
 
     # Footer
     sections.append(formatter.render_footer())

@@ -380,6 +380,531 @@ LIMIT 20;
 
 ## Current plan: P7 alert management
 
+### October 11, 2026 — Journal-to-alert approval (active round)
+
+**Release checkpoint — October 12, 2026:** User reports Journal Review working in
+Streamlit and accepts this initial version for commit/push/PR merge, with future refinements
+kept separate. Manual checks covered real journal staging after parser correction, bounded
+journal selection, review quotes/already-met warnings, and Sync Positions result visibility.
+Final full regression: **211 tests passed, no skips**, using the restored isolated backup;
+migrations 075–077 applied twice with original alerts/levels unchanged. The previously
+failing sidebar browser test lacked a holdings-view fixture; mocked the holdings read so
+both rejection and partial-completion paths actually execute. No production code change
+was needed for that test correction. `git diff --check` passed. Read-only inspection
+confirmed migration 077's review table exists in the live DB; no live migration, extraction,
+approval, SMTP or trade was run by the release verification. Earlier WIP warnings/checklists
+below are historical checkpoints, superseded by the Group A/B/C fixes and this acceptance.
+Remaining refinements: parse spelled-out journal dates; clearer redundant-stop presentation;
+archive counters should eventually count transitions rather than already-archived rows.
+Do not expand these during release. Preserve one-section-at-a-time review for future work.
+
+October 12 user requested no Sync All operation. Replaced it with Sync Last 5 Journals,
+selected by modification time (same policy as latest journal), skipping unchanged files.
+CLI defaults to a maximum of five, offers --recent 1–5/--file and bounded --force, and
+removes unbounded --all. Weekly journals mean five files, not five days. 15 journal-review
+unit tests and 8 pipeline/UI tests passed; no real extraction, migration, commit or push.
+
+October 12 user-tested Journal Sync successfully after the commentary parser fix; Sync
+Positions result also survived its rerun. User requested clearer success wording. Updated
+only its banner: explicitly describes metadata, added/removed symbols, managed alert
+changes, historical archive-count inclusion, retained stops/notes and no trades. Underlying
+sync/reconciliation behavior and error/partial-completion paths unchanged. Eight targeted
+pipeline/UI/message tests passed; no broad full-suite rerun or migration for this change.
+
+October 12 targeted runtime fix (primary agent takeover): actual journal sync failed
+because optional commentary contained strings and normalization assumed objects.
+Added explicit commentary object examples to the prompt; malformed optional commentary
+is skipped with a visible warning, retaining valid actionable ideas. Required actionable
+arrays are strictly checked for object entries before staging/DB access. Added four
+regression cases (string/mixed commentary, invalid container, malformed actionable items).
+Verification: 13 journal-review unit tests + 6 Claude integration tests passed;
+`git diff --check` passed. No full-suite rerun, migration, real LLM retry, live-data writes,
+commit or push by this fix. Other agent's uncommitted work is preserved. Stop for user
+review; next manual check is Sync Latest Journal only, not a full pipeline rerun.
+
+Development branch: `feature/journal-alert-approval`, from updated main after PR #86.
+
+Approved decisions: review lives in P10; journal-proposed holding stops and changes also
+require approval; newly approved watch alerts default to 21 days, editable before acceptance.
+
+**Working agreement — user preference, October 11:** Complete only ONE section at a time,
+report what changed/tests/limitations, and STOP for user review before starting the next
+section. Do not implement multiple sections in one turn, apply live migrations, invoke
+live journal extraction, or proceed to rollout without that section's review. Keep work
+small to respect the user's weekly usage budget. The initial implementation below moved
+through multiple sections without the requested checkpoints; it is local WIP, not accepted.
+
+Execution order and checks:
+
+1. [x] Create/publish the development branch and preserve this plan. Codex CLI mode toggle
+   in the user's session is Shift+Tab. Do not commit directly to main.
+2. [x] Backup and migration PREPARATION: non-pruning backup completed; additive migration
+   077 written and tested twice on a restored isolated database. Durable review items,
+   evidence and decision audit added. Live migration is NOT applied; rollout is Step 10.
+3. [x] Implemented locally: separate journal extraction from activation. Commentary is context; explicit levels
+   become watch ideas; notification instructions become pending candidates; holding stops
+   become pending proposals. Neither live key levels nor price alerts may change on sync.
+4. [x] Implemented locally: preserve exact evidence/source/date, validate symbols/finite levels, and distinguish
+   intraday from daily/weekly-close or sustained conditions. Ambiguity must require explicit
+   clarification, not silently become an intraday alert. Keep the existing single LLM call.
+5. [x] Deduplicate by trading condition, not wording/file/run time. Repeat accepted/rejected
+   ideas do not create alerts, renew expiry, or nag. Material level changes require review.
+   Disable automatic promotion of recurring journal ideas into permanent alerts.
+   Implemented: exact condition fingerprints, durable accepted/rejected decisions, evidence
+   history, no expiry renewal on repeats, no automatic recurrence promotion. October 11
+   follow-up: `review_action` now blocks approving a purged WATCH/JOURNAL (non-stop) alert
+   back into existence (new/replace modes), mirroring the existing managed-STOP purge
+   guard — same `alert_purge_blocks` table, exact ticker/condition/threshold match. Staging
+   (`stage_extraction`) was already confirmed to re-use the durable `accepted` review-item
+   row on resync rather than re-entering the queue, so no staging-layer change was needed;
+   see `test_purged_watch_alert_cannot_be_silently_restored` and
+   `test_resync_after_purge_does_not_reenter_queue` in `tests/test_journal_review_db.py`.
+   Caveat (user-noted October 11): a *different* proposal (different idea_key — e.g. a
+   materially different timeframe/wording) matching the same purged condition can still
+   enter the review queue as a new pending/idea row; only its approval into a live alert
+   is blocked. This stops notification recreation but does not eliminate resurfacing
+   clutter in the queue; a staging-level suppression was intentionally not built this
+   round — revisit if the clutter becomes a practical problem.
+6. [x] Implemented locally: P10 Journal Review: separate ideas/candidates, group by ticker, unchecked selections,
+   show evidence/date/existing alerts/holdings, preview selected approve/reject actions.
+   Ideas require deliberate preparation before they become notification candidates.
+7. [ ] Approval creates operator-owned manual watch alerts (21-day default) or updates only
+   the explicitly selected manual alert/held-position stop. Recheck versions, holdings,
+   targets/controls and duplicates under shared locks; batches are all-or-nothing. Preserve
+   pause/snooze, reject purged managed restoration, audit before/after; never send email.
+   Core approval service and tests implemented. User browser acceptance remains; not
+   release-complete.
+
+   **October 11 concurrency review (source compiler vs. P10 approval):**
+   - Reviewed `review_action` (journal_review.py), `apply_bulk` (alerts/management.py),
+     and `reconcile_alerts`/`_apply_upsert` (alert_compiler.py) for shared lock ordering,
+     stale previews, stop-source/alert consistency, and all-or-nothing batches.
+   - Approval and purge/bulk-controls already share `LOCK_NAMESPACE` conventions correctly
+     (per-target-id lock, per-ticker symbol lock, stop/purge guard locks), sorted
+     consistently to avoid deadlock, with fingerprint/revision/old-value rechecks after
+     locking — no gap found there; existing tests (`test_stale_preview_batch_rolls_back...`,
+     `test_replace_preserves_pause_and_rejects_changed_target`, purge tests) already cover
+     this.
+   - **Gap 1 found and fixed — no lock at all.** `alert_compiler.reconcile_alerts` (used by
+     `reconcile_structural_alerts` for key_levels_watch/stop rows) took no advisory lock
+     before reading and writing managed alert rows, despite being reachable from the
+     morning pipeline/P10 "Sync Positions" concurrently with a user mid-approval. Fix:
+     acquire the same per-ticker `LOCK_NAMESPACE+1` symbol lock manual P11 edits and
+     journal-review approvals already use, for every ticker it will touch, before loading
+     current rows. Demonstrated the gap (unfixed code let the compiler proceed
+     unsynchronized) and the fix (it now blocks) by temporarily reverting and re-running;
+     see `test_compiler_reconcile_blocks_on_concurrent_stop_approval_lock`.
+   - **Gap 2 found and fixed — the lock alone doesn't stop a stale read ($90→$95).**
+     Caught on review: the per-ticker lock only keeps two writers from stepping on each
+     other *while they write*; it does nothing about a reconcile that already read
+     key_levels (e.g. stop=$90) from the DB *before* a concurrent approval moved it to
+     $95. Once that reconcile finally gets the lock — after the approval has committed —
+     it would still write its stale $90 back over the just-approved $95: the lock closes
+     the window but the snapshot taken before the window opened is still wrong. Fixed by
+     giving `reconcile_alerts` an optional `reload_desired` hook, called only *after*
+     locks are held, that re-reads the authoritative source and replaces the desired set
+     before any diffing/writing. `reconcile_structural_alerts` takes a parallel
+     `reload_key_levels` and `refresh_structural_alerts_from_db` (the actual DB-reload
+     entrypoint used by the morning pipeline) wires it to `load_key_levels_from_db`.
+     `reconcile_structural_alerts`'s other caller (P10, which passes an in-memory dict
+     it just saved) is unaffected — no reload hook, same behavior as before.
+     Reproduced the exact $90→$95 scenario and proved both the saved stop and the live
+     alert land on $95, not $90, confirmed to fail without the fix and pass with it; see
+     `test_compiler_reload_prevents_stale_stop_overwrite`.
+   - **Gap 3 found and fixed — lock-order inversion (deadlock risk).** Caught on review:
+     a stop approval acquires its purge-guard lock (`LOCK_NAMESPACE+2`) *before* the
+     per-ticker symbol lock (`LOCK_NAMESPACE+1`); the compiler's insert path acquired the
+     symbol lock in Python first, then hit the *same* guard lock implicitly inside the
+     `prevent_purged_alert_recreation` DB trigger on `INSERT` — i.e. symbol-then-guard,
+     the reverse order. Two sessions taking a shared pair of locks in opposite orders is
+     a textbook deadlock (compiler holds symbol, waits on guard; approval holds guard,
+     waits on symbol) — Postgres's deadlock detector would eventually abort one side with
+     an error rather than hang forever, but that's still a startling, unnecessary
+     approval/reconcile failure. Fixed by having `reconcile_alerts` acquire the identical
+     guard-lock keys (`"source:ticker:condition"`, hashed via `hashtext` exactly like
+     `apply_bulk`'s purge guard and the DB trigger) *before* the per-ticker symbol lock —
+     matching `review_action`'s order everywhere a guard lock is involved. Verified the
+     compiler now queues on that exact guard key (same namespace, same hash input) before
+     doing anything else; see
+     `test_compiler_acquires_same_guard_lock_as_stop_approval_in_matching_order`. True
+     deadlock-freedom follows from both paths now using one consistent lock order
+     (standard argument, not something a timing-based test can prove by itself — the test
+     confirms the ordering and key identity the argument depends on).
+   - **Limitation / not fixed this round:** `apply_bulk`'s purge path does not take the
+     `LOCK_NAMESPACE+1` ticker lock (only its own guard + target-id lock), so a purge
+     racing a concurrent compiler reconcile for the same ticker isn't covered by gap 1's
+     fix. Not treated as a demonstrated gap: `_apply_upsert`'s plain `UPDATE ... WHERE
+     id=%s` against a row purge deleted mid-transaction simply affects zero rows (no
+     crash, no data resurrection, no incorrect overwrite) — it would only misreport that
+     row as "updated" in the compiler's stats. Flagging for a future round rather than
+     fixing speculatively.
+   - **Unchanged from Step 5:** purged conditions can still reappear in the review queue
+     as a *new, different* proposal (different idea_key); only approving it back into a
+     live alert is blocked. This is a UI-clutter limitation, not a data-safety one.
+   - Full isolated-DB regression (`/private/tmp/verify_alert_task1.py`, reviewed for safety
+     before use — only ever touches a disposable scratch database restored from the real
+     backup, applies migrations there, and drops only that scratch database afterward):
+     **191/191 tests passed** (188 prior + 3 new), restored backup's 92 alerts/50 controls
+     unchanged after migrations re-applied twice. Production database untouched throughout.
+     (One intermediate verification run was killed mid-hang after a test assertion failed
+     before its cleanup ran, which left one lock-holding connection open and one scratch
+     verification database undropped; both were found and removed before the final clean
+     run — production and the real backup were never touched by this.)
+
+   **October 11 (second pass) — committed as WIP, NOT yet signed off.** This round's
+   fixes (reload-staleness, lock ordering, reload lock-coverage retry, P10 CAS save) were
+   committed and pushed as `9419f34` "WIP Step 7" on `feature/journal-alert-approval`
+   (193/193 tests passing at commit time). On further review, **four blockers remain in
+   that committed code** — the 193 passing tests do not cover any of them, and
+   revert-verification (confirming a fix fails when reverted) does not substitute for a
+   test asserting the actual final-state invariant under each scenario:
+
+   1. **Retry-loop lock inversion.** `reconcile_alerts`'s fixed-point retry (added to
+      close the "reload introduces an unlocked ticker" gap) acquires new guard locks on
+      iteration 2+ while *still holding* iteration 1's symbol locks — i.e. across
+      iterations it can do guard_A, symbol_A, guard_B (while holding symbol_A), symbol_B.
+      That's the identical guard-vs-symbol inversion the single-pass fix was built to
+      eliminate, reintroduced by the retry itself. Five bounded attempts don't prevent a
+      deadlock *during* acquisition; they just bound how long it can take to get into one.
+   2. **P10 stale widgets not actually covered.** `baseline_kl` does reload correctly on
+      every Streamlit rerun, but Streamlit's `number_input(value=..., key=...)` only uses
+      `value` to initialize a widget the first time its key appears in `session_state` —
+      on later reruns the widget keeps its last in-session value regardless of what the
+      DB now holds. So the realistic failure mode (page opened once, left open, an
+      approval lands, user clicks Save All without a browser refresh) is not exercised by
+      `test_p10_save_rejects_stale_baseline_instead_of_clobbering_approval`, which only
+      calls the backend helper directly with synthetic stale dicts — it proves the CAS
+      check works *given* a stale baseline, not that P10 actually produces/catches one in
+      the real widget-rerun sequence.
+   3. **CAS comparison is incomplete, but the save is a full-table replace.** `_flat()`
+      only compares `stop/support/resistance/alert_above`; `note` is never compared, so a
+      concurrent note-only change is silently lost. Worse: `touched` is only
+      `baseline ∪ (this call's new key_levels)` — a ticker/row added by a third party
+      that is in neither set (not edited by this call, not yet known to this baseline) is
+      never checked for conflict, yet `save_structural_key_levels` still does
+      `DELETE FROM key_levels` (whole table) and reinserts only from the passed-in
+      `key_levels` — silently deleting that untouched, concurrently-added row. The CAS
+      check's coverage and the save's blast radius don't match.
+   4. **`dry_run` doesn't dry-run the key_levels save.** `save_structural_key_levels(...,
+      dry_run=True)` still executes `DELETE FROM key_levels` + re-`INSERT` and
+      unconditionally `conn.commit()`s before ever looking at `dry_run` — only the
+      downstream `reconcile_structural_alerts(..., dry_run=dry_run, ...)` call respects
+      it. A caller passing `dry_run=True` expecting a no-op preview gets a real write.
+
+   **Also noted, not yet a numbered blocker:** both P10 call sites treat
+   `_save_levels_and_refresh_alerts`'s return dict as success regardless of whether it
+   contains an `"error"` key (the shape used when the helper raised) — i.e. a CAS
+   conflict or any other failure is reported to the user as
+   `st.sidebar.success(...)`/`st.success(...)` with "created=0 updated=0 ...", not as an
+   error. The conflict is swallowed exactly when it matters most (the save didn't
+   happen).
+
+   **Next checkpoint plan:** grouped the four blockers by actual coupling rather than
+   fixing in numbered order — #3 and #4 share one function and one write path, so fixing
+   them separately would mean rewriting that function twice; #2 and the misleading-UI
+   note are both Streamlit/P10-layer and need `AppTest`-level coverage together; #1 is
+   independent (different function, no shared state). Order: **Group A (#3 CAS
+   completeness + #4 dry_run) → Group B (#1 retry-loop lock ordering) → Group C (#2 P10
+   stale widgets + misleading success/error UI)**, stopping for review after each group.
+
+   **Group A — fixed.** `save_structural_key_levels` rewritten:
+   - Comparison/identity is now keyed by `(section, ticker)` (matching the table's actual
+     `UNIQUE (section, ticker)` constraint) and covers all five fields including `note`,
+     not just the four numeric ones.
+   - The write path no longer does `DELETE FROM key_levels` (whole table) + blind
+     reinsert. It now only deletes rows present in `baseline_key_levels` but absent from
+     the new `key_levels` (the user's explicit removals) and upserts
+     (`ON CONFLICT (section,ticker) DO UPDATE`) only rows in the new `key_levels` — a row
+     in neither (added by another session after baseline, concurrently with this call) is
+     never touched.
+   - `dry_run=True` now actually rolls back instead of unconditionally committing; only
+     then is `dry_run` forwarded to the downstream `reconcile_structural_alerts` call.
+   - New tests, each a final-state assertion (not just revert-verification):
+     `test_p10_save_rejects_note_only_conflict`,
+     `test_p10_save_preserves_row_added_by_another_session`,
+     `test_p10_save_removes_row_explicitly_dropped_by_user`,
+     `test_p10_save_dry_run_writes_nothing`. Confirmed `test_p10_save_dry_run_writes_nothing`
+     fails without the fix (reverted the `dry_run` gate, got
+     `AssertionError: Decimal('95') != 90`, restored the fix, reran clean) — did not repeat
+     that revert-and-confirm step for the other three new tests this round, given time/
+     context constraints; they are final-state assertions against the rewritten code,
+     not yet independently proven to fail against the old code.
+   - Full isolated-DB regression: **197/197 tests passed** (193 prior + 4 new), restored
+     backup's 92 alerts/50 controls unchanged, scratch DB dropped after. Production
+     untouched throughout.
+
+   **Group B — fixed.** `reconcile_alerts`'s reload-coverage retry previously held
+   phase-1's symbol locks across iterations while acquiring additional guard locks for
+   a newly-discovered ticker — reintroducing, inside the retry loop itself, the exact
+   guard-vs-symbol inversion the ordering fix had just eliminated. Restructured into an
+   outer bounded (5) attempt loop, each attempt on a *fresh connection*:
+   - Phase 1 (bounded, reload-driven): acquire/stabilize guard locks only, never
+     touching the symbol namespace.
+   - Phase 2: once guards are stable, acquire ALL symbol locks for the final ticker set
+     in one batch.
+   - One more reload+coverage check after Phase 2: if it reveals a requirement
+     (guard or ticker) this attempt never locked, the attempt is abandoned — raises an
+     internal `_LockCoverageDrifted`, caught to `conn.rollback()`/`conn.close()` (releasing
+     *everything*, including the Phase-2 symbol locks) — and retried from zero on a new
+     connection, rather than patched by acquiring the missing guard in place.
+   - Net effect: within any single attempt, and across attempts, a guard lock is never
+     acquired after a symbol lock already was — closing the loophole without weakening
+     the reload-coverage guarantee from the prior round.
+   - New deterministic test,
+     `test_compiler_releases_symbol_lock_before_expanding_guard_coverage`: drives a
+     reload stub that introduces a second ticker only *after* Phase 2 has acquired the
+     first ticker's symbol lock, forcing exactly one abandon-and-retry cycle. Uses a
+     second real connection's non-blocking `pg_try_advisory_lock` as a probe (no threads,
+     no timing guesses) to assert, synchronously, that the symbol lock is held at the
+     moment of attempt 1's coverage check and released by the time attempt 2's first
+     reload runs. Confirmed this test fails against the pre-fix interleaved-retry code
+     (reverted to it, got the expected failure, restored the fix, reran clean).
+   - Full isolated-DB regression: **198/198 tests passed** (197 prior + 1 new), restored
+     backup's 92 alerts/50 controls unchanged, scratch DB dropped after. Production
+     untouched throughout.
+
+   **Group B follow-up — one more ordering risk found and fixed.** Caught on review:
+   Phase 1 retained already-held guard locks while acquiring newly-discovered ones from a
+   reload, without checking whether the new guard sorted *before* an already-held one
+   (e.g. holding guard "...Z..." from pass 1, then a reload reveals guard "...A..." is
+   also needed — "A" < "Z" alphabetically). Acquiring A at that point is still
+   guard-before-symbol locally, but it breaks the *global* ascending order every other
+   session relies on: another session legitimately holding A and waiting on Z would then
+   deadlock against this one (holds Z, waits on A). Fixed:
+   - Phase 1 now checks, before acquiring any newly-discovered guards, whether the
+     smallest new one sorts before the largest already-held one; if so, this attempt is
+     abandoned (same `_LockCoverageDrifted` abandon-and-retry-on-a-fresh-connection
+     mechanism as the earlier fix) rather than acquiring it in place.
+   - `_LockCoverageDrifted` now carries the `desired_map` known at the moment of
+     abandonment, and the outer attempt loop seeds the *next* attempt from it (not from
+     the original `initial_desired_map`) — so a retry starts already knowing about
+     whatever was discovered, converging in one extra attempt instead of potentially
+     re-discovering and re-abandoning over the same gap repeatedly.
+   - New deterministic test,
+     `test_compiler_releases_guard_lock_when_earlier_sorting_guard_discovered`: seeds a
+     reconcile with only ticker "Z", reloads to introduce earlier-sorting ticker "A" right
+     after Z's guard is acquired, and uses a second connection's non-blocking
+     `pg_try_advisory_lock` to prove Z's guard is held at the moment of discovery and
+     released before the retry's fresh connection is even used. Calls `reconcile_alerts`
+     directly (not through `reconcile_structural_alerts`) so unrelated connections from
+     `_held_symbols()`/`backfill_legacy_structural_alerts()` don't interfere with the
+     connection-count check. Confirmed this test fails against the pre-fix code (reverted
+     the new ordering check, got a `KeyError` because no retry ever happened, restored the
+     fix, reran clean).
+   - Full isolated-DB regression: **199/199 tests passed** (198 prior + 1 new), restored
+     backup's 92 alerts/50 controls unchanged, scratch DB dropped after. Production
+     untouched throughout.
+
+   **Group C — fixed.** `dashboard/pages/P10_Morning_Brief.py`:
+   - The baseline used for conflict detection (`baseline_kl`) was being recomputed as
+     `copy.deepcopy(load_key_levels_from_db())` on *every* rerun — i.e. tied to each
+     rerun's current DB state, not to what the widgets actually show. Since Streamlit's
+     `number_input(value=..., key=...)` only uses `value` the first time a key appears in
+     `session_state`, the widgets themselves don't refresh to a concurrent DB change
+     either — so the baseline needs the same "pin on first load" semantics the widgets
+     already have, or CAS comparisons silently compare the wrong thing. Fixed: the
+     baseline is now stored once in `st.session_state["p10_kl_baseline"]` the first time
+     Tab 2 renders in a session, and only ever updated again after a *successful* save (to
+     that save's own values) — never re-read from the DB on an unrelated rerun.
+   - Added a **🔄 Refresh from DB** button (`key="p10_refresh_button"`) that explicitly
+     drops both the pinned baseline and all per-ticker widget keys together, so the only
+     way stale values go away is a deliberate action, not an accidental silent resync.
+   - Added `_reset_key_levels_session_state()`, also called after "Sync Positions from
+     DB" succeeds (a different code path that changes key_levels outside Tab 2's own
+     save), so Tab 2 doesn't carry a baseline that's now stale relative to that sync.
+   - **Misleading success fixed everywhere a save result is shown:** "Save All", both
+     "Add Position"/"Add Watch Level" expander forms, and the sidebar "Sync Positions from
+     DB" button all previously called `st.success(...)`/built a success message
+     unconditionally, only noting an `"error"` key (if any) as an aside inside the success
+     text. All four now check `stats.get("error")` first and render `st.error("Not
+     saved/added: ...")` — never a success banner — when the save didn't happen. Added
+     `_flash_from_stats()` to make this one shared code path for "Save All" instead of
+     ad hoc per-call-site logic.
+   - New browser test (Streamlit `AppTest`, `test_p10_browser_stale_save_shows_error_not_success`
+     in `tests/test_journal_review_db.py`): loads the real P10 page against the isolated
+     test schema, confirms the widget shows the originally-loaded stop (90), changes the
+     underlying DB value (95) behind the session's back, forces an unrelated rerun
+     (toggling a checkbox) and confirms the widget/baseline did *not* silently pick up 95,
+     then clicks Save All and confirms it renders an `st.error` ("Not saved: ...") and
+     *no* success banner, and that the concurrently-set value (95) survived untouched.
+     Finally clicks Refresh from DB and confirms the widget now shows 95. Confirmed this
+     test fails without the baseline-pinning fix (reverted it, got `AssertionError: []
+     is not true: expected an error alert...` — i.e. no conflict was ever detected because
+     the baseline silently resynced to 95 too — restored the fix, reran clean).
+   - Full isolated-DB regression: **200/200 tests passed** (199 prior + 1 new), restored
+     backup's 92 alerts/50 controls unchanged, scratch DB dropped after. Production
+     untouched throughout.
+
+   **Group C follow-up — reporting gap found and fixed.** Caught on review:
+   `save_structural_key_levels` commits the key_levels write *before* calling
+   `reconcile_structural_alerts` to refresh alerts. If that reconcile call then raised, the
+   exception propagated out uncaught, and P10's wrapper reported it exactly like a CAS
+   conflict — `"Not saved: ..."` — even though the key_levels write had already committed.
+   A user seeing "Not saved" and retrying would then likely hit a *second*, confusing CAS
+   conflict (their own already-saved values now differ from their stale baseline).
+   - Fixed: `save_structural_key_levels` now wraps the `reconcile_structural_alerts` call
+     in its own try/except, distinct from the CAS-conflict path above it. A reconcile
+     failure returns a stats dict with `"key_levels_saved": True` alongside the error,
+     instead of letting the exception propagate indistinguishably from a full rejection.
+   - P10's `_flash_from_stats` now branches on this flag: `"Not saved: ..."` only for a
+     true rejection (nothing written); `"Key levels saved, but alert refresh failed: ...
+     — refresh this page or retry to reconcile alerts."` for a partial completion. Applied
+     consistently across all four call sites (Save All, both "Add" forms, and the sidebar
+     "Sync Positions from DB" button) — all now update the pinned baseline whenever
+     `key_levels_saved` is true, regardless of whether the alert refresh itself succeeded,
+     since the saved values are real and a later save must compare against them, not the
+     pre-save baseline.
+   - New backend test, `test_p10_save_distinguishes_rejected_from_partial_completion`:
+     forces `reconcile_structural_alerts` to raise after a successful key_levels commit,
+     confirms the returned stats have `key_levels_saved=True` and the value really is
+     persisted — then contrasts with a genuine CAS-conflict rejection, confirming nothing
+     changes in that case.
+   - New browser test, `test_p10_browser_partial_completion_distinguishes_from_rejection`:
+     same scenario through the real P10 page — confirms the rendered message says "Key
+     levels saved... alert refresh failed", never starts with "Not saved", and the DB
+     value matches what was actually submitted.
+   - Confirmed both new tests fail against the pre-fix code (reverted the try/except in
+     `save_structural_key_levels`, got the expected failures — backend test raised an
+     uncaught `RuntimeError`, browser test's message read `"Not saved: alert refresh
+     boom"` — restored the fix, reran clean).
+   - Fixed a self-inflicted test-file splicing bug caught while building this: an earlier
+     edit had merged the end of `test_p10_browser_stale_save_shows_error_not_success`
+     (its "Refresh from DB" check) into the new test instead of leaving it in place.
+     Caught by `grep -c "def test_"` not matching the expected count and by the new test's
+     assertions failing in a way that didn't match its own scenario; corrected before
+     final verification.
+   - Full isolated-DB regression: **202/202 tests passed** (200 prior + 2 new), restored
+     backup's 92 alerts/50 controls unchanged, scratch DB dropped after. Production
+     untouched throughout.
+
+   **Migration and rollout: untouched this round, per instruction.**
+8. [x] Implemented locally: sync broker before journal in the morning pipeline. Holding lookup failure blocks
+   stop approval. Brief shows watch ideas separately from active alerts and pending count.
+   Honest reporting: extracted ideas, pending, activated, replacements, validation issues.
+9. [ ] Test mentions/SMH/watch bypass, evidence/timeframes/ranges, repeat/reject/purge behavior,
+   supported stops/holdings failures, stale previews/rollback/controls, safe pipeline order,
+   and UI selection. Run full unit and isolated DB/browser suites with SMTP/quotes mocked.
+   Latest full run: 186 tests passed (no skips), including existing and new isolated
+   PostgreSQL/Streamlit tests. Additional gaps above must be verified before final sign-off.
+10. [ ] Apply verified migration after backup, restart Streamlit, resync latest journal once
+   into review, verify no live alerts changed, then browser-test selective approval/rejection
+   and repeat-sync deduplication. Existing SMH/other alerts are not automatically removed.
+11. [ ] Record acceptance, then commit/push/PR/merge only when explicitly requested.
+
+Rollback: retain additive proposal/audit storage. Do not revert journal sync to automatic
+activation; leave notifications and existing manual source edits independent of review.
+
+#### Handoff snapshot — October 11, 2026
+
+**Git / deployment state**
+
+- Current branch: `feature/journal-alert-approval`, tracking the same branch on origin.
+  This handoff was prepared before the WIP checkpoint. The user subsequently authorized
+  committing/pushing the implementation and these notes on October 11; consult git log
+  and remote status for the checkpoint. Preserve any later dirty worktree; do not discard
+  changes or recreate the work from scratch.
+- Base is updated main after PR #86 (`062d011`). No PR/merge for this round; checkpoint
+  authorization is for saving WIP only, not release acceptance.
+- No production migration 077, actual journal re-extraction, approval, alert activation,
+  source-level change, live SMTP test, or trade has been performed in this round.
+- Existing SMH alerts #140/#141 and all prior live alerts/levels remain unchanged.
+  Scheduled poller is still live; don't invoke it as part of acceptance tests.
+
+**Code delivered locally**
+
+- `data_model/077_journal_review.sql`: additive items, evidence and decision audit tables;
+  sync-log extraction version/count metadata; no live alert/source backfill or deletion.
+  `alerts/migrate.py --journal-review` selects this targeted migration.
+- `morning_brief/journal_review.py`: normalization/evidence checks, condition fingerprints,
+  staging-only ingestion, durable review history, previews, prepare/reject/approve service,
+  operator-owned manual alerts, exact-existing linking, manual replacements and holding-stop
+  approvals. Shared poll/manual/purge locks and row/version checks; whole batches roll back.
+- `morning_brief/journal_sync.py`: one existing LLM call with evidence/timeframe instructions;
+  preflight migration check; no compiler or live key-level writes. Legacy syncs re-extract
+  once under extraction version 2. Dry-run requires no database and performs no writes.
+- `morning_brief/alert_compiler.py`: normal journal reconciliation no longer calls automatic
+  promotion. Legacy reconcile/promotion helper functions still exist; inspect callers if
+  extending this boundary, rather than assuming those helpers were removed.
+- `dashboard/journal_review_ui.py` and P10: new Journal Review tab, context/idea/pending/
+  blocked/reviewed views, symbol grouping/search, unchecked selections, existing-alert
+  comparisons, quote refresh only on request, explicit timeframe clarification, preview,
+  cancel and two approval confirmations. Reviewed items show linked alert IDs.
+- `dashboard/morning_pipeline.py`: E*TRADE sync → journal staging → brief; stale-token and
+  partial-sync results remain visible. Corresponding order tests updated.
+- Brief adds a separate watch-idea/pending-count section, capped at eight ideas, outside
+  the LLM payload. Sync History labels extracted ideas rather than claiming activation.
+- README updated; CLAUDE.md records Shift+Tab CLI mode switching. Historical PLAN content
+  remains intact. New tests: `tests/test_journal_review.py`, `tests/test_journal_review_db.py`;
+  existing pipeline/Claude/brief/compiler-control tests updated for the new behavior.
+
+**Implemented defaults / limitations to retain or explicitly review**
+
+- New/replaced manual watch alerts default to 21 days; UI permits 1–3650 days. Stops have
+  no expiry. Same-condition stop approval does not reset the triggered flag.
+- Holdings must be positive EQ positions in latest account snapshots within FOUR calendar
+  days, allowing weekend review. Missing/stale holdings block stop approval. This is a
+  timestamp/ownership check, not proof of a complete fresh sync of every account.
+- Only simple above/below price conditions are executable. Daily/weekly/sustained/range/
+  unspecified ideas require explicit user choice of the DISPLAYED threshold as a simple
+  price crossing. This is NOT an implementation of close/confirmation/timeframe polling.
+- Evidence must be a literal excerpt (whitespace-normalized) identifying instrument and
+  numeric level. Index→futures substitution is blocked. Evidence date currently comes
+  from the last ISO date in the filename; otherwise it is unknown. Older-than-21-day
+  evidence gets a UI warning, not automatic deletion or activation.
+- Fingerprints use exact symbol/condition/value/timeframe and separate stop intent; they
+  do not silently merge nearby levels. Rejected/accepted matches never revive on wording
+  changes. Material new values/timeframes appear separately for human review.
+- Invalid extraction is blocked; UI has no free-form evidence editor. Correct the journal
+  and resync, or manage a deliberate manual alert in P11. Purged managed stops require a
+  separate restoration workflow (not built); approval cannot silently unblock them.
+- Quotes are explicit Yahoo snapshots, potentially missing/delayed; approval acknowledges
+  evidence/timing risk. Approval itself sends no email, but a later scheduled poll can.
+- Existing legacy alerts are not auto-cleaned. New watch ideas do not enter live key_levels;
+  accepted watch alerts are manual/operator-owned, with journal provenance in audit records.
+- Final safety review should cover concurrent compiler/P10 source changes and source-stop
+  consistency, invalid/conflicting batches and shared lock ordering. Do not assume all
+  concurrency behavior is proven solely because the current regression passes.
+
+**Backup and verification evidence**
+
+- Pre-change backup (no older backups pruned):
+  `/Users/davidliao/Library/CloudStorage/Dropbox/Etrade/db_backups/fifth_dragon_capital_20261011_201812.dump`.
+- Last successful full run: 186 tests, no failures/skips. Quotes and SMTP were mocked.
+  New DB/browser coverage includes staging without live writes, accepted/rejected repeats,
+  default expiry, preparation/clarification, stale-preview batch rollback, paused-target
+  replacement, exact-existing no-op, verified/stale holding stops, purged-stop refusal,
+  repeat migration, real select/preview/cancel/two-confirmation approval buttons, invalid
+  batch rollback and unchanged-stop rearm protection.
+- Fresh backup restored in an isolated temporary database. Migrations 075/076/077 applied
+  twice; 92 original alert rows and all key-level rows unchanged, 50 prior controls retained.
+  Only the temporary verification database was removed afterward; production untouched.
+- Python: `/Users/davidliao/git_repos/py312/venv/bin/python`.
+  Unit/default run: `python -m unittest discover -s tests -q` (DB tests skip without opt-in).
+  Full isolated harness: `python /private/tmp/verify_alert_task1.py`; this UNTRACKED temporary
+  helper may not survive handoff to another machine. It creates/restores a scratch database,
+  sets ALERT_TEST_DATABASE_URL to that database, runs all tests, then drops only its own
+  scratch database. Review it before use; never set ALERT_TEST_DATABASE_URL to production.
+- `python -m compileall -q morning_brief dashboard alerts tests` and `git diff --check`
+  passed at intermediate checkpoints; rerun both after any further edits.
+
+**Next section / checkpoints — WAIT FOR USER DIRECTION**
+
+1. Report this handoff and STOP. Do not implement the remaining steps automatically.
+2. Suggested next single section: finish/review Step 5, specifically suppression of prior
+   purged watch/journal conditions in the new queue. Add targeted tests, report results,
+   and STOP again. Step 7 concurrency review is a subsequent separate checkpoint.
+3. Only after approval of verification and rollout: compare live alert/level baselines,
+   take a current backup if needed, apply `python -m alerts.migrate --journal-review`,
+   and confirm baseline data unchanged. No live journal extraction as part of migration.
+4. Browser handoff: restart `streamlit run dashboard/app.py`; P10 Sync Latest Journal
+   re-extracts the weekly journal once into review. Verify live alert/level counts stay
+   unchanged and SMH becomes watch evidence, not new notifications. Test a selected prepare/
+   reject/approve action, expiry, preserved controls, quote warnings and repeat deduplication.
+   Real approval can lead to subsequent scheduled notification: user selects the targets.
+5. User authorized a WIP checkpoint commit/push on October 11 for portability. That does
+   not authorize deployment, PR/merge, or further implementation. Later acceptance/release
+   commits still require explicit direction and the one-section-at-a-time checkpoints.
+
 Date: October 8, 2026; acceptance updated October 9, 2026.
 Status: Priorities 1–2 accepted by the user (Release A). Priority 1 was pushed as `a2e6b7d`;
 Priority 2 and the October 9 extensions are approved for commit, PR, and merge after full tests.

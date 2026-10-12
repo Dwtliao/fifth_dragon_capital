@@ -90,7 +90,7 @@ class ClaudeIntegrationTests(unittest.TestCase):
                  patch("morning_brief.journal_sync.get_connection", side_effect=AssertionError("DB accessed")), \
                  redirect_stdout(io.StringIO()):
                 counts = journal_sync.process_file(path, dry_run=True, model="claude-sonnet-5", effort="medium")
-                self.assertEqual(counts, {"positions": 1, "watch": 0, "alerts": 0})
+                self.assertEqual(counts, {"positions": 0, "watch": 0, "alerts": 0, "extracted": 1})
                 extract.assert_called_once_with("", model="claude-sonnet-5", effort="medium")
                 already.assert_not_called()
                 apply.assert_not_called()

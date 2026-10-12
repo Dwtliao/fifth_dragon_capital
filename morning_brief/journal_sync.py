@@ -1,16 +1,14 @@
 """
 journal_sync.py — Extract actionable levels from trading journals using Claude API.
 
-Three extraction targets per journal:
-  1. Portfolio table  → key_levels positions (stops + notes)
-  2. Action Plan      → key_levels watch levels (support / resistance)
-  3. Conditional text → price_alerts (e.g. "if NQ above 30200")
+Extraction stages context, watch ideas, alert requests and stop proposals for P10 review.
+No live key levels or alert configuration is changed until explicit operator approval.
 
 Usage:
-    python -m morning_brief.journal_sync              # process all new/modified journals
+    python -m morning_brief.journal_sync              # check last 5 modified journals
     python -m morning_brief.journal_sync --file PATH  # process one specific file
     python -m morning_brief.journal_sync --dry-run    # print extraction, do not write to DB
-    python -m morning_brief.journal_sync --all        # reprocess all journals (ignore sync log)
+    python -m morning_brief.journal_sync --force      # reprocess selected files only
 """
 
 from __future__ import annotations
@@ -29,8 +27,7 @@ from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
 
 from etrade_sync.db import get_connection
-from morning_brief.alert_compiler import prune_expired_alerts, reconcile_journal_alerts, reconcile_structural_alerts
-from morning_brief.fetchers import load_key_levels_from_db, save_key_levels_to_db
+from morning_brief.journal_review import VERSION, stage_extraction, normalize_extraction, ensure_review_ready
 from morning_brief.llm import call_claude, print_usage
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -42,11 +39,22 @@ def _diary_path() -> Path:
 
 EXTRACTION_PROMPT = """You are parsing a personal trading journal to extract ACTIONABLE trading levels.
 
-Return ONLY a JSON object with these three keys. Do not include any other text.
+Return ONLY a JSON object with these three required arrays and optional commentary array.
+Do not include any text outside the JSON.
 
 Rules:
 - Only extract levels the trader PLANS TO ACT ON — stops to honor, levels to watch for entries/exits, conditional triggers.
 - Do NOT extract historical observation prices (e.g. "gold hit $4,400 intraday" is not actionable).
+- Extraction NEVER authorizes live alerts or changes to stops; it stages review ideas.
+- Every item MUST include evidence: an exact verbatim excerpt containing instrument and level.
+- Every numeric item MUST include timeframe: price_crossing, daily_close, weekly_close,
+  sustained, range, or unspecified. Preserve timeframe/range meaning, never silently simplify.
+- Mentions/scenarios and headings "Alerts" or "HIGH" are watch ideas, not notification requests.
+  price_alerts is ONLY for personal instructions like "alert me", "notify me", "set an alert".
+- positions contains proposed stops, watch_levels explicit reference/entry levels. Never
+  substitute futures/ETF prices for index prices. Optional commentary array holds context only.
+- commentary items must be OBJECTS with ticker, note, and evidence (exact journal excerpt),
+  never plain strings. Use [] or omit commentary when no ticker-specific context exists.
 - Map ticker names to yfinance format:
     NQ, Nasdaq futures → NQ=F
     ES, S&P futures → ES=F
@@ -60,14 +68,16 @@ Rules:
 JSON schema:
 {
   "positions": [
-    {"ticker": "URNM", "stop": 54.95, "note": "uranium ETF — hold"}
+    {"ticker": "URNM", "stop": 54.95, "note": "hold", "evidence": "URNM stop 54.95", "timeframe": "price_crossing"}
   ],
   "watch_levels": [
-    {"ticker": "GC=F", "support": 4300, "resistance": 4489, "alert_above": null, "note": "floor going into weekend"}
+    {"ticker": "GC=F", "support": 4300, "resistance": 4489, "alert_above": null, "evidence": "Gold support 4300 and resistance 4489", "timeframe": "unspecified"}
   ],
   "price_alerts": [
-    {"ticker": "NQ=F", "condition": "above", "threshold": 30200, "label": "VIXY rebuy consideration"},
-    {"ticker": "GC=F", "condition": "below", "threshold": 4200, "label": "Gold re-entry zone"}
+    {"ticker": "GC=F", "condition": "below", "threshold": 4200, "evidence": "Alert me if gold falls below 4200", "timeframe": "price_crossing"}
+  ],
+  "commentary": [
+    {"ticker": "SMH", "note": "Leadership context only", "evidence": "SMH leadership looks weak."}
   ]
 }
 
@@ -105,11 +115,11 @@ def _already_synced(file_path: str, mtime: float) -> bool:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT file_mtime FROM journal_sync_log WHERE file_path = %s",
+                "SELECT file_mtime,extraction_version FROM journal_sync_log WHERE file_path = %s",
                 (file_path,)
             )
             row = cur.fetchone()
-            return row is not None and abs(row[0] - mtime) < 1
+            return row is not None and row[1] == VERSION and abs(row[0] - mtime) < 1
     finally:
         conn.close()
 
@@ -120,8 +130,8 @@ def _log_sync(file_path: str, mtime: float, counts: dict, dry_run: bool, extract
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO journal_sync_log
-                    (file_path, file_mtime, positions_updated, watch_updated, alerts_created, dry_run, extracted_json)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (file_path, file_mtime, positions_updated, watch_updated, alerts_created, dry_run, extracted_json,extraction_version,proposal_counts)
+                VALUES (%s, %s, %s, %s, %s, %s, %s,%s,%s::jsonb)
                 ON CONFLICT (file_path) DO UPDATE SET
                     file_mtime        = EXCLUDED.file_mtime,
                     synced_at         = NOW(),
@@ -129,13 +139,15 @@ def _log_sync(file_path: str, mtime: float, counts: dict, dry_run: bool, extract
                     watch_updated     = EXCLUDED.watch_updated,
                     alerts_created    = EXCLUDED.alerts_created,
                     dry_run           = EXCLUDED.dry_run,
-                    extracted_json    = EXCLUDED.extracted_json
+                    extracted_json    = EXCLUDED.extracted_json,
+                    extraction_version = EXCLUDED.extraction_version,
+                    proposal_counts = EXCLUDED.proposal_counts
             """, (file_path, mtime,
                   counts.get("positions", 0),
                   counts.get("watch", 0),
                   counts.get("alerts", 0),
                   dry_run,
-                  json.dumps(extracted) if extracted else None))
+                  json.dumps(extracted) if extracted else None, VERSION, json.dumps(counts)))
         conn.commit()
     finally:
         conn.close()
@@ -143,98 +155,19 @@ def _log_sync(file_path: str, mtime: float, counts: dict, dry_run: bool, extract
 
 # ── apply extraction to DB ────────────────────────────────────────────────────
 
-def apply_extraction(extracted: dict, dry_run: bool = False) -> dict:
-    """Merge extracted data into key_levels DB and price_alerts. Returns counts."""
-    counts = {"positions": 0, "watch": 0, "alerts": 0}
-
-    kl = load_key_levels_from_db()
-
-    # ── positions ──────────────────────────────────────────────────────────────
-    for pos in extracted.get("positions") or []:
-        ticker = str(pos.get("ticker", "")).strip().upper()
-        if not ticker:
-            continue
-        entry = kl["positions"].get(ticker, {})
-        if pos.get("stop") is not None:
-            entry["stop"] = float(pos["stop"])
-        if pos.get("note"):
-            entry["note"] = pos["note"]
-        kl["positions"][ticker] = entry
-        counts["positions"] += 1
-        print(f"  position: {ticker}  stop={pos.get('stop')}  note={pos.get('note')}")
-
-    # ── watch levels ───────────────────────────────────────────────────────────
-    for w in extracted.get("watch_levels") or []:
-        ticker = str(w.get("ticker", "")).strip()
-        if not ticker:
-            continue
-        entry = kl["watch"].get(ticker, {})
-        for field in ("support", "resistance", "alert_above"):
-            if w.get(field) is not None:
-                entry[field] = float(w[field])
-        if w.get("note"):
-            entry["note"] = w["note"]
-        kl["watch"][ticker] = entry
-        counts["watch"] += 1
-        print(f"  watch: {ticker}  support={w.get('support')}  resistance={w.get('resistance')}  alert_above={w.get('alert_above')}")
-
-    if not dry_run and (counts["positions"] or counts["watch"]):
-        save_key_levels_to_db(kl)
-
-    journal_alerts = []
-
-    # ── price alerts ───────────────────────────────────────────────────────────
-    for alert in extracted.get("price_alerts") or []:
-        ticker    = str(alert.get("ticker", "")).strip()
-        condition = str(alert.get("condition", "")).strip().lower()
-        threshold = alert.get("threshold")
-        label     = alert.get("label", "")
-        if not ticker or condition not in ("above", "below") or threshold is None:
-            continue
-        print(f"  alert: {ticker} {condition} {threshold}  [{label}]")
-        journal_alerts.append({
-            "ticker": ticker,
-            "condition": condition,
-            "threshold": float(threshold),
-            "label": label,
-        })
-        counts["alerts"] += 1
-
-    if not dry_run:
-        structural_stats = {"created": 0, "updated": 0, "archived": 0, "deduped": 0}
-        journal_stats = {"created": 0, "updated": 0, "skipped_structural": 0, "promoted": 0}
-        try:
-            if counts["positions"] or counts["watch"]:
-                structural_stats = reconcile_structural_alerts(kl)
-        except Exception as exc:
-            print(f"  compiler: structural alert refresh failed: {exc}")
-        try:
-            if journal_alerts:
-                journal_stats = reconcile_journal_alerts(journal_alerts)
-        except Exception as exc:
-            print(f"  compiler: journal alert refresh failed: {exc}")
-        try:
-            expired = prune_expired_alerts()
-        except Exception as exc:
-            expired = 0
-            print(f"  compiler: expired alert pruning failed: {exc}")
-        print(
-            "  compiler: "
-            f"structural created={structural_stats['created']} updated={structural_stats['updated']} "
-            f"archived={structural_stats['archived']} deduped={structural_stats['deduped']} "
-            f"backfilled={structural_stats.get('backfilled', 0)}; "
-            f"journal created={journal_stats['created']} updated={journal_stats['updated']} "
-            f"skipped_structural={journal_stats['skipped_structural']} promoted={journal_stats['promoted']} "
-            f"expired_pruned={expired}"
-        )
-
-    return counts
+def apply_extraction(extracted: dict, dry_run: bool = False, *, text='', file_path='') -> dict:
+    """Stage review only; never write live key levels or alert configuration."""
+    if dry_run:
+        return dict(positions=0,watch=0,alerts=0,extracted=len(normalize_extraction(extracted,text,file_path)))
+    return stage_extraction(extracted,text,file_path)
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def process_file(path: Path, dry_run: bool = False, force: bool = False, *, model=None, effort=None) -> dict:
     mtime = path.stat().st_mtime
+    if not dry_run:
+        ensure_review_ready()
     if not (force or dry_run) and _already_synced(str(path), mtime):
         print(f"  skip (already synced): {path.name}")
         return {}
@@ -249,24 +182,34 @@ def process_file(path: Path, dry_run: bool = False, force: bool = False, *, mode
         print("  extraction (dry-run):")
         print(json.dumps(extracted, indent=2))
         # Model evaluation must not require DB reads or modify sync history.
-        return {"positions": len(extracted["positions"]),
-                "watch": len(extracted["watch_levels"]),
-                "alerts": len(extracted["price_alerts"])}
+        return dict(positions=0,watch=0,alerts=0,extracted=len(normalize_extraction(extracted,text,path)))
 
-    counts = apply_extraction(extracted, dry_run=dry_run)
+    counts = apply_extraction(extracted, dry_run=dry_run, text=text, file_path=path)
 
     if not dry_run:
         _log_sync(str(path), mtime, counts, dry_run=False, extracted=extracted)
-        print(f"  done: {counts['positions']} positions, {counts['watch']} watch levels, {counts['alerts']} alerts")
+        print(f"  done: {counts['extracted']} ideas extracted; {counts['pending']} pending; "
+              f"{counts['ideas']} watch ideas; {counts['blocked']} blocked; "
+              f"{counts['repeated']} repeated; 0 alerts activated, 0 replacements. Review in P10.")
 
     return counts
 
 
+def recent_journals(diary, count=5):
+    if count not in range(1,6):
+        raise ValueError('Choose between 1 and 5 journal files')
+    files = sorted(diary.glob('trading_journal_*.md'), key=lambda path:(path.stat().st_mtime,path.name))
+    return files[-count:]
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Sync trading journals → key_levels + price_alerts")
-    parser.add_argument("--file",    help="Process a specific journal file")
+    parser = argparse.ArgumentParser(description="Stage recent trading journals for approval (maximum 5 files)")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--file", help="Process one specific journal file")
+    selection.add_argument("--recent", type=int, choices=range(1,6), default=None,
+                           help="Check the last 1–5 modified journals (default 5)")
     parser.add_argument("--dry-run", action="store_true", help="Print extraction, do not write to DB")
-    parser.add_argument("--all",     action="store_true", help="Reprocess all journals (ignore sync log)")
+    parser.add_argument("--force", action="store_true", help="Ignore sync history for selected files only")
     parser.add_argument("--model", help="Override CLAUDE_MODEL for this run")
     parser.add_argument("--effort", choices=["low", "medium", "high"], help="Override journal effort for this run")
     args = parser.parse_args()
@@ -275,18 +218,20 @@ def main():
         files = [Path(args.file)]
     else:
         diary = _diary_path()
-        files = sorted(diary.glob("trading_journal_*.md"))
+        files = recent_journals(diary, args.recent or 5)
         if not files:
             print(f"No journal files found in {diary}")
             return
 
-    total = {"positions": 0, "watch": 0, "alerts": 0}
+    print(f"Checking {len(files)} selected journal file(s); unchanged files are skipped. Selection is by modification time, not five calendar days.")
+
+    total = {"extracted": 0, "pending": 0, "ideas": 0, "blocked": 0, "repeated": 0}
     for f in files:
-        counts = process_file(f, dry_run=args.dry_run, force=args.all, model=args.model, effort=args.effort)
+        counts = process_file(f, dry_run=args.dry_run, force=args.force, model=args.model, effort=args.effort)
         for k in total:
             total[k] += counts.get(k, 0)
 
-    print(f"\nTotal: {total['positions']} positions updated, {total['watch']} watch levels, {total['alerts']} alerts created")
+    print(f"\nTotal review counts: {total}; 0 live levels changed; 0 alerts activated. Open P10 Journal Review.")
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ from morning_brief import fetchers, formatter
 from morning_brief.market_context import fetch_market_overview
 from morning_brief.analysis import render_analysis
 from morning_brief.attention import attention_summary
+from morning_brief.journal_review import journal_review_brief
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,10 @@ def generate_brief() -> str:
         sections.append(f"_Positions fetch failed: {exc}_\n\n---\n")
 
     # Key levels (from key_levels.yml watch section)
+    try:
+        sections.append(journal_review_brief())
+    except Exception:
+        sections.append('_Journal review unavailable; apply the journal-review migration and check P10._\n')
     try:
         watch_data = fetchers.fetch_watch_levels(key_levels)
         if watch_data:

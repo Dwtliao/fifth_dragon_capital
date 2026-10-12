@@ -253,7 +253,7 @@ streamlit run dashboard/app.py
 | P7 Market Monitor | Intraday candlestick + volume charts for US indices, global indices, ETFs, volatility/rates/bond futures, and defensive sectors. Auto-refresh via `st.fragment(run_every=...)`. Current eligible alert overlays and a compact link to P11; no alert-ranking quote fetches or management dropdowns. |
 | P8 Commodities | Candlestick + volume charts with period selector (Intraday / 5D / 1M / 3M / 6M) for precious metals futures, energy futures, metals & miners, uranium, copper, and agriculture. Auto-refresh on intraday only. |
 | P9 Symbol Admin | Three tabs: **Symbol Overrides** — set sector, asset class, and vehicle type per symbol; **Exposure Tags** — manage thematic tags per symbol via multiselect; **Manage Sectors** — add custom sectors. All saves auto-refresh `mv_allocations`. |
-| P10 Morning Brief | Runs latest journal sync, E*TRADE sync, then brief generation. Preserves each step's result across reruns and warns after a failed/skipped E*TRADE sync. Shows the brief, editable key levels, and journal sync history. |
+| P10 Morning Brief | Runs E*TRADE sync, stages latest journal ideas, then generates the brief. Preserves results and warns after failed/skipped sync. Shows brief, editable key levels, sync history, and Journal Review approval. |
 | P11 Alerts | Search/filter/select alerts, inspect quote distance and delivery state, edit manual levels, preview confirmed bulk controls, and load hygiene reports on demand. No charts or implicit quote requests. |
 
 ### Morning brief market context
@@ -294,9 +294,49 @@ saved levels for personalized commentary.
 
 `python -m morning_brief.journal_sync` uses the existing Anthropic integration
 (`ANTHROPIC_API_KEY`) to extract stops, notes, watch levels and conditional
-alerts from new or modified `trading_journal_*.md` files. An unchanged file
-is skipped using `journal_sync_log`; `--all` forces reprocessing. Market
+ideas from new or modified `trading_journal_*.md` files. Extraction only stages evidence;
+it no longer writes live key levels, creates alerts, moves thresholds or renews expiries.
+An unchanged file is skipped using `journal_sync_log`; extraction-schema upgrades are
+processed once even when the file is unchanged. Sync is limited to the five most recently
+modified files by default; P10's **Sync Last 5 Journals** uses `--recent 5`. This is five
+files, not necessarily five trading days. Unchanged files are skipped, not replaced by
+older files outside the selection. `--file` targets one file; `--force` reprocesses only
+the selected file(s). The unbounded `--all` option has been removed. Market
 context generation works even when there is no new journal.
+
+### Journal approval workflow (October 11)
+
+Apply the additive migration after backup: `python -m alerts.migrate --journal-review`.
+Restart Streamlit, then use **P10 → Sync Latest Journal → Journal Review**. Existing alerts
+and saved levels remain unchanged by migration/sync; historical SMH alerts are not deleted.
+
+- Mentions/commentary are context only. Technical levels/headings such as "Alerts" or
+  "HIGH" priority are watch ideas, not notification instructions. Explicit "alert me",
+  "notify me", or "set an alert" wording becomes a pending candidate. Holding stops
+  also require approval. Exact excerpts/instrument/level are validated locally.
+- Watch ideas must be deliberately prepared before approval. Daily/weekly close, sustained,
+  ranges and unspecified timing require explicit choice of a simple displayed price
+  crossing; these are not implemented as confirmed-close or sustained rules. Missing or
+  inconsistent evidence must be corrected in the journal, not silently approved.
+- Select specific items (unchecked by default), choose add/replace/keep-existing, preview,
+  and confirm. New watch alerts are operator-owned manual alerts with a 21-day expiry,
+  editable before approval. Replace targets must be same-symbol manual alerts; existing
+  exact alerts may be linked with Keep existing without changes. Stops update only their
+  own source field/managed alert and require an actual holding snapshot within 4 calendar
+  days. Lookups failing, stale targets, conflicting batches, and purged managed stops block
+  acceptance. Pause/snooze/archive state is preserved; changed conditions rearm deliberately.
+- Approval itself sends no email or trade, but the scheduled poller may notify an active
+  met condition afterward. Refresh quotes explicitly to see already-met warnings; quotes
+  may be delayed/missing, and evidence/notification timing requires acknowledgment.
+- Accepted/rejected conditions do not return merely because wording/file/sync time changes.
+  Material levels/timeframes require new review; repeats never extend alert expiry.
+  Recurrence no longer automatically promotes journal alerts into permanent managed alerts.
+- The brief displays watch ideas and pending counts separately from active alert attention.
+  Sync output separates extracted/pending/blocked/repeated counts and explicitly reports
+  zero live activations/replacements; review decisions and alert changes retain audit trails.
+
+Approved journal watch alerts remain editable in P11 as manual alerts. Existing source-managed
+levels remain editable in P10. Do not revert to automatic journal activation as a rollback.
 
 The default model is `claude-sonnet-5-5` with `low` journal effort. Set
 `CLAUDE_MODEL` and `CLAUDE_JOURNAL_EFFORT` in `.env` to override them; accepted

@@ -5,10 +5,26 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from dashboard.morning_pipeline import run_command, run_morning_pipeline
+from dashboard.morning_pipeline import run_command, run_morning_pipeline, positions_sync_message
 
 
 class MorningPipelineTests(unittest.TestCase):
+    def test_position_sync_message_explains_metadata_and_archive_counts(self):
+        message=positions_sync_message(['CNC','GLD'],[],dict(created=0,updated=0,archived=26,deduped=0))
+        self.assertIn('Positions metadata synced successfully.',message)
+        self.assertIn('Added 2 symbols: CNC, GLD.',message)
+        self.assertIn('no alerts created or updated',message)
+        self.assertIn('marked or kept archived',message)
+        self.assertIn('includes previously archived',message)
+        self.assertIn('No trades were placed',message)
+        self.assertNotIn('created=',message)
+
+    def test_position_sync_message_no_changes_and_removed_entries(self):
+        self.assertIn('No changes to the saved symbol list',positions_sync_message([],[],{}))
+        message=positions_sync_message([],['OLD'],dict(created=1,updated=2,deduped=1))
+        self.assertIn('Removed 1 closed-position',message)
+        self.assertIn('1 new; 2 updated',message)
+        self.assertIn('1 duplicate alert archived',message)
     def test_sync_refreshes_holdings_before_brief(self):
         holdings = ["old"]
         calls = []
@@ -25,7 +41,7 @@ class MorningPipelineTests(unittest.TestCase):
             diary = Path(directory)
             (diary / "trading_journal_today.md").touch()
             steps = run_morning_pipeline(diary, diary, lambda: True, runner)
-        self.assertEqual(calls, ["Journal", "E*TRADE sync", "Brief"])
+        self.assertEqual(calls, ["E*TRADE sync", "Journal", "Brief"])
         self.assertTrue(all(s["status"] == "success" for s in steps))
 
     def test_stale_token_skips_sync_but_records_reason_and_generates_brief(self):
@@ -40,7 +56,7 @@ class MorningPipelineTests(unittest.TestCase):
         self.assertEqual(calls, ["Brief"])
         self.assertEqual(steps[0]["status"], "skipped")
         self.assertEqual(steps[1]["status"], "skipped")
-        self.assertIn("Re-authenticate", steps[1]["output"])
+        self.assertIn("Re-authenticate", steps[0]["output"])
 
     def test_partial_sync_failure_does_not_hide_brief_result(self):
         def runner(name, command, root):
@@ -50,8 +66,8 @@ class MorningPipelineTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             steps = run_morning_pipeline(Path(directory), Path(directory), lambda: True, runner)
-        self.assertEqual(steps[1]["status"], "failed")
-        self.assertIn("timeout", steps[1]["output"])
+        self.assertEqual(steps[0]["status"], "failed")
+        self.assertIn("timeout", steps[0]["output"])
         self.assertEqual(steps[2]["status"], "success")
 
     def test_command_retains_both_streams_and_marks_source(self):

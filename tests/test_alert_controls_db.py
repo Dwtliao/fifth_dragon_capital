@@ -263,7 +263,7 @@ class AlertControlsDatabaseTests(unittest.TestCase):
             reconcile_journal_alerts(desired)
             reconcile_journal_alerts(desired)
             alert = self.alert(alert_id)
-            self.assertEqual(alert['source'], 'key_levels_watch')
+            self.assertEqual(alert['source'], 'journal_sync')  # Recurrence no longer authorizes promotion.
             self.assertTrue(alert['paused'])
             self.assertFalse(lifecycle.is_eligible(alert))
 

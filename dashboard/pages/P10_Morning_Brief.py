@@ -74,7 +74,7 @@ if brief_path.exists():
 
 # ── primary: one-click morning pipeline ───────────────────────────────────────
 if st.sidebar.button("▶ Run Morning Pipeline", type="primary", use_container_width=True,
-                     help="1) Sync latest journal  2) Sync E*TRADE data (positions/ledger/views)  3) Generate morning brief"):
+                     help="1) Sync E*TRADE  2) Stage latest journal ideas for approval  3) Generate morning brief"):
     steps = run_morning_pipeline(PROJECT_ROOT, diary, _token_is_fresh, runner=_pipeline_step)
     _remember_results("Morning Pipeline", steps)
     st.rerun()
@@ -174,7 +174,11 @@ if last_result:
 
 # ── tabs ───────────────────────────────────────────────────────────────────────
 
-tab_brief, tab_levels, tab_history = st.tabs(["📋 Brief", "🔑 Key Levels", "📜 Sync History"])
+tab_brief, tab_levels, tab_history, tab_review = st.tabs(["📋 Brief", "🔑 Key Levels", "📜 Sync History", "Journal Review"])
+
+with tab_review:
+    from dashboard.journal_review_ui import render_journal_review
+    render_journal_review()
 
 
 # ══ Tab 1: Brief ══════════════════════════════════════════════════════════════
@@ -366,7 +370,8 @@ with tab_history:
 
     log = db_query("""
         SELECT file_path, file_mtime, synced_at, positions_updated, watch_updated,
-               alerts_created, dry_run, extracted_json
+               alerts_created, dry_run, extracted_json,
+               to_jsonb(journal_sync_log)->'proposal_counts' AS proposal_counts
         FROM journal_sync_log
         ORDER BY synced_at DESC
     """)
@@ -381,6 +386,10 @@ with tab_history:
             summary      = (f"{r['positions_updated']} positions  •  "
                             f"{r['watch_updated']} watch levels  •  "
                             f"{r['alerts_created']} alerts")
+            counts = r.get('proposal_counts') or {}
+            if counts:
+                summary = (f"{counts.get('extracted',0)} ideas • {counts.get('pending',0)} pending • "
+                           f"{counts.get('blocked',0)} blocked • 0 live alerts activated")
             dry_tag      = "  _(dry run)_" if r["dry_run"] else ""
             label        = f"**{name}** — journal: {journal_mtime}  •  synced: {synced_at}  •  {summary}{dry_tag}"
 
@@ -403,6 +412,6 @@ with tab_history:
                             if w.get("resistance"): parts.append(f"res {w['resistance']}")
                             st.markdown(f"- `{w['ticker']}`  {', '.join(parts)}")
                     with c3:
-                        st.markdown("**Alerts Created**")
+                        st.markdown("**Extracted trigger ideas — not activation permission**")
                         for a in ex.get("price_alerts") or []:
                             st.markdown(f"- `{a['ticker']}` {a['condition']} {a['threshold']}  _{a.get('label','')}_")

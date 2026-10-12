@@ -136,6 +136,7 @@ class MarketContextTests(unittest.TestCase):
 
         with patch("morning_brief.brief.fetch_market_overview", side_effect=ValueError("market offline")), \
              patch("morning_brief.brief.attention_summary", return_value="ATTENTION SUMMARY"), \
+             patch("morning_brief.brief.journal_review_brief", return_value="JOURNAL IDEAS"), \
              patch("morning_brief.fetchers.load_key_levels_from_db", return_value={}), \
              patch("morning_brief.fetchers.fetch_fed_events", return_value=[]), \
              patch("morning_brief.fetchers.fetch_positions", return_value=[{"label": "Holding"}]), \

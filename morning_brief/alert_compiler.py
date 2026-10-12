@@ -644,7 +644,8 @@ def reconcile_journal_alerts(
     finally:
         conn.close()
 
-    stats["promoted"] = promote_recurring_journal_alerts(dry_run=dry_run)
+    # Recurrence is evidence, never authorization to make an idea permanent.
+    stats["promoted"] = 0
     return stats
 
 

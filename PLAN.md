@@ -380,6 +380,176 @@ LIMIT 20;
 
 ## Current plan: P7 alert management
 
+### October 11, 2026 — Journal-to-alert approval (active round)
+
+Development branch: `feature/journal-alert-approval`, from updated main after PR #86.
+
+Approved decisions: review lives in P10; journal-proposed holding stops and changes also
+require approval; newly approved watch alerts default to 21 days, editable before acceptance.
+
+**Working agreement — user preference, October 11:** Complete only ONE section at a time,
+report what changed/tests/limitations, and STOP for user review before starting the next
+section. Do not implement multiple sections in one turn, apply live migrations, invoke
+live journal extraction, or proceed to rollout without that section's review. Keep work
+small to respect the user's weekly usage budget. The initial implementation below moved
+through multiple sections without the requested checkpoints; it is local WIP, not accepted.
+
+Execution order and checks:
+
+1. [x] Create/publish the development branch and preserve this plan. Codex CLI mode toggle
+   in the user's session is Shift+Tab. Do not commit directly to main.
+2. [x] Backup and migration PREPARATION: non-pruning backup completed; additive migration
+   077 written and tested twice on a restored isolated database. Durable review items,
+   evidence and decision audit added. Live migration is NOT applied; rollout is Step 10.
+3. [x] Implemented locally: separate journal extraction from activation. Commentary is context; explicit levels
+   become watch ideas; notification instructions become pending candidates; holding stops
+   become pending proposals. Neither live key levels nor price alerts may change on sync.
+4. [x] Implemented locally: preserve exact evidence/source/date, validate symbols/finite levels, and distinguish
+   intraday from daily/weekly-close or sustained conditions. Ambiguity must require explicit
+   clarification, not silently become an intraday alert. Keep the existing single LLM call.
+5. [ ] Deduplicate by trading condition, not wording/file/run time. Repeat accepted/rejected
+   ideas do not create alerts, renew expiry, or nag. Material level changes require review.
+   Disable automatic promotion of recurring journal ideas into permanent alerts.
+   Implemented: exact condition fingerprints, durable accepted/rejected decisions, evidence
+   history, no expiry renewal on repeats, no automatic recurrence promotion. Still requires
+   a focused review/test of previously purged WATCH/JOURNAL ideas re-entering the proposal
+   queue; managed STOP restoration is already blocked. Do not mark all purge behavior done.
+6. [x] Implemented locally: P10 Journal Review: separate ideas/candidates, group by ticker, unchecked selections,
+   show evidence/date/existing alerts/holdings, preview selected approve/reject actions.
+   Ideas require deliberate preparation before they become notification candidates.
+7. [ ] Approval creates operator-owned manual watch alerts (21-day default) or updates only
+   the explicitly selected manual alert/held-position stop. Recheck versions, holdings,
+   targets/controls and duplicates under shared locks; batches are all-or-nothing. Preserve
+   pause/snooze, reject purged managed restoration, audit before/after; never send email.
+   Core approval service and tests implemented. Final inspection of concurrency with
+   source compiler/P10 edits remains, as does user browser acceptance; not release-complete.
+8. [x] Implemented locally: sync broker before journal in the morning pipeline. Holding lookup failure blocks
+   stop approval. Brief shows watch ideas separately from active alerts and pending count.
+   Honest reporting: extracted ideas, pending, activated, replacements, validation issues.
+9. [ ] Test mentions/SMH/watch bypass, evidence/timeframes/ranges, repeat/reject/purge behavior,
+   supported stops/holdings failures, stale previews/rollback/controls, safe pipeline order,
+   and UI selection. Run full unit and isolated DB/browser suites with SMTP/quotes mocked.
+   Latest full run: 186 tests passed (no skips), including existing and new isolated
+   PostgreSQL/Streamlit tests. Additional gaps above must be verified before final sign-off.
+10. [ ] Apply verified migration after backup, restart Streamlit, resync latest journal once
+   into review, verify no live alerts changed, then browser-test selective approval/rejection
+   and repeat-sync deduplication. Existing SMH/other alerts are not automatically removed.
+11. [ ] Record acceptance, then commit/push/PR/merge only when explicitly requested.
+
+Rollback: retain additive proposal/audit storage. Do not revert journal sync to automatic
+activation; leave notifications and existing manual source edits independent of review.
+
+#### Handoff snapshot — October 11, 2026
+
+**Git / deployment state**
+
+- Current branch: `feature/journal-alert-approval`, tracking the same branch on origin.
+  This handoff was prepared before the WIP checkpoint. The user subsequently authorized
+  committing/pushing the implementation and these notes on October 11; consult git log
+  and remote status for the checkpoint. Preserve any later dirty worktree; do not discard
+  changes or recreate the work from scratch.
+- Base is updated main after PR #86 (`062d011`). No PR/merge for this round; checkpoint
+  authorization is for saving WIP only, not release acceptance.
+- No production migration 077, actual journal re-extraction, approval, alert activation,
+  source-level change, live SMTP test, or trade has been performed in this round.
+- Existing SMH alerts #140/#141 and all prior live alerts/levels remain unchanged.
+  Scheduled poller is still live; don't invoke it as part of acceptance tests.
+
+**Code delivered locally**
+
+- `data_model/077_journal_review.sql`: additive items, evidence and decision audit tables;
+  sync-log extraction version/count metadata; no live alert/source backfill or deletion.
+  `alerts/migrate.py --journal-review` selects this targeted migration.
+- `morning_brief/journal_review.py`: normalization/evidence checks, condition fingerprints,
+  staging-only ingestion, durable review history, previews, prepare/reject/approve service,
+  operator-owned manual alerts, exact-existing linking, manual replacements and holding-stop
+  approvals. Shared poll/manual/purge locks and row/version checks; whole batches roll back.
+- `morning_brief/journal_sync.py`: one existing LLM call with evidence/timeframe instructions;
+  preflight migration check; no compiler or live key-level writes. Legacy syncs re-extract
+  once under extraction version 2. Dry-run requires no database and performs no writes.
+- `morning_brief/alert_compiler.py`: normal journal reconciliation no longer calls automatic
+  promotion. Legacy reconcile/promotion helper functions still exist; inspect callers if
+  extending this boundary, rather than assuming those helpers were removed.
+- `dashboard/journal_review_ui.py` and P10: new Journal Review tab, context/idea/pending/
+  blocked/reviewed views, symbol grouping/search, unchecked selections, existing-alert
+  comparisons, quote refresh only on request, explicit timeframe clarification, preview,
+  cancel and two approval confirmations. Reviewed items show linked alert IDs.
+- `dashboard/morning_pipeline.py`: E*TRADE sync → journal staging → brief; stale-token and
+  partial-sync results remain visible. Corresponding order tests updated.
+- Brief adds a separate watch-idea/pending-count section, capped at eight ideas, outside
+  the LLM payload. Sync History labels extracted ideas rather than claiming activation.
+- README updated; CLAUDE.md records Shift+Tab CLI mode switching. Historical PLAN content
+  remains intact. New tests: `tests/test_journal_review.py`, `tests/test_journal_review_db.py`;
+  existing pipeline/Claude/brief/compiler-control tests updated for the new behavior.
+
+**Implemented defaults / limitations to retain or explicitly review**
+
+- New/replaced manual watch alerts default to 21 days; UI permits 1–3650 days. Stops have
+  no expiry. Same-condition stop approval does not reset the triggered flag.
+- Holdings must be positive EQ positions in latest account snapshots within FOUR calendar
+  days, allowing weekend review. Missing/stale holdings block stop approval. This is a
+  timestamp/ownership check, not proof of a complete fresh sync of every account.
+- Only simple above/below price conditions are executable. Daily/weekly/sustained/range/
+  unspecified ideas require explicit user choice of the DISPLAYED threshold as a simple
+  price crossing. This is NOT an implementation of close/confirmation/timeframe polling.
+- Evidence must be a literal excerpt (whitespace-normalized) identifying instrument and
+  numeric level. Index→futures substitution is blocked. Evidence date currently comes
+  from the last ISO date in the filename; otherwise it is unknown. Older-than-21-day
+  evidence gets a UI warning, not automatic deletion or activation.
+- Fingerprints use exact symbol/condition/value/timeframe and separate stop intent; they
+  do not silently merge nearby levels. Rejected/accepted matches never revive on wording
+  changes. Material new values/timeframes appear separately for human review.
+- Invalid extraction is blocked; UI has no free-form evidence editor. Correct the journal
+  and resync, or manage a deliberate manual alert in P11. Purged managed stops require a
+  separate restoration workflow (not built); approval cannot silently unblock them.
+- Quotes are explicit Yahoo snapshots, potentially missing/delayed; approval acknowledges
+  evidence/timing risk. Approval itself sends no email, but a later scheduled poll can.
+- Existing legacy alerts are not auto-cleaned. New watch ideas do not enter live key_levels;
+  accepted watch alerts are manual/operator-owned, with journal provenance in audit records.
+- Final safety review should cover concurrent compiler/P10 source changes and source-stop
+  consistency, invalid/conflicting batches and shared lock ordering. Do not assume all
+  concurrency behavior is proven solely because the current regression passes.
+
+**Backup and verification evidence**
+
+- Pre-change backup (no older backups pruned):
+  `/Users/davidliao/Library/CloudStorage/Dropbox/Etrade/db_backups/fifth_dragon_capital_20261011_201812.dump`.
+- Last successful full run: 186 tests, no failures/skips. Quotes and SMTP were mocked.
+  New DB/browser coverage includes staging without live writes, accepted/rejected repeats,
+  default expiry, preparation/clarification, stale-preview batch rollback, paused-target
+  replacement, exact-existing no-op, verified/stale holding stops, purged-stop refusal,
+  repeat migration, real select/preview/cancel/two-confirmation approval buttons, invalid
+  batch rollback and unchanged-stop rearm protection.
+- Fresh backup restored in an isolated temporary database. Migrations 075/076/077 applied
+  twice; 92 original alert rows and all key-level rows unchanged, 50 prior controls retained.
+  Only the temporary verification database was removed afterward; production untouched.
+- Python: `/Users/davidliao/git_repos/py312/venv/bin/python`.
+  Unit/default run: `python -m unittest discover -s tests -q` (DB tests skip without opt-in).
+  Full isolated harness: `python /private/tmp/verify_alert_task1.py`; this UNTRACKED temporary
+  helper may not survive handoff to another machine. It creates/restores a scratch database,
+  sets ALERT_TEST_DATABASE_URL to that database, runs all tests, then drops only its own
+  scratch database. Review it before use; never set ALERT_TEST_DATABASE_URL to production.
+- `python -m compileall -q morning_brief dashboard alerts tests` and `git diff --check`
+  passed at intermediate checkpoints; rerun both after any further edits.
+
+**Next section / checkpoints — WAIT FOR USER DIRECTION**
+
+1. Report this handoff and STOP. Do not implement the remaining steps automatically.
+2. Suggested next single section: finish/review Step 5, specifically suppression of prior
+   purged watch/journal conditions in the new queue. Add targeted tests, report results,
+   and STOP again. Step 7 concurrency review is a subsequent separate checkpoint.
+3. Only after approval of verification and rollout: compare live alert/level baselines,
+   take a current backup if needed, apply `python -m alerts.migrate --journal-review`,
+   and confirm baseline data unchanged. No live journal extraction as part of migration.
+4. Browser handoff: restart `streamlit run dashboard/app.py`; P10 Sync Latest Journal
+   re-extracts the weekly journal once into review. Verify live alert/level counts stay
+   unchanged and SMH becomes watch evidence, not new notifications. Test a selected prepare/
+   reject/approve action, expiry, preserved controls, quote warnings and repeat deduplication.
+   Real approval can lead to subsequent scheduled notification: user selects the targets.
+5. User authorized a WIP checkpoint commit/push on October 11 for portability. That does
+   not authorize deployment, PR/merge, or further implementation. Later acceptance/release
+   commits still require explicit direction and the one-section-at-a-time checkpoints.
+
 Date: October 8, 2026; acceptance updated October 9, 2026.
 Status: Priorities 1–2 accepted by the user (Release A). Priority 1 was pushed as `a2e6b7d`;
 Priority 2 and the October 9 extensions are approved for commit, PR, and merge after full tests.

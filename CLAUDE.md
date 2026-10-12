@@ -8,6 +8,7 @@ Personal trading infrastructure. PostgreSQL DB + Python + Streamlit dashboard.
 Owner: David Liao (david.liao@precisetarget.com)
 
 **Workflow:** short-lived `feature/*` or `fix/*` branches off `main`, one PR per change, merge immediately once verified. Don't commit directly to `main`.
+**Codex CLI:** in this user's CLI session, **Shift+Tab** switches into/out of Plan mode.
 **Git identity for commits:** always use `-c user.email="david.liao@precisetarget.com" -c user.name="David Liao"`
 **morning_brief WIP:** the Confirmation Hierarchy feature (#66) Part 1 lives on branch `update_morning_brief1` (committed, pushed, NOT merged into main) — has a known blocking bug, see "Known open items" below. Don't build Part 2 on top of it until that's fixed.
 

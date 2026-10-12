@@ -25,7 +25,7 @@ class MorningPipelineTests(unittest.TestCase):
             diary = Path(directory)
             (diary / "trading_journal_today.md").touch()
             steps = run_morning_pipeline(diary, diary, lambda: True, runner)
-        self.assertEqual(calls, ["Journal", "E*TRADE sync", "Brief"])
+        self.assertEqual(calls, ["E*TRADE sync", "Journal", "Brief"])
         self.assertTrue(all(s["status"] == "success" for s in steps))
 
     def test_stale_token_skips_sync_but_records_reason_and_generates_brief(self):
@@ -40,7 +40,7 @@ class MorningPipelineTests(unittest.TestCase):
         self.assertEqual(calls, ["Brief"])
         self.assertEqual(steps[0]["status"], "skipped")
         self.assertEqual(steps[1]["status"], "skipped")
-        self.assertIn("Re-authenticate", steps[1]["output"])
+        self.assertIn("Re-authenticate", steps[0]["output"])
 
     def test_partial_sync_failure_does_not_hide_brief_result(self):
         def runner(name, command, root):
@@ -50,8 +50,8 @@ class MorningPipelineTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             steps = run_morning_pipeline(Path(directory), Path(directory), lambda: True, runner)
-        self.assertEqual(steps[1]["status"], "failed")
-        self.assertIn("timeout", steps[1]["output"])
+        self.assertEqual(steps[0]["status"], "failed")
+        self.assertIn("timeout", steps[0]["output"])
         self.assertEqual(steps[2]["status"], "success")
 
     def test_command_retains_both_streams_and_marks_source(self):

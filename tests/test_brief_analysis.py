@@ -82,6 +82,7 @@ class BriefAnalysisTests(unittest.TestCase):
             for target, result in (
                 ("morning_brief.fetchers.load_key_levels_from_db", {}),
                 ("morning_brief.brief.attention_summary", "ATTENTION SUMMARY"),
+                ("morning_brief.brief.journal_review_brief", "JOURNAL IDEAS"),
                 ("morning_brief.fetchers.fetch_fed_events", []),
                 ("morning_brief.brief.fetch_market_overview", self.overview),
                 ("morning_brief.fetchers.fetch_positions", self.positions),

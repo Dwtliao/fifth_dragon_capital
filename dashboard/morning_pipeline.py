@@ -23,6 +23,12 @@ def run_command(name, command, project_root, source="p10_morning_pipeline"):
 
 def run_morning_pipeline(project_root, diary, token_is_fresh, runner=run_command):
     steps = []
+    # Refresh broker state before journal review/brief; extraction never activates alerts.
+    if token_is_fresh():
+        steps.append(runner("E*TRADE sync", [sys.executable, "-m", "etrade_sync", "sync"], project_root))
+    else:
+        steps.append({"name": "E*TRADE sync", "status": "skipped", "returncode": None,
+                      "output": "E*TRADE token is missing or was not written today. Re-authenticate and rerun the pipeline."})
     journals = sorted(diary.glob("trading_journal_*.md"), key=lambda p: p.stat().st_mtime)
     if journals:
         steps.append(runner(
@@ -32,13 +38,6 @@ def run_morning_pipeline(project_root, diary, token_is_fresh, runner=run_command
     else:
         steps.append({"name": "Journal", "status": "skipped", "returncode": None,
                       "output": "No journal files found."})
-
-    # Check immediately before sync: journal processing may take some time.
-    if token_is_fresh():
-        steps.append(runner("E*TRADE sync", [sys.executable, "-m", "etrade_sync", "sync"], project_root))
-    else:
-        steps.append({"name": "E*TRADE sync", "status": "skipped", "returncode": None,
-                      "output": "E*TRADE token is missing or was not written today. Re-authenticate and rerun the pipeline."})
 
     # A partial sync can still update holdings; generate the brief, but expose
     # its freshness limitation rather than treating the whole pipeline as OK.

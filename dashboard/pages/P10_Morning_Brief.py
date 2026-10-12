@@ -17,11 +17,11 @@ PROJECT_ROOT  = Path(__file__).parent.parent.parent
 DEFAULT_DIARY = Path.home() / "Library/CloudStorage/Dropbox/Etrade/trading_diary"
 
 load_dotenv(PROJECT_ROOT / ".env")
-from morning_brief.alert_compiler import reconcile_structural_alerts
+from morning_brief.alert_compiler import reconcile_structural_alerts, save_structural_key_levels
 from dashboard.morning_pipeline import run_command, run_morning_pipeline
 from morning_brief.fetchers import (
     fetch_positions_from_db, sync_positions_from_db,
-    load_key_levels_from_db, save_key_levels_to_db,
+    load_key_levels_from_db,
 )
 
 diary      = Path(os.getenv("TRADING_DIARY", str(DEFAULT_DIARY)))
@@ -38,10 +38,9 @@ def _token_is_fresh() -> bool:
     return token_date == datetime.datetime.now(tz=ET).date()
 
 
-def _save_levels_and_refresh_alerts(key_levels: dict) -> dict:
-    save_key_levels_to_db(key_levels)
+def _save_levels_and_refresh_alerts(key_levels: dict, baseline: dict) -> dict:
     try:
-        return reconcile_structural_alerts(key_levels)
+        return save_structural_key_levels(key_levels, baseline)
     except Exception as exc:
         return {
             "created": 0,
@@ -113,9 +112,8 @@ if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
     try:
         kl = load_key_levels_from_db()
         updated, added, removed = sync_positions_from_db(kl)
-        save_key_levels_to_db(updated)
         try:
-            compiler_stats = reconcile_structural_alerts(updated)
+            compiler_stats = save_structural_key_levels(updated, kl)
         except Exception as exc:
             compiler_stats = {
                 "created": 0,
@@ -214,6 +212,8 @@ with tab_levels:
             st.success(message)
 
     kl = load_key_levels_from_db()
+    import copy
+    baseline_kl = copy.deepcopy(kl)  # pre-edit snapshot, for conflict detection on save
 
     # ── Positions ──────────────────────────────────────────────────────────────
 
@@ -276,7 +276,7 @@ with tab_levels:
                         entry["note"] = new_note.strip()
                     new_positions[new_ticker] = entry
                     kl["positions"] = new_positions
-                    _save_levels_and_refresh_alerts(kl)
+                    _save_levels_and_refresh_alerts(kl, baseline_kl)
                     st.success(f"Added {new_ticker}.")
                     st.rerun()
 
@@ -329,14 +329,14 @@ with tab_levels:
                     if wn.strip(): entry["note"]    = wn.strip()
                     new_watch[wt] = entry
                     kl["watch"] = new_watch
-                    _save_levels_and_refresh_alerts(kl)
+                    _save_levels_and_refresh_alerts(kl, baseline_kl)
                     st.success(f"Added {wt}.")
                     st.rerun()
 
     st.divider()
 
     if st.button("💾 Save All", type="primary"):
-        compiler_stats = _save_levels_and_refresh_alerts({"positions": new_positions, "watch": new_watch})
+        compiler_stats = _save_levels_and_refresh_alerts({"positions": new_positions, "watch": new_watch}, baseline_kl)
         synced = []
         for ticker, vals in new_watch.items():
             alert_above = vals.get("alert_above")

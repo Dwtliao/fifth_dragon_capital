@@ -239,12 +239,18 @@ def review_action(preview, action, *, expiry_days=21, acknowledge_market=False):
         plans = sorted(preview,key=lambda p:p['id'])
         if action == 'approve':
             with conn.cursor() as cur:
-                # Same ordering as purge and manual edits; all session locks precede row locks.
-                for p in sorted(plans,key=lambda p:(p['ticker'],p['id'])):
-                    if p['mode']=='stop':
-                        cur.execute('SELECT pg_advisory_lock(%s,hashtext(%s))',
-                                    (LOCK_NAMESPACE+2,f"key_levels_watch:{p['ticker']}:below"))
-                    symbol = int.from_bytes(hashlib.sha256(p['ticker'].encode()).digest()[:4],'big',signed=True)
+                # One global phase order everywhere locks are taken (here, apply_bulk,
+                # and the compiler): ALL guards, then ALL per-ticker symbols, then ALL
+                # row locks. Never interleave per item/ticker — e.g. guard_A, symbol_A,
+                # guard_B, symbol_B can deadlock against a batched guard_A, guard_B,
+                # symbol_A, symbol_B from another caller (each holds what the other
+                # wants next). A strict two-phase batch, done consistently everywhere,
+                # cannot form that cycle.
+                for p in sorted((p for p in plans if p['mode']=='stop'),key=lambda p:p['ticker']):
+                    cur.execute('SELECT pg_advisory_lock(%s,hashtext(%s))',
+                                (LOCK_NAMESPACE+2,f"key_levels_watch:{p['ticker']}:below"))
+                for ticker in sorted({p['ticker'] for p in plans}):
+                    symbol = int.from_bytes(hashlib.sha256(ticker.encode()).digest()[:4],'big',signed=True)
                     cur.execute('SELECT pg_advisory_lock(%s,%s)', (LOCK_NAMESPACE+1,symbol))
                 for target in sorted({p['target_id'] for p in plans if p.get('target_id')}):
                     cur.execute('SELECT pg_advisory_lock(%s,%s)', (LOCK_NAMESPACE,target))
@@ -331,6 +337,11 @@ def review_action(preview, action, *, expiry_days=21, acknowledge_market=False):
                             (ticker,condition,level,target['id'] if target else -1))
                         if cur.fetchone():
                             raise ValueError('Exact alert already exists; choose Keep existing or review it in P11')
+                        # Same guard as a purged managed stop: a purged watch/journal alert is not silently recreated.
+                        cur.execute('''SELECT 1 FROM alert_purge_blocks WHERE legacy_identity
+                            AND ticker=%s AND condition=%s AND threshold=%s''', (ticker,condition,level))
+                        if cur.fetchone():
+                            raise ValueError('This alert was previously purged; explicit restoration is required separately')
                     label = f'Stop: {ticker} below {level:g}' if mode=='stop' else item['label'] or f'Approved journal: {ticker} {condition} {level:g}'
                     if target:
                         rearm=(target['threshold'],target['condition']) != (level,condition)

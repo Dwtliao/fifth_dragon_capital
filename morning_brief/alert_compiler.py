@@ -8,9 +8,11 @@ sources (key levels) and journal extraction against the live table.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 from collections import defaultdict
-from typing import Any
+from typing import Any, Callable
 
+from alerts.lifecycle import LOCK_NAMESPACE
 from etrade_sync.db import get_connection
 
 MANAGED_SOURCES = ("key_levels_watch", "journal_sync")
@@ -526,19 +528,7 @@ def backfill_legacy_structural_alerts(*, dry_run: bool = False) -> int:
         conn.close()
 
 
-def reconcile_alerts(
-    desired_alerts: list[dict],
-    *,
-    dry_run: bool = False,
-    archive_missing: bool = True,
-    sources: tuple[str, ...] = MANAGED_SOURCES,
-) -> dict:
-    """Reconcile managed alerts against a desired source-driven set.
-
-    Only rows whose source is in `sources` are loaded/touched — this keeps a
-    structural-only reconcile from treating journal_sync rows (or vice versa)
-    as "missing" and archiving them.
-    """
+def _desired_map(desired_alerts: list[dict]) -> dict[tuple[str, str], dict]:
     desired_map: dict[tuple[str, str], dict] = {}
     for alert in desired_alerts or []:
         source = str(alert.get("source") or "").strip()
@@ -546,6 +536,31 @@ def reconcile_alerts(
         if not source or not source_key:
             continue
         desired_map[(source, source_key)] = dict(alert)
+    return desired_map
+
+
+def reconcile_alerts(
+    desired_alerts: list[dict],
+    *,
+    dry_run: bool = False,
+    archive_missing: bool = True,
+    sources: tuple[str, ...] = MANAGED_SOURCES,
+    reload_desired: Callable[[], list[dict]] | None = None,
+) -> dict:
+    """Reconcile managed alerts against a desired source-driven set.
+
+    Only rows whose source is in `sources` are loaded/touched — this keeps a
+    structural-only reconcile from treating journal_sync rows (or vice versa)
+    as "missing" and archiving them.
+
+    `reload_desired`, if given, is called with no arguments *after* the locks
+    below are held, and its result replaces `desired_alerts`. Without it, a
+    caller who loaded `desired_alerts` from the DB before this function even
+    started can hand it a snapshot that's gone stale by the time it is
+    actually written: the locks only stop two writers from racing each other,
+    they can't un-stale data read before either writer locked anything.
+    """
+    desired_map = _desired_map(desired_alerts)
 
     stats = {
         "created": 0,
@@ -557,9 +572,54 @@ def reconcile_alerts(
         "desired": len(desired_map),
     }
 
+    def _required_locks(cur, desired):
+        # Guard keys must match review_action/apply_bulk/the DB trigger exactly
+        # ("source:ticker:condition", hashtext-keyed) and target current price_alerts
+        # tickers too, not just the (possibly stale) desired set.
+        guards = {
+            f"{source}:{str(alert.get('ticker') or '').strip().upper()}:{alert.get('condition')}"
+            for (source, _), alert in desired.items()
+        }
+        cur.execute('SELECT DISTINCT ticker FROM price_alerts WHERE source = ANY(%s)', (list(sources),))
+        tickers = {str(row[0] or '').strip().upper() for row in cur.fetchall()}
+        tickers |= {str(alert.get('ticker') or '').strip().upper() for alert in desired.values()}
+        return guards, {t for t in tickers if t}
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            # Lock ordering must match review_action/apply_bulk's (guard, then
+            # per-ticker symbol, then row) or the two can deadlock: a stop
+            # approval takes guard-then-symbol while an insert here used to
+            # take symbol-then-guard (the guard being taken implicitly, inside
+            # the DB trigger, the moment an INSERT statement runs).
+            held_guards: set[str] = set()
+            held_tickers: set[str] = set()
+            for _ in range(5):
+                guards, tickers = _required_locks(cur, desired_map)
+                new_guards = sorted(guards - held_guards)
+                new_tickers = sorted(tickers - held_tickers)
+                for guard in new_guards:
+                    cur.execute('SELECT pg_advisory_lock(%s,hashtext(%s))', (LOCK_NAMESPACE + 2, guard))
+                held_guards |= set(new_guards)
+                for ticker in new_tickers:
+                    symbol = int.from_bytes(hashlib.sha256(ticker.encode()).digest()[:4], 'big', signed=True)
+                    cur.execute('SELECT pg_advisory_lock(%s,%s)', (LOCK_NAMESPACE + 1, symbol))
+                held_tickers |= set(new_tickers)
+                if reload_desired is None:
+                    break
+                desired_map = _desired_map(reload_desired())
+                stats["desired"] = len(desired_map)
+                # The reload can introduce a ticker/condition the first pass never
+                # locked (e.g. a key level someone else just added). Locking is
+                # only real protection if it covers everything we're about to read
+                # and write — if the reload's requirements aren't a subset of what
+                # we hold, go around again and pick up the gap before proceeding.
+                guards, tickers = _required_locks(cur, desired_map)
+                if guards <= held_guards and tickers <= held_tickers:
+                    break
+            else:
+                raise RuntimeError('Could not stabilize lock coverage for this reconcile; retry later')
             current_rows = _load_managed_alerts(cur, sources)
             groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
             for row in current_rows:
@@ -604,12 +664,25 @@ def reconcile_alerts(
         conn.close()
 
 
-def reconcile_structural_alerts(key_levels: dict, *, dry_run: bool = False) -> dict:
-    """Reconcile structural alerts from key_levels."""
+def reconcile_structural_alerts(
+    key_levels: dict, *, dry_run: bool = False, reload_key_levels: Callable[[], dict] | None = None,
+) -> dict:
+    """Reconcile structural alerts from key_levels.
+
+    `key_levels` is used as-is unless `reload_key_levels` is given, in which
+    case it is only a placeholder used to pick the tickers to lock; the
+    authoritative data reconciled against is read fresh, under those locks,
+    via `reload_key_levels` (see `reconcile_alerts`'s `reload_desired`).
+    """
     held = _held_symbols()
     backfilled = backfill_legacy_structural_alerts(dry_run=dry_run)
+    reload_desired = (
+        (lambda: build_structural_alerts(reload_key_levels(), held_symbols=held))
+        if reload_key_levels is not None else None
+    )
     stats = reconcile_alerts(
-        build_structural_alerts(key_levels, held_symbols=held), dry_run=dry_run, sources=("key_levels_watch",)
+        build_structural_alerts(key_levels, held_symbols=held), dry_run=dry_run, sources=("key_levels_watch",),
+        reload_desired=reload_desired,
     )
     stats['held_archived'] = _archive_held_nonstop(held, dry_run=dry_run)
     stats["backfilled"] = backfilled
@@ -748,11 +821,79 @@ def _clear_expires_at(source_key: str, *, dry_run: bool = False) -> None:
         conn.close()
 
 
-def refresh_structural_alerts_from_db(*, dry_run: bool = False) -> dict:
-    """Load key levels from the DB and reconcile structural alerts."""
+_KL_FIELDS = ("stop", "support", "resistance", "alert_above")
+
+
+def save_structural_key_levels(key_levels: dict, baseline_key_levels: dict, *, dry_run: bool = False) -> dict:
+    """CAS-protected save of key_levels + reconcile, for UI callers (P10).
+
+    `baseline_key_levels` is whatever the caller last loaded from the DB
+    before building `key_levels` from user edits. Under the same per-ticker
+    locks the compiler uses, re-reads the authoritative key_levels and
+    refuses (raises ValueError) if any ticker/field differs from the
+    baseline — i.e. something else (e.g. a journal-review stop approval)
+    changed it since the UI loaded, and saving now would silently clobber
+    that change with stale widget state. Caller should reload and retry.
+    """
     from morning_brief.fetchers import load_key_levels_from_db
 
-    return reconcile_structural_alerts(load_key_levels_from_db(), dry_run=dry_run)
+    def _flat(levels):
+        flat = {}
+        for section in ("positions", "watch"):
+            for ticker, vals in (levels.get(section) or {}).items():
+                for field in _KL_FIELDS:
+                    if (vals or {}).get(field) is not None:
+                        flat[(ticker.strip().upper(), field)] = float(vals[field])
+        return flat
+
+    baseline_flat = _flat(baseline_key_levels)
+    touched = set(baseline_flat) | set(_flat(key_levels))
+
+    # Everything below shares one connection (locks + compare + save), so the
+    # comparison can't read through a different, unpatched/unlocked session
+    # than the one actually holding the locks.
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            for ticker in sorted({t for t, _ in touched}):
+                symbol = int.from_bytes(hashlib.sha256(ticker.encode()).digest()[:4], 'big', signed=True)
+                cur.execute('SELECT pg_advisory_lock(%s,%s)', (LOCK_NAMESPACE + 1, symbol))
+            cur.execute("SELECT section,ticker,stop,support,resistance,alert_above FROM key_levels")
+            current_flat = {}
+            for section, ticker, stop, support, resistance, alert_above in cur.fetchall():
+                for field, value in (("stop", stop), ("support", support), ("resistance", resistance), ("alert_above", alert_above)):
+                    if value is not None:
+                        current_flat[(str(ticker).strip().upper(), field)] = float(value)
+            conflicts = sorted(f"{t}:{field}" for t, field in touched if current_flat.get((t, field)) != baseline_flat.get((t, field)))
+            if conflicts:
+                raise ValueError(f"Changed since this page loaded, refresh before saving: {', '.join(conflicts)}")
+            cur.execute("DELETE FROM key_levels")
+            for section in ("positions", "watch"):
+                for ticker, vals in (key_levels.get(section) or {}).items():
+                    cur.execute(
+                        "INSERT INTO key_levels (section,ticker,stop,support,resistance,alert_above,note,updated_at) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,NOW())",
+                        (section, ticker, vals.get("stop"), vals.get("support"), vals.get("resistance"),
+                         vals.get("alert_above"), vals.get("note")),
+                    )
+        conn.commit()
+    finally:
+        conn.close()  # Releases the locks; reconcile below takes its own.
+    return reconcile_structural_alerts(key_levels, dry_run=dry_run, reload_key_levels=load_key_levels_from_db)
+
+
+def refresh_structural_alerts_from_db(*, dry_run: bool = False) -> dict:
+    """Load key levels from the DB and reconcile structural alerts.
+
+    This is the DB-authoritative entrypoint (morning pipeline, P10 "Sync
+    Positions"), so it re-reads key_levels under the per-ticker locks rather
+    than reconciling whatever was read before this call started — see
+    `reconcile_structural_alerts`'s `reload_key_levels`.
+    """
+    from morning_brief.fetchers import load_key_levels_from_db
+
+    initial = load_key_levels_from_db()
+    return reconcile_structural_alerts(initial, dry_run=dry_run, reload_key_levels=load_key_levels_from_db)
 
 
 def reclassify(

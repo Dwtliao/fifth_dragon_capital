@@ -125,6 +125,135 @@ class JournalReviewDatabaseTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.approve(self.stage(95,stop=True,evidence='TEST stop 95.'))
         self.assertEqual(self.execute('SELECT count(*) FROM key_levels',fetch=True)[0][0],0)
 
+    def test_purged_watch_alert_cannot_be_silently_restored(self):
+        from alerts.management import apply_bulk,preview_action
+        old=self.add_alert(threshold=110)
+        self.execute("UPDATE price_alerts SET condition='below' WHERE id=%s",(old,))
+        apply_bulk(preview_action([self.alert(old)],'purge'),'purge')
+        with self.assertRaises(ValueError): self.approve(self.stage(110))
+        self.assertEqual(self.execute('SELECT count(*) FROM price_alerts',fetch=True)[0][0],0)
+
+    def test_compiler_reconcile_blocks_on_concurrent_stop_approval_lock(self):
+        """The compiler's structural reconcile must serialize per-ticker with an
+        in-flight stop approval, or it can overwrite the approval with a stale
+        read (lost update). Demonstrated by holding the same per-ticker lock an
+        approval would hold, open on a separate connection, and confirming the
+        compiler blocks until it is released rather than proceeding immediately."""
+        import hashlib
+        import threading
+        from morning_brief import alert_compiler
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
+        self.add_alert(source='key_levels_watch',source_key='position:TEST:stop',threshold=90)
+        holder=self.connect()
+        self.addCleanup(holder.close)  # Guarantee the held lock is released even if an assertion fails.
+        symbol=int.from_bytes(hashlib.sha256(b'TEST').digest()[:4],'big',signed=True)
+        with holder.cursor() as cur:
+            cur.execute('SELECT pg_advisory_lock(%s,%s)',(lifecycle.LOCK_NAMESPACE+1,symbol))
+        result={}
+        def run():
+            with patch('morning_brief.alert_compiler.get_connection',self.connect):
+                result['stats']=alert_compiler.reconcile_structural_alerts({'positions':{'TEST':{'stop':95}}})
+        t=threading.Thread(target=run,daemon=True)
+        t.start()
+        t.join(timeout=0.5)
+        self.assertTrue(t.is_alive(),'reconcile should block while a concurrent approval holds the ticker lock')
+        self.assertEqual(self.alert(self.execute("SELECT id FROM price_alerts",fetch=True)[0][0])['threshold'],90)
+        holder.rollback(); holder.close()
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(),'reconcile should proceed once the lock is released')
+        self.assertEqual(result['stats']['updated'],1)
+        self.assertEqual(self.alert(self.execute("SELECT id FROM price_alerts",fetch=True)[0][0])['threshold'],95)
+
+    def test_compiler_reload_prevents_stale_stop_overwrite(self):
+        """Reproduces the $90->$95 scenario: a compiler run that read key_levels
+        before an approval committed must not, once it finally gets the lock,
+        write the stop back down to the value it read before. It must reload
+        the authoritative row under the lock instead of trusting its stale
+        pre-lock snapshot."""
+        from morning_brief import alert_compiler
+        self.execute("INSERT INTO positions VALUES ('account','TEST','EQ',2,NOW())")
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
+        existing=self.add_alert(source='key_levels_watch',source_key='position:TEST:stop',threshold=90)
+        self.execute("UPDATE price_alerts SET condition='below',tier=1,pinned=FALSE,label='Stop: TEST below 90' WHERE id=%s",(existing,))
+        stale_key_levels={'positions':{'TEST':{'stop':90}}}  # read before the approval below commits
+        self.approve(self.stage(95,stop=True,evidence='TEST stop 95.'))
+        self.assertEqual(self.alert(existing)['threshold'],95)
+        def reload():
+            row=self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0]
+            return {'positions':{'TEST':{'stop':float(row[0])}}}
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            stats=alert_compiler.reconcile_structural_alerts(stale_key_levels,reload_key_levels=reload)
+        self.assertEqual(stats['updated'],0)
+        self.assertEqual(stats['unchanged'],1)
+        self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],95)
+        self.assertEqual(self.alert(existing)['threshold'],95)
+
+    def test_compiler_acquires_same_guard_lock_as_stop_approval_in_matching_order(self):
+        """The compiler must take the identical (key, order) locks a stop
+        approval does: guard before per-ticker symbol. If it took them in the
+        opposite order (or a differently-keyed lock), the two could deadlock
+        under real concurrency instead of one simply queuing behind the other."""
+        import threading
+        from morning_brief import alert_compiler
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
+        self.add_alert(source='key_levels_watch',source_key='position:TEST:stop',threshold=90)
+        holder=self.connect()
+        self.addCleanup(holder.close)
+        with holder.cursor() as cur:
+            # Exactly the guard key/order review_action's stop-mode approval takes first.
+            cur.execute('SELECT pg_advisory_lock(%s,hashtext(%s))',
+                        (lifecycle.LOCK_NAMESPACE+2,'key_levels_watch:TEST:below'))
+        result={}
+        def run():
+            with patch('morning_brief.alert_compiler.get_connection',self.connect):
+                result['stats']=alert_compiler.reconcile_structural_alerts({'positions':{'TEST':{'stop':95}}})
+        t=threading.Thread(target=run,daemon=True)
+        t.start()
+        t.join(timeout=0.5)
+        self.assertTrue(t.is_alive(),'reconcile should queue behind the same guard key a stop approval holds')
+        holder.rollback(); holder.close()
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive())
+        self.assertEqual(result['stats']['updated'],1)
+
+    def test_p10_save_rejects_stale_baseline_instead_of_clobbering_approval(self):
+        """Reproduces the P10 scenario: a page loaded stop=90, an approval moved
+        it to 95, and the (stale) P10 widgets are then saved. Must refuse, not
+        silently write 90 back over the approved 95."""
+        from morning_brief import alert_compiler
+        self.execute("INSERT INTO positions VALUES ('account','TEST','EQ',2,NOW())")
+        baseline={'positions':{'TEST':{'stop':90}}}
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
+        existing=self.add_alert(source='key_levels_watch',source_key='position:TEST:stop',threshold=90)
+        self.execute("UPDATE price_alerts SET condition='below',tier=1,pinned=FALSE,label='Stop: TEST below 90' WHERE id=%s",(existing,))
+        self.approve(self.stage(95,stop=True,evidence='TEST stop 95.'))  # concurrent approval, after baseline was loaded
+        stale_edit={'positions':{'TEST':{'stop':90}}}  # P10 widget still showing the old value
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            with self.assertRaises(ValueError):
+                alert_compiler.save_structural_key_levels(stale_edit,baseline)
+        self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],95)
+        self.assertEqual(self.alert(existing)['threshold'],95)
+
+    def test_p10_save_succeeds_when_baseline_matches_current(self):
+        from morning_brief import alert_compiler
+        baseline={'positions':{'TEST':{'stop':90}}}
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
+        edit={'positions':{'TEST':{'stop':92}}}
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            stats=alert_compiler.save_structural_key_levels(edit,baseline)
+        self.assertNotIn('error',stats)
+        self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],92)
+
+    def test_resync_after_purge_does_not_reenter_queue(self):
+        from alerts.management import apply_bulk,preview_action
+        item=self.stage(110)
+        self.approve(item)
+        accepted=next(i for i in review.list_items() if i['id']==item['id'])
+        apply_bulk(preview_action([self.alert(accepted['alert_id'])],'purge'),'purge')
+        repeated=self.stage(110)
+        self.assertEqual(repeated['id'],item['id'])
+        self.assertEqual(repeated['status'],'accepted')
+
     def test_stale_holdings_block_stop_approval(self):
         self.execute("INSERT INTO positions VALUES ('account','TEST','EQ',2,NOW()-INTERVAL '10 days')")
         with self.assertRaises(ValueError): self.approve(self.stage(90,stop=True,evidence='TEST stop 90.'))

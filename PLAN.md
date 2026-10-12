@@ -407,13 +407,24 @@ Execution order and checks:
 4. [x] Implemented locally: preserve exact evidence/source/date, validate symbols/finite levels, and distinguish
    intraday from daily/weekly-close or sustained conditions. Ambiguity must require explicit
    clarification, not silently become an intraday alert. Keep the existing single LLM call.
-5. [ ] Deduplicate by trading condition, not wording/file/run time. Repeat accepted/rejected
+5. [x] Deduplicate by trading condition, not wording/file/run time. Repeat accepted/rejected
    ideas do not create alerts, renew expiry, or nag. Material level changes require review.
    Disable automatic promotion of recurring journal ideas into permanent alerts.
    Implemented: exact condition fingerprints, durable accepted/rejected decisions, evidence
-   history, no expiry renewal on repeats, no automatic recurrence promotion. Still requires
-   a focused review/test of previously purged WATCH/JOURNAL ideas re-entering the proposal
-   queue; managed STOP restoration is already blocked. Do not mark all purge behavior done.
+   history, no expiry renewal on repeats, no automatic recurrence promotion. October 11
+   follow-up: `review_action` now blocks approving a purged WATCH/JOURNAL (non-stop) alert
+   back into existence (new/replace modes), mirroring the existing managed-STOP purge
+   guard — same `alert_purge_blocks` table, exact ticker/condition/threshold match. Staging
+   (`stage_extraction`) was already confirmed to re-use the durable `accepted` review-item
+   row on resync rather than re-entering the queue, so no staging-layer change was needed;
+   see `test_purged_watch_alert_cannot_be_silently_restored` and
+   `test_resync_after_purge_does_not_reenter_queue` in `tests/test_journal_review_db.py`.
+   Caveat (user-noted October 11): a *different* proposal (different idea_key — e.g. a
+   materially different timeframe/wording) matching the same purged condition can still
+   enter the review queue as a new pending/idea row; only its approval into a live alert
+   is blocked. This stops notification recreation but does not eliminate resurfacing
+   clutter in the queue; a staging-level suppression was intentionally not built this
+   round — revisit if the clutter becomes a practical problem.
 6. [x] Implemented locally: P10 Journal Review: separate ideas/candidates, group by ticker, unchecked selections,
    show evidence/date/existing alerts/holdings, preview selected approve/reject actions.
    Ideas require deliberate preparation before they become notification candidates.
@@ -421,8 +432,84 @@ Execution order and checks:
    the explicitly selected manual alert/held-position stop. Recheck versions, holdings,
    targets/controls and duplicates under shared locks; batches are all-or-nothing. Preserve
    pause/snooze, reject purged managed restoration, audit before/after; never send email.
-   Core approval service and tests implemented. Final inspection of concurrency with
-   source compiler/P10 edits remains, as does user browser acceptance; not release-complete.
+   Core approval service and tests implemented. User browser acceptance remains; not
+   release-complete.
+
+   **October 11 concurrency review (source compiler vs. P10 approval):**
+   - Reviewed `review_action` (journal_review.py), `apply_bulk` (alerts/management.py),
+     and `reconcile_alerts`/`_apply_upsert` (alert_compiler.py) for shared lock ordering,
+     stale previews, stop-source/alert consistency, and all-or-nothing batches.
+   - Approval and purge/bulk-controls already share `LOCK_NAMESPACE` conventions correctly
+     (per-target-id lock, per-ticker symbol lock, stop/purge guard locks), sorted
+     consistently to avoid deadlock, with fingerprint/revision/old-value rechecks after
+     locking — no gap found there; existing tests (`test_stale_preview_batch_rolls_back...`,
+     `test_replace_preserves_pause_and_rejects_changed_target`, purge tests) already cover
+     this.
+   - **Gap 1 found and fixed — no lock at all.** `alert_compiler.reconcile_alerts` (used by
+     `reconcile_structural_alerts` for key_levels_watch/stop rows) took no advisory lock
+     before reading and writing managed alert rows, despite being reachable from the
+     morning pipeline/P10 "Sync Positions" concurrently with a user mid-approval. Fix:
+     acquire the same per-ticker `LOCK_NAMESPACE+1` symbol lock manual P11 edits and
+     journal-review approvals already use, for every ticker it will touch, before loading
+     current rows. Demonstrated the gap (unfixed code let the compiler proceed
+     unsynchronized) and the fix (it now blocks) by temporarily reverting and re-running;
+     see `test_compiler_reconcile_blocks_on_concurrent_stop_approval_lock`.
+   - **Gap 2 found and fixed — the lock alone doesn't stop a stale read ($90→$95).**
+     Caught on review: the per-ticker lock only keeps two writers from stepping on each
+     other *while they write*; it does nothing about a reconcile that already read
+     key_levels (e.g. stop=$90) from the DB *before* a concurrent approval moved it to
+     $95. Once that reconcile finally gets the lock — after the approval has committed —
+     it would still write its stale $90 back over the just-approved $95: the lock closes
+     the window but the snapshot taken before the window opened is still wrong. Fixed by
+     giving `reconcile_alerts` an optional `reload_desired` hook, called only *after*
+     locks are held, that re-reads the authoritative source and replaces the desired set
+     before any diffing/writing. `reconcile_structural_alerts` takes a parallel
+     `reload_key_levels` and `refresh_structural_alerts_from_db` (the actual DB-reload
+     entrypoint used by the morning pipeline) wires it to `load_key_levels_from_db`.
+     `reconcile_structural_alerts`'s other caller (P10, which passes an in-memory dict
+     it just saved) is unaffected — no reload hook, same behavior as before.
+     Reproduced the exact $90→$95 scenario and proved both the saved stop and the live
+     alert land on $95, not $90, confirmed to fail without the fix and pass with it; see
+     `test_compiler_reload_prevents_stale_stop_overwrite`.
+   - **Gap 3 found and fixed — lock-order inversion (deadlock risk).** Caught on review:
+     a stop approval acquires its purge-guard lock (`LOCK_NAMESPACE+2`) *before* the
+     per-ticker symbol lock (`LOCK_NAMESPACE+1`); the compiler's insert path acquired the
+     symbol lock in Python first, then hit the *same* guard lock implicitly inside the
+     `prevent_purged_alert_recreation` DB trigger on `INSERT` — i.e. symbol-then-guard,
+     the reverse order. Two sessions taking a shared pair of locks in opposite orders is
+     a textbook deadlock (compiler holds symbol, waits on guard; approval holds guard,
+     waits on symbol) — Postgres's deadlock detector would eventually abort one side with
+     an error rather than hang forever, but that's still a startling, unnecessary
+     approval/reconcile failure. Fixed by having `reconcile_alerts` acquire the identical
+     guard-lock keys (`"source:ticker:condition"`, hashed via `hashtext` exactly like
+     `apply_bulk`'s purge guard and the DB trigger) *before* the per-ticker symbol lock —
+     matching `review_action`'s order everywhere a guard lock is involved. Verified the
+     compiler now queues on that exact guard key (same namespace, same hash input) before
+     doing anything else; see
+     `test_compiler_acquires_same_guard_lock_as_stop_approval_in_matching_order`. True
+     deadlock-freedom follows from both paths now using one consistent lock order
+     (standard argument, not something a timing-based test can prove by itself — the test
+     confirms the ordering and key identity the argument depends on).
+   - **Limitation / not fixed this round:** `apply_bulk`'s purge path does not take the
+     `LOCK_NAMESPACE+1` ticker lock (only its own guard + target-id lock), so a purge
+     racing a concurrent compiler reconcile for the same ticker isn't covered by gap 1's
+     fix. Not treated as a demonstrated gap: `_apply_upsert`'s plain `UPDATE ... WHERE
+     id=%s` against a row purge deleted mid-transaction simply affects zero rows (no
+     crash, no data resurrection, no incorrect overwrite) — it would only misreport that
+     row as "updated" in the compiler's stats. Flagging for a future round rather than
+     fixing speculatively.
+   - **Unchanged from Step 5:** purged conditions can still reappear in the review queue
+     as a *new, different* proposal (different idea_key); only approving it back into a
+     live alert is blocked. This is a UI-clutter limitation, not a data-safety one.
+   - Full isolated-DB regression (`/private/tmp/verify_alert_task1.py`, reviewed for safety
+     before use — only ever touches a disposable scratch database restored from the real
+     backup, applies migrations there, and drops only that scratch database afterward):
+     **191/191 tests passed** (188 prior + 3 new), restored backup's 92 alerts/50 controls
+     unchanged after migrations re-applied twice. Production database untouched throughout.
+     (One intermediate verification run was killed mid-hang after a test assertion failed
+     before its cleanup ran, which left one lock-holding connection open and one scratch
+     verification database undropped; both were found and removed before the final clean
+     run — production and the real backup were never touched by this.)
 8. [x] Implemented locally: sync broker before journal in the morning pipeline. Holding lookup failure blocks
    stop approval. Brief shows watch ideas separately from active alerts and pending count.
    Honest reporting: extracted ideas, pending, activated, replacements, validation issues.

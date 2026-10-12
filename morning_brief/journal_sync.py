@@ -5,10 +5,10 @@ Extraction stages context, watch ideas, alert requests and stop proposals for P1
 No live key levels or alert configuration is changed until explicit operator approval.
 
 Usage:
-    python -m morning_brief.journal_sync              # process all new/modified journals
+    python -m morning_brief.journal_sync              # check last 5 modified journals
     python -m morning_brief.journal_sync --file PATH  # process one specific file
     python -m morning_brief.journal_sync --dry-run    # print extraction, do not write to DB
-    python -m morning_brief.journal_sync --all        # reprocess all journals (ignore sync log)
+    python -m morning_brief.journal_sync --force      # reprocess selected files only
 """
 
 from __future__ import annotations
@@ -53,6 +53,8 @@ Rules:
   price_alerts is ONLY for personal instructions like "alert me", "notify me", "set an alert".
 - positions contains proposed stops, watch_levels explicit reference/entry levels. Never
   substitute futures/ETF prices for index prices. Optional commentary array holds context only.
+- commentary items must be OBJECTS with ticker, note, and evidence (exact journal excerpt),
+  never plain strings. Use [] or omit commentary when no ticker-specific context exists.
 - Map ticker names to yfinance format:
     NQ, Nasdaq futures → NQ=F
     ES, S&P futures → ES=F
@@ -73,6 +75,9 @@ JSON schema:
   ],
   "price_alerts": [
     {"ticker": "GC=F", "condition": "below", "threshold": 4200, "evidence": "Alert me if gold falls below 4200", "timeframe": "price_crossing"}
+  ],
+  "commentary": [
+    {"ticker": "SMH", "note": "Leadership context only", "evidence": "SMH leadership looks weak."}
   ]
 }
 
@@ -190,11 +195,21 @@ def process_file(path: Path, dry_run: bool = False, force: bool = False, *, mode
     return counts
 
 
+def recent_journals(diary, count=5):
+    if count not in range(1,6):
+        raise ValueError('Choose between 1 and 5 journal files')
+    files = sorted(diary.glob('trading_journal_*.md'), key=lambda path:(path.stat().st_mtime,path.name))
+    return files[-count:]
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Sync trading journals → key_levels + price_alerts")
-    parser.add_argument("--file",    help="Process a specific journal file")
+    parser = argparse.ArgumentParser(description="Stage recent trading journals for approval (maximum 5 files)")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--file", help="Process one specific journal file")
+    selection.add_argument("--recent", type=int, choices=range(1,6), default=None,
+                           help="Check the last 1–5 modified journals (default 5)")
     parser.add_argument("--dry-run", action="store_true", help="Print extraction, do not write to DB")
-    parser.add_argument("--all",     action="store_true", help="Reprocess all journals (ignore sync log)")
+    parser.add_argument("--force", action="store_true", help="Ignore sync history for selected files only")
     parser.add_argument("--model", help="Override CLAUDE_MODEL for this run")
     parser.add_argument("--effort", choices=["low", "medium", "high"], help="Override journal effort for this run")
     args = parser.parse_args()
@@ -203,14 +218,16 @@ def main():
         files = [Path(args.file)]
     else:
         diary = _diary_path()
-        files = sorted(diary.glob("trading_journal_*.md"))
+        files = recent_journals(diary, args.recent or 5)
         if not files:
             print(f"No journal files found in {diary}")
             return
 
+    print(f"Checking {len(files)} selected journal file(s); unchanged files are skipped. Selection is by modification time, not five calendar days.")
+
     total = {"extracted": 0, "pending": 0, "ideas": 0, "blocked": 0, "repeated": 0}
     for f in files:
-        counts = process_file(f, dry_run=args.dry_run, force=args.all, model=args.model, effort=args.effort)
+        counts = process_file(f, dry_run=args.dry_run, force=args.force, model=args.model, effort=args.effort)
         for k in total:
             total[k] += counts.get(k, 0)
 

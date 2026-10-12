@@ -18,7 +18,7 @@ DEFAULT_DIARY = Path.home() / "Library/CloudStorage/Dropbox/Etrade/trading_diary
 
 load_dotenv(PROJECT_ROOT / ".env")
 from morning_brief.alert_compiler import reconcile_structural_alerts, save_structural_key_levels
-from dashboard.morning_pipeline import run_command, run_morning_pipeline
+from dashboard.morning_pipeline import run_command, run_morning_pipeline, positions_sync_message
 from morning_brief.fetchers import (
     fetch_positions_from_db, sync_positions_from_db,
     load_key_levels_from_db,
@@ -50,6 +50,42 @@ def _save_levels_and_refresh_alerts(key_levels: dict, baseline: dict) -> dict:
             "backfilled": 0,
             "error": str(exc),
         }
+
+
+def _flash_from_stats(success_message: str, stats: dict) -> dict:
+    """Never reports success for a save that didn't happen — and never
+    conflates "nothing was saved" (a CAS conflict) with "key levels were
+    saved but the alert refresh afterward failed" (partial completion;
+    key_levels is already committed, only reconciliation needs a retry)."""
+    if stats.get("error"):
+        if stats.get("key_levels_saved"):
+            return {"level": "error", "message": (
+                f"Key levels saved, but alert refresh failed: {stats['error']} "
+                "— refresh this page or retry to reconcile alerts."
+            )}
+        return {"level": "error", "message": f"Not saved: {stats['error']}"}
+    msg = success_message + (
+        " Alerts: "
+        f"created={stats['created']} updated={stats['updated']} "
+        f"archived={stats['archived']} deduped={stats['deduped']}"
+    )
+    if stats.get("backfilled"):
+        msg += f" backfilled={stats['backfilled']}"
+    if stats.get("held_archived"):
+        msg += f" held-symbol alerts archived={stats['held_archived']}"
+    return {"level": "success", "message": msg}
+
+
+_WIDGET_KEY_PREFIXES = ("pos_stop_", "pos_note_", "pos_del_", "w_sup_", "w_res_", "w_alrt_", "w_note_", "w_del_")
+
+
+def _reset_key_levels_session_state():
+    """Drops the pinned baseline and all per-ticker widget state, so the next
+    render re-initializes both from a fresh DB read instead of keeping stale
+    values a concurrent change has since invalidated."""
+    for key in list(st.session_state.keys()):
+        if key == "p10_kl_baseline" or key.startswith(_WIDGET_KEY_PREFIXES):
+            del st.session_state[key]
 
 
 def _remember_results(name, steps):
@@ -107,7 +143,7 @@ if st.sidebar.button("🔄 Sync Latest Journal", use_container_width=True,
         _remember_results("Sync Latest Journal", [result])
         st.rerun()
 
-if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
+if st.sidebar.button("🔄 Sync Positions from DB", key="p10_sync_positions_button", use_container_width=True,
                      help="Add new E*TRADE holdings, remove closed ones"):
     try:
         kl = load_key_levels_from_db()
@@ -123,32 +159,45 @@ if st.sidebar.button("🔄 Sync Positions from DB", use_container_width=True,
                 "backfilled": 0,
                 "error": str(exc),
             }
-        msgs = []
-        if added:   msgs.append(f"Added: {', '.join(added)}")
-        if removed: msgs.append(f"Removed: {', '.join(removed)}")
-        if not msgs: msgs.append("Already in sync.")
-        msgs.append(
-            "Alerts: "
-            f"created={compiler_stats['created']} updated={compiler_stats['updated']} "
-            f"archived={compiler_stats['archived']} deduped={compiler_stats['deduped']}"
-        )
-        st.sidebar.success("\n".join(msgs))
+        if compiler_stats.get('error'):
+            flash = _flash_from_stats('', compiler_stats)
+        else:
+            flash = {'level':'success', 'message':positions_sync_message(added,removed,compiler_stats)}
+        if compiler_stats.get("key_levels_saved"):
+            # This changed key_levels outside Tab 2's own session-pinned
+            # baseline/widgets; drop them so Tab 2 re-reads fresh rather than
+            # risk a later Save All comparing against what's now stale.
+            _reset_key_levels_session_state()
+        # st.rerun() immediately below discards anything rendered in this run —
+        # the banner must be stashed in session_state and shown on the NEXT
+        # run instead (same pattern as "p10_save_all_flash"), or it can vanish
+        # before the user ever sees it.
+        st.session_state["p10_sync_positions_flash"] = flash
         st.rerun()
     except RuntimeError as e:
-        st.sidebar.error(str(e))
+        st.session_state["p10_sync_positions_flash"] = {"level": "error", "message": str(e)}
+        st.rerun()
     except Exception as e:
-        st.sidebar.error(f"Sync failed: {e}")
+        st.session_state["p10_sync_positions_flash"] = {"level": "error", "message": f"Sync failed: {e}"}
+        st.rerun()
 
-if st.sidebar.button("🔄 Sync All Journals", use_container_width=True,
-                     help="Process all unsynced journals"):
+if st.sidebar.button("🔄 Sync Last 5 Journals", use_container_width=True,
+                     help="Check the five most recently modified journal files; skip unchanged ones. Five files may span more than five days."):
     with st.sidebar:
-        with st.spinner("Syncing all journals…"):
+        with st.spinner("Checking the last five journals…"):
             result = run_command("Journals",
-                [sys.executable, "-m", "morning_brief.journal_sync"],
+                [sys.executable, "-m", "morning_brief.journal_sync", "--recent", "5"],
                 PROJECT_ROOT, source="p10_journals_only",
             )
-    _remember_results("Sync All Journals", [result])
+    _remember_results("Sync Last 5 Journals", [result])
     st.rerun()
+
+sync_flash = st.session_state.pop("p10_sync_positions_flash", None)
+if sync_flash:
+    if sync_flash["level"] == "error":
+        st.sidebar.error(sync_flash["message"])
+    else:
+        st.sidebar.success(sync_flash["message"])
 
 # Persist results across reruns and navigation, including both output streams.
 last_result = st.session_state.get("p10_pipeline_result")
@@ -213,7 +262,20 @@ with tab_levels:
 
     kl = load_key_levels_from_db()
     import copy
-    baseline_kl = copy.deepcopy(kl)  # pre-edit snapshot, for conflict detection on save
+    # Pinned to whatever was loaded the FIRST time this session rendered Tab 2 —
+    # not re-synced on every rerun — because the widgets below are exactly as
+    # sticky: number_input(value=..., key=...) only uses `value` the first time
+    # a key appears in session_state, so a later DB change doesn't change what's
+    # on screen either. The baseline must track what the widgets actually show,
+    # not whatever the DB happens to hold on this particular rerun.
+    if "p10_kl_baseline" not in st.session_state:
+        st.session_state["p10_kl_baseline"] = copy.deepcopy(kl)
+    baseline_kl = st.session_state["p10_kl_baseline"]
+
+    if st.button("🔄 Refresh from DB", key="p10_refresh_button",
+                 help="Discard any unsaved edits on this page and reload current values"):
+        _reset_key_levels_session_state()
+        st.rerun()
 
     # ── Positions ──────────────────────────────────────────────────────────────
 
@@ -276,9 +338,15 @@ with tab_levels:
                         entry["note"] = new_note.strip()
                     new_positions[new_ticker] = entry
                     kl["positions"] = new_positions
-                    _save_levels_and_refresh_alerts(kl, baseline_kl)
-                    st.success(f"Added {new_ticker}.")
-                    st.rerun()
+                    stats = _save_levels_and_refresh_alerts(kl, baseline_kl)
+                    flash = _flash_from_stats(f"Added {new_ticker}.", stats)
+                    if stats.get("key_levels_saved"):
+                        st.session_state["p10_kl_baseline"] = copy.deepcopy(kl)
+                    if flash["level"] == "error":
+                        st.error(flash["message"])
+                    else:
+                        st.success(flash["message"])
+                        st.rerun()
 
     st.divider()
 
@@ -329,35 +397,32 @@ with tab_levels:
                     if wn.strip(): entry["note"]    = wn.strip()
                     new_watch[wt] = entry
                     kl["watch"] = new_watch
-                    _save_levels_and_refresh_alerts(kl, baseline_kl)
-                    st.success(f"Added {wt}.")
-                    st.rerun()
+                    stats = _save_levels_and_refresh_alerts(kl, baseline_kl)
+                    flash = _flash_from_stats(f"Added {wt}.", stats)
+                    if stats.get("key_levels_saved"):
+                        st.session_state["p10_kl_baseline"] = copy.deepcopy(kl)
+                    if flash["level"] == "error":
+                        st.error(flash["message"])
+                    else:
+                        st.success(flash["message"])
+                        st.rerun()
 
     st.divider()
 
-    if st.button("💾 Save All", type="primary"):
-        compiler_stats = _save_levels_and_refresh_alerts({"positions": new_positions, "watch": new_watch}, baseline_kl)
-        synced = []
-        for ticker, vals in new_watch.items():
-            alert_above = vals.get("alert_above")
-            if alert_above and alert_above > 0:
-                synced.append(f"{ticker} > {alert_above}")
-
-        msg = "Key levels saved and structural alerts reconciled."
-        msg += (
-            " Alerts: "
-            f"created={compiler_stats['created']} updated={compiler_stats['updated']} "
-            f"archived={compiler_stats['archived']} deduped={compiler_stats['deduped']}"
-        )
-        if compiler_stats.get("backfilled"):
-            msg += f" backfilled={compiler_stats['backfilled']}"
-        if compiler_stats.get("held_archived"):
-            msg += f" held-symbol alerts archived={compiler_stats['held_archived']}"
-        if compiler_stats.get("error"):
-            msg += f" alert refresh error={compiler_stats['error']}"
-        if synced:
-            msg += f"  Configured watch levels (held symbols excluded from alerts): {', '.join(synced)}"
-        st.session_state["p10_save_all_flash"] = {"level": "success", "message": msg}
+    if st.button("💾 Save All", key="p10_save_all_button", type="primary"):
+        new_key_levels = {"positions": new_positions, "watch": new_watch}
+        compiler_stats = _save_levels_and_refresh_alerts(new_key_levels, baseline_kl)
+        flash = _flash_from_stats("Key levels saved and structural alerts reconciled.", compiler_stats)
+        if compiler_stats.get("key_levels_saved"):
+            # True whenever the key_levels write itself committed, even if the
+            # alert refresh afterward failed — the saved values are real and a
+            # later comparison must be against them, not the pre-save baseline.
+            st.session_state["p10_kl_baseline"] = copy.deepcopy(new_key_levels)
+        if flash["level"] == "success":
+            synced = [f"{t} > {v['alert_above']}" for t, v in new_watch.items() if v.get("alert_above", 0) > 0]
+            if synced:
+                flash["message"] += f"  Configured watch levels (held symbols excluded from alerts): {', '.join(synced)}"
+        st.session_state["p10_save_all_flash"] = flash
         st.rerun()
 
 

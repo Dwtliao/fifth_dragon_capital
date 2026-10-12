@@ -5,6 +5,30 @@ import subprocess
 import sys
 
 
+def positions_sync_message(added, removed, stats):
+    """Describe saved metadata and reconciliation without overstating archive changes."""
+    lines = ['Positions metadata synced successfully.']
+    if added:
+        lines.append(f"Added {len(added)} {'symbol' if len(added)==1 else 'symbols'}: {', '.join(added)}.")
+    if removed:
+        lines.append(f"Removed {len(removed)} closed-position {'entry' if len(removed)==1 else 'entries'}: {', '.join(removed)}.")
+    if not added and not removed:
+        lines.append('No changes to the saved symbol list were needed.')
+    created, updated = stats.get('created', 0), stats.get('updated', 0)
+    if not created and not updated:
+        lines.append('Managed alert check: no alerts created or updated.')
+    else:
+        lines.append(f'Managed alert check: {created} new; {updated} updated.')
+    if stats.get('archived'):
+        lines.append(f"{stats['archived']} alerts marked or kept archived (includes previously archived alerts).")
+    if stats.get('held_archived'):
+        lines.append(f"{stats['held_archived']} additional held-symbol watch alerts archived.")
+    if stats.get('deduped'):
+        lines.append(f"{stats['deduped']} duplicate {'alert' if stats['deduped']==1 else 'alerts'} archived.")
+    lines.append('Saved stops and notes were preserved. No trades were placed.')
+    return '\n\n'.join(lines)
+
+
 def run_command(name, command, project_root, source="p10_morning_pipeline"):
     try:
         result = subprocess.run(

@@ -188,6 +188,103 @@ class JournalReviewDatabaseTests(unittest.TestCase):
         self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],95)
         self.assertEqual(self.alert(existing)['threshold'],95)
 
+    def test_compiler_releases_symbol_lock_before_expanding_guard_coverage(self):
+        """Deterministic reproduction of the retry-loop ordering bug: when a
+        reload (called post-symbol-lock, to check coverage) reveals a new
+        ticker/guard the current attempt never locked, the attempt must fully
+        release its locks (including the symbol lock it already holds) before
+        trying again — never acquire the new guard while still holding that
+        symbol lock. Probed with a second real connection's non-blocking
+        pg_try_advisory_lock at the two moments that matter, so this needs no
+        threads and no timing guesses."""
+        import hashlib
+        from morning_brief import alert_compiler
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','A',10)")
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','B',20)")
+        probe=self.connect()
+        self.addCleanup(probe.close)
+        def symbol_locked(ticker):
+            sym=int.from_bytes(hashlib.sha256(ticker.encode()).digest()[:4],'big',signed=True)
+            with probe.cursor() as cur:
+                cur.execute('SELECT pg_try_advisory_lock(%s,%s)',(lifecycle.LOCK_NAMESPACE+1,sym))
+                got=cur.fetchone()[0]
+                if got:
+                    cur.execute('SELECT pg_advisory_unlock(%s,%s)',(lifecycle.LOCK_NAMESPACE+1,sym))
+            probe.rollback()
+            return not got  # True means someone else (the reconcile) holds it
+        calls=[]
+        observed={}
+        def reload():
+            calls.append(1)
+            if len(calls)==2:
+                # The post-symbol-lock coverage check for attempt 1: it must
+                # already hold A's symbol lock at this exact point.
+                observed['locked_during_check']=symbol_locked('A')
+                return {'positions':{'A':{'stop':10},'B':{'stop':20}}}
+            if len(calls)==3:
+                # First reload of attempt 2's guard phase, right after attempt
+                # 1 was abandoned: A's symbol lock must already be released.
+                observed['locked_before_retry']=symbol_locked('A')
+            return {'positions':{'A':{'stop':10},'B':{'stop':20}}} if len(calls)>1 else {'positions':{'A':{'stop':10}}}
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            stats=alert_compiler.reconcile_structural_alerts({'positions':{'A':{'stop':10}}},reload_key_levels=reload)
+        self.assertTrue(observed['locked_during_check'],"attempt 1 should hold A's symbol lock during its own coverage check")
+        self.assertFalse(observed['locked_before_retry'],"A's symbol lock must be released before attempt 2 starts, not carried over")
+        self.assertEqual(stats['desired'],2)
+
+    def test_compiler_releases_guard_lock_when_earlier_sorting_guard_discovered(self):
+        """Deterministic reproduction of the B-held, A-discovered ordering risk:
+        this attempt holds a later-sorting guard ("...Z...") from its first
+        Phase-1 pass, then a reload reveals an earlier-sorting guard
+        ("...A...") is also needed. Acquiring A now, after Z, would still be
+        guard-before-symbol, but it breaks the *global* ascending order every
+        session relies on — another session legitimately holding A and
+        waiting on Z would deadlock against this one. The fix must abandon
+        this attempt (releasing Z) and retry with both guards folded into the
+        starting set, never patch A in while still holding Z."""
+        from morning_brief.alert_compiler import build_structural_alerts, reconcile_alerts
+        probe=self.connect()
+        self.addCleanup(probe.close)
+        def guard_locked(guard_text):
+            with probe.cursor() as cur:
+                cur.execute('SELECT pg_try_advisory_lock(%s,hashtext(%s))',(lifecycle.LOCK_NAMESPACE+2,guard_text))
+                got=cur.fetchone()[0]
+                if got:
+                    cur.execute('SELECT pg_advisory_unlock(%s,hashtext(%s))',(lifecycle.LOCK_NAMESPACE+2,guard_text))
+            probe.rollback()
+            return not got  # True means someone else (the reconcile) holds it
+        guard_z='key_levels_watch:Z:below'
+        both=build_structural_alerts({'positions':{'A':{'stop':10},'Z':{'stop':99}}})
+        calls=[]
+        def reload():
+            calls.append(1)
+            if len(calls)==1:
+                # Attempt 1 has just acquired Z's guard and is checking Phase 1
+                # coverage for the first time; it must hold Z here.
+                observed['z_locked_on_discovery']=guard_locked(guard_z)
+            return both  # discovers A, which sorts before Z
+        conns=[]
+        observed={}
+        def get_connection_probe():
+            conn=self.connect()
+            conns.append(1)
+            if len(conns)==2:
+                # Attempt 2 is opening its fresh connection, right after
+                # attempt 1 was abandoned for the ordering violation and
+                # before it has acquired anything: Z must already be free.
+                observed['z_locked_before_retry']=guard_locked(guard_z)
+            return conn
+        # Calling reconcile_alerts directly (not via reconcile_structural_alerts)
+        # keeps this deterministic: no unrelated connections from
+        # _held_symbols()/backfill_legacy_structural_alerts() to miscount.
+        with patch('morning_brief.alert_compiler.get_connection',get_connection_probe):
+            stats=reconcile_alerts(build_structural_alerts({'positions':{'Z':{'stop':99}}}),
+                                    sources=('key_levels_watch',),reload_desired=reload)
+        self.assertTrue(observed['z_locked_on_discovery'],"attempt 1 should hold Z's guard lock when it discovers A")
+        self.assertFalse(observed['z_locked_before_retry'],"Z's guard lock must be released before attempt 2 starts, not carried over")
+        self.assertEqual(len(conns),2,"should need exactly one retry (fresh connection) to pick up the reordered guard")
+        self.assertEqual(stats['desired'],2)
+
     def test_compiler_acquires_same_guard_lock_as_stop_approval_in_matching_order(self):
         """The compiler must take the identical (key, order) locks a stop
         approval does: guard before per-ticker symbol. If it took them in the
@@ -244,6 +341,78 @@ class JournalReviewDatabaseTests(unittest.TestCase):
         self.assertNotIn('error',stats)
         self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],92)
 
+    def test_p10_save_distinguishes_rejected_from_partial_completion(self):
+        """save_structural_key_levels commits key_levels before reconciling
+        alerts. If reconciliation then fails, the levels ARE saved — this
+        must be reported as a partial completion (key_levels_saved=True),
+        never conflated with a full rejection (a CAS conflict, where nothing
+        is written at all)."""
+        from morning_brief import alert_compiler
+        baseline={'positions':{'TEST':{'stop':90}}}
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
+        edit={'positions':{'TEST':{'stop':95}}}
+        with patch('morning_brief.alert_compiler.get_connection',self.connect), \
+             patch('morning_brief.alert_compiler.reconcile_structural_alerts',side_effect=RuntimeError('alert refresh boom')):
+            stats=alert_compiler.save_structural_key_levels(edit,baseline)
+        self.assertEqual(stats['error'],'alert refresh boom')
+        self.assertTrue(stats['key_levels_saved'],'key_levels was committed before reconciliation ran; must be reported as saved')
+        self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],95,
+                          'the save itself must have actually persisted, matching the key_levels_saved=True report')
+
+        # Contrast: a full rejection (CAS conflict) must still report nothing saved.
+        self.execute("UPDATE key_levels SET stop=97 WHERE section='positions' AND ticker='TEST'")  # concurrent change
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            with self.assertRaises(ValueError):
+                alert_compiler.save_structural_key_levels({'positions':{'TEST':{'stop':99}}},baseline)
+        self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],97,
+                          'a rejected save must leave the concurrent value untouched')
+
+    def test_p10_save_rejects_note_only_conflict(self):
+        """A concurrent note-only edit must be caught too, not just numeric fields."""
+        from morning_brief import alert_compiler
+        baseline={'positions':{'TEST':{'stop':90,'note':'old note'}}}
+        self.execute("INSERT INTO key_levels(section,ticker,stop,note) VALUES ('positions','TEST',90,'someone changed this')")
+        edit={'positions':{'TEST':{'stop':90,'note':'old note'}}}
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            with self.assertRaises(ValueError):
+                alert_compiler.save_structural_key_levels(edit,baseline)
+
+    def test_p10_save_preserves_row_added_by_another_session(self):
+        """A row neither this call's baseline nor its edit ever saw (added
+        concurrently by someone else) must survive the save, not be wiped by
+        a blind delete-and-replace of the whole table."""
+        from morning_brief import alert_compiler
+        baseline={'positions':{'TEST':{'stop':90}}}
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
+        self.execute("INSERT INTO key_levels(section,ticker,support) VALUES ('watch','OTHER',50)")  # added by someone else
+        edit={'positions':{'TEST':{'stop':92}}}
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            stats=alert_compiler.save_structural_key_levels(edit,baseline)
+        self.assertNotIn('error',stats)
+        self.assertEqual(self.execute("SELECT support FROM key_levels WHERE section='watch' AND ticker='OTHER'",fetch=True)[0][0],50)
+        self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],92)
+
+    def test_p10_save_removes_row_explicitly_dropped_by_user(self):
+        """A ticker present in baseline but absent from the new submission
+        (user deleted it in the UI) must actually be deleted."""
+        from morning_brief import alert_compiler
+        baseline={'positions':{'TEST':{'stop':90}}}
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
+        edit={'positions':{}}
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            alert_compiler.save_structural_key_levels(edit,baseline)
+        self.assertEqual(self.execute("SELECT count(*) FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],0)
+
+    def test_p10_save_dry_run_writes_nothing(self):
+        from morning_brief import alert_compiler
+        baseline={'positions':{'TEST':{'stop':90}}}
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
+        edit={'positions':{'TEST':{'stop':95}}}
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            alert_compiler.save_structural_key_levels(edit,baseline,dry_run=True)
+        self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],90)
+        self.assertEqual(self.execute('SELECT count(*) FROM price_alerts',fetch=True)[0][0],0)
+
     def test_resync_after_purge_does_not_reenter_queue(self):
         from alerts.management import apply_bulk,preview_action
         item=self.stage(110)
@@ -290,6 +459,131 @@ class JournalReviewDatabaseTests(unittest.TestCase):
             self.assertEqual(self.execute('SELECT count(*) FROM price_alerts',fetch=True)[0][0],1)
             quotes.assert_not_called()
         self.delivery.assert_not_called()
+
+    def test_p10_browser_stale_save_shows_error_not_success(self):
+        """Group C: the baseline P10 pins for conflict detection must be tied
+        to what was loaded the first time this session rendered Tab 2, not
+        whatever the DB holds on a later rerun — and a save that conflicts
+        with a concurrent change (e.g. an approval) must render as an error,
+        never a success banner."""
+        import streamlit as st
+        from streamlit.testing.v1 import AppTest
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
+        st.cache_data.clear()
+        p10_path = str(fixtures.ROOT/'dashboard'/'pages'/'P10_Morning_Brief.py')
+        with patch('etrade_sync.db.get_connection',self.connect), \
+             patch('dashboard.db.get_connection',self.connect), \
+             patch('morning_brief.alert_compiler.get_connection',self.connect), \
+             patch('dashboard.journal_review_ui.quote_snapshot'):
+            app=AppTest.from_file(p10_path,default_timeout=30).run()
+            self.assertEqual(len(app.exception),0)
+            self.assertEqual(app.number_input(key='pos_stop_TEST').value,90)
+
+            # Concurrent change behind this session's back (e.g. a journal-review
+            # stop approval), after this page's baseline/widgets were already set.
+            self.execute("UPDATE key_levels SET stop=95 WHERE section='positions' AND ticker='TEST'")
+
+            # An unrelated rerun (toggling the delete checkbox off, a no-op)
+            # must NOT silently refresh the pinned baseline to the new DB value.
+            app.checkbox(key='pos_del_TEST').set_value(False).run()
+            self.assertEqual(len(app.exception),0)
+            self.assertEqual(app.number_input(key='pos_stop_TEST').value,90,
+                              "widget must still show the originally loaded value, not this rerun's DB state")
+
+            # Save All, with the stale widget value (90) still showing: must be
+            # refused as an error, never reported as success, and the
+            # concurrently-set value (95) must survive untouched.
+            app.button(key='p10_save_all_button').click().run()
+            self.assertEqual(len(app.exception),0)
+            alerts = [a for a in app.error if 'Not saved' in a.value]
+            self.assertTrue(alerts, 'expected an error alert reporting the save was refused')
+            self.assertFalse(any('saved and structural alerts reconciled' in s.value for s in app.success))
+            self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],95)
+
+            # Refresh from DB: must pick up the now-current value and clear the stale state.
+            app.button(key='p10_refresh_button').click().run()
+            self.assertEqual(len(app.exception),0)
+            self.assertEqual(app.number_input(key='pos_stop_TEST').value,95)
+
+    def test_p10_browser_partial_completion_distinguishes_from_rejection(self):
+        """When key_levels commits but the alert refresh afterward fails, the
+        UI must say so distinctly — never "Not saved" (that phrasing is for a
+        full rejection where nothing was written) — and the value must
+        actually be persisted, matching what the message reports."""
+        import streamlit as st
+        from streamlit.testing.v1 import AppTest
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
+        st.cache_data.clear()
+        p10_path = str(fixtures.ROOT/'dashboard'/'pages'/'P10_Morning_Brief.py')
+        with patch('etrade_sync.db.get_connection',self.connect), \
+             patch('dashboard.db.get_connection',self.connect), \
+             patch('morning_brief.alert_compiler.get_connection',self.connect), \
+             patch('morning_brief.alert_compiler.reconcile_structural_alerts',side_effect=RuntimeError('alert refresh boom')), \
+             patch('dashboard.journal_review_ui.quote_snapshot'):
+            app=AppTest.from_file(p10_path,default_timeout=30).run()
+            self.assertEqual(len(app.exception),0)
+            app.number_input(key='pos_stop_TEST').set_value(93).run()
+            app.button(key='p10_save_all_button').click().run()
+            self.assertEqual(len(app.exception),0)
+            messages=[a.value for a in app.error]
+            self.assertTrue(any('Key levels saved' in m and 'alert refresh failed' in m for m in messages),
+                             f'expected a partial-completion message, got: {messages}')
+            self.assertFalse(any(m.startswith('Not saved') for m in messages),
+                              "a partial completion must not be reported with the full-rejection phrasing")
+            self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],93,
+                              'the save must have actually persisted, matching the partial-completion message')
+
+    def test_p10_browser_sidebar_sync_positions_flash_persists_across_rerun(self):
+        """Sync Positions from DB renders its banner then immediately calls
+        st.rerun() — which discards anything rendered in that same run. The
+        banner must be stashed in session_state and shown on the NEXT render
+        instead, or it can vanish before the user ever sees it. Also confirms
+        this sidebar path distinguishes rejection from partial completion
+        like every other save path (Group C)."""
+        import streamlit as st
+        from streamlit.testing.v1 import AppTest
+        self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
+        p10_path = str(fixtures.ROOT/'dashboard'/'pages'/'P10_Morning_Brief.py')
+
+        def raise_rejection(*a, **k):
+            raise ValueError('simulated rejection')
+
+        def partial_completion(*a, **k):
+            return {"created":0,"updated":0,"archived":0,"deduped":0,"backfilled":0,
+                    "key_levels_saved":True,"error":"simulated partial failure"}
+
+        # Separate AppTest sessions per scenario (a second click-and-rerun on
+        # the same session has shown unrelated Streamlit form-state flakiness
+        # unrelated to what's under test here).
+        st.cache_data.clear()
+        with patch('etrade_sync.db.get_connection',self.connect), \
+             patch('dashboard.db.get_connection',self.connect), \
+             patch('morning_brief.alert_compiler.save_structural_key_levels',raise_rejection), \
+             patch('morning_brief.fetchers.fetch_positions_from_db',return_value=[]), \
+             patch('dashboard.journal_review_ui.quote_snapshot'):
+            app=AppTest.from_file(p10_path,default_timeout=30).run()
+            self.assertEqual(len(app.exception),0)
+            app.sidebar.button(key='p10_sync_positions_button').click().run()
+            self.assertEqual(len(app.exception),0)
+            messages=[a.value for a in app.sidebar.error]
+            self.assertTrue(any(m.startswith('Not saved') and 'simulated rejection' in m for m in messages),
+                             f'expected a persisted rejection banner after the rerun, got: {messages}')
+
+        st.cache_data.clear()
+        with patch('etrade_sync.db.get_connection',self.connect), \
+             patch('dashboard.db.get_connection',self.connect), \
+             patch('morning_brief.alert_compiler.save_structural_key_levels',partial_completion), \
+             patch('morning_brief.fetchers.fetch_positions_from_db',return_value=[]), \
+             patch('dashboard.journal_review_ui.quote_snapshot'):
+            app=AppTest.from_file(p10_path,default_timeout=30).run()
+            self.assertEqual(len(app.exception),0)
+            app.sidebar.button(key='p10_sync_positions_button').click().run()
+            self.assertEqual(len(app.exception),0)
+            messages=[a.value for a in app.sidebar.error]
+            self.assertTrue(any('Key levels saved' in m and 'simulated partial failure' in m for m in messages),
+                             f'expected a persisted partial-completion banner after the rerun, got: {messages}')
+            self.assertFalse(any(m.startswith('Not saved') for m in messages),
+                              'a partial completion must not be reported with the full-rejection phrasing')
 
     def test_blocked_and_invalid_batch_never_partially_activates(self):
         valid=self.stage(110)

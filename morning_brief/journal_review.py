@@ -4,6 +4,7 @@ from decimal import Decimal
 import hashlib
 import json
 import re
+import sys
 
 from alerts.lifecycle import LOCK_NAMESPACE, load_alerts, valid_price
 from alerts.management import fingerprint, _audit, _manual_values, _audit_json
@@ -28,6 +29,12 @@ def item_token(item):
 
 def normalize_extraction(extracted, text, file_path):
     """Conservative evidence validation; old extraction shapes become blocked ideas."""
+    if not isinstance(extracted, dict):
+        raise ValueError('Journal extraction must be an object')
+    for field in ('positions', 'watch_levels', 'price_alerts'):
+        values = extracted.get(field, [])
+        if not isinstance(values, list) or any(not isinstance(value, dict) for value in values):
+            raise ValueError(f'Journal {field} must be an array of objects; nothing staged')
     result = {}
     dates = re.findall(r'\d{4}-\d{2}-\d{2}', str(file_path))
     try:
@@ -87,7 +94,18 @@ def normalize_extraction(extracted, text, file_path):
                 add(raw, 'watch', condition, raw[field])
     for raw in extracted.get('price_alerts') or []:
         add(raw, 'request', raw.get('condition'), raw.get('threshold'))
-    for raw in extracted.get('commentary') or []:
+    commentary = extracted.get('commentary')
+    if commentary is None:
+        commentary = []
+    if not isinstance(commentary, list):
+        print('WARNING: ignored malformed optional commentary (expected an array of objects).', file=sys.stderr)
+        commentary = []
+    malformed = sum(not isinstance(raw, dict) for raw in commentary)
+    if malformed:
+        print(f'WARNING: ignored {malformed} malformed optional commentary item(s); actionable ideas preserved.', file=sys.stderr)
+    for raw in commentary:
+        if not isinstance(raw, dict):
+            continue
         add(raw, 'context')
     return list(result.values())
 

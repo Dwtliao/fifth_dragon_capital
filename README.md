@@ -297,7 +297,11 @@ saved levels for personalized commentary.
 ideas from new or modified `trading_journal_*.md` files. Extraction only stages evidence;
 it no longer writes live key levels, creates alerts, moves thresholds or renews expiries.
 An unchanged file is skipped using `journal_sync_log`; extraction-schema upgrades are
-processed once even when the file is unchanged. `--all` forces reprocessing. Market
+processed once even when the file is unchanged. Sync is limited to the five most recently
+modified files by default; P10's **Sync Last 5 Journals** uses `--recent 5`. This is five
+files, not necessarily five trading days. Unchanged files are skipped, not replaced by
+older files outside the selection. `--file` targets one file; `--force` reprocesses only
+the selected file(s). The unbounded `--all` option has been removed. Market
 context generation works even when there is no new journal.
 
 ### Journal approval workflow (October 11)

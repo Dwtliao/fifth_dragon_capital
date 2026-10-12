@@ -539,6 +539,21 @@ def _desired_map(desired_alerts: list[dict]) -> dict[tuple[str, str], dict]:
     return desired_map
 
 
+class _LockCoverageDrifted(Exception):
+    """Internal control-flow signal: a reload (or a newly discovered guard
+    requirement) needs a lock this attempt never acquired, or can't acquire
+    now without breaking global ascending lock order. Caught by
+    reconcile_alerts to abandon the attempt (releasing all its locks) and
+    retry on a fresh connection, rather than acquire the missing lock out of
+    order. Carries the most complete `desired_map` known at the time of the
+    abandonment, so the next attempt starts already knowing about it instead
+    of re-discovering — and re-abandoning over — the same gap."""
+
+    def __init__(self, desired_map=None):
+        super().__init__()
+        self.desired_map = desired_map
+
+
 def reconcile_alerts(
     desired_alerts: list[dict],
     *,
@@ -585,83 +600,130 @@ def reconcile_alerts(
         tickers |= {str(alert.get('ticker') or '').strip().upper() for alert in desired.values()}
         return guards, {t for t in tickers if t}
 
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            # Lock ordering must match review_action/apply_bulk's (guard, then
-            # per-ticker symbol, then row) or the two can deadlock: a stop
-            # approval takes guard-then-symbol while an insert here used to
-            # take symbol-then-guard (the guard being taken implicitly, inside
-            # the DB trigger, the moment an INSERT statement runs).
-            held_guards: set[str] = set()
-            held_tickers: set[str] = set()
-            for _ in range(5):
-                guards, tickers = _required_locks(cur, desired_map)
-                new_guards = sorted(guards - held_guards)
-                new_tickers = sorted(tickers - held_tickers)
-                for guard in new_guards:
-                    cur.execute('SELECT pg_advisory_lock(%s,hashtext(%s))', (LOCK_NAMESPACE + 2, guard))
-                held_guards |= set(new_guards)
-                for ticker in new_tickers:
+    # Seeds each attempt's starting desired_map. Updated on every abandonment to
+    # the most complete map known at that point, so a retry starts already
+    # knowing about whatever the previous attempt discovered — it never just
+    # re-tries the same stale starting set and re-discovers (and re-abandons
+    # over) the same gap forever.
+    next_attempt_seed = desired_map
+
+    for _attempt in range(5):
+        desired_map = next_attempt_seed
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                # Lock ordering must match review_action/apply_bulk's (ALL guards,
+                # then ALL per-ticker symbols, then row locks) everywhere, with no
+                # exceptions — including across this function's own retries. A
+                # guard acquired after a symbol lock (even one taken in an earlier
+                # retry attempt of this *same* call) reintroduces the deadlock the
+                # ordering fix exists to prevent: another session taking the
+                # reverse order can then hold what this one wants next while
+                # waiting on what this one already holds. So each attempt here
+                # starts from zero locks (a fresh connection) and, within that
+                # attempt, acquires every guard it will ever need before it
+                # acquires its first symbol lock — never the two interleaved.
+
+                # Phase 1: stabilize and acquire ONLY guard locks, strictly in
+                # ascending order. A reload can discover a guard that sorts
+                # *before* one already held here — e.g. this session holds
+                # guard "B" from an earlier iteration, then a reload reveals
+                # guard "A" is needed too. Acquiring A now, after B, would
+                # still be guard-before-symbol locally, but it breaks the
+                # *global* ascending order every other session relies on:
+                # another session legitimately holding A and waiting on B
+                # would then deadlock against this one (holds B, waits on A).
+                # So a newly discovered guard is only acquired here if it
+                # sorts after everything already held; otherwise this attempt
+                # is abandoned (never patched in place) and retried fresh,
+                # carrying the enlarged requirement forward so the next
+                # attempt acquires both in one correctly ordered pass.
+                held_guards: set[str] = set()
+                for _ in range(5):
+                    guards, _tickers = _required_locks(cur, desired_map)
+                    new_guards = sorted(guards - held_guards)
+                    if held_guards and new_guards and new_guards[0] < max(held_guards):
+                        raise _LockCoverageDrifted(desired_map)
+                    for guard in new_guards:
+                        cur.execute('SELECT pg_advisory_lock(%s,hashtext(%s))', (LOCK_NAMESPACE + 2, guard))
+                    held_guards |= set(new_guards)
+                    if reload_desired is None:
+                        break
+                    desired_map = _desired_map(reload_desired())
+                    guards, _tickers = _required_locks(cur, desired_map)
+                    if guards <= held_guards:
+                        break
+                else:
+                    raise RuntimeError('Could not stabilize guard-lock coverage for this reconcile; retry later')
+
+                # Phase 2: with guards fully covered, acquire ALL symbol locks in
+                # one batch — never acquire a new guard after this point.
+                _guards, tickers = _required_locks(cur, desired_map)
+                for ticker in sorted(tickers):
                     symbol = int.from_bytes(hashlib.sha256(ticker.encode()).digest()[:4], 'big', signed=True)
                     cur.execute('SELECT pg_advisory_lock(%s,%s)', (LOCK_NAMESPACE + 1, symbol))
-                held_tickers |= set(new_tickers)
-                if reload_desired is None:
-                    break
-                desired_map = _desired_map(reload_desired())
-                stats["desired"] = len(desired_map)
-                # The reload can introduce a ticker/condition the first pass never
-                # locked (e.g. a key level someone else just added). Locking is
-                # only real protection if it covers everything we're about to read
-                # and write — if the reload's requirements aren't a subset of what
-                # we hold, go around again and pick up the gap before proceeding.
-                guards, tickers = _required_locks(cur, desired_map)
-                if guards <= held_guards and tickers <= held_tickers:
-                    break
-            else:
-                raise RuntimeError('Could not stabilize lock coverage for this reconcile; retry later')
-            current_rows = _load_managed_alerts(cur, sources)
-            groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
-            for row in current_rows:
-                source = row.get("source")
-                source_key = row.get("source_key")
-                if not source or not source_key:
-                    continue
-                groups[(source, source_key)].append(row)
+                held_tickers = set(tickers)
 
-            for key, rows in groups.items():
-                keeper = rows[0]
-                extras = rows[1:]
-                desired = desired_map.get(key)
+                if reload_desired is not None:
+                    desired_map = _desired_map(reload_desired())
+                    stats["desired"] = len(desired_map)
+                    guards, tickers = _required_locks(cur, desired_map)
+                    if not (guards <= held_guards and tickers <= held_tickers):
+                        # This reload needs a guard or ticker this attempt never
+                        # locked. Acquiring it now would be the exact ordering bug
+                        # being fixed, so this attempt is abandoned (closing the
+                        # connection below releases everything it holds) and
+                        # retried from zero rather than patched in place.
+                        raise _LockCoverageDrifted(desired_map)
 
-                if extras:
-                    for extra in extras:
-                        _archive_alert(cur, extra["id"])
-                    stats["deduped"] += len(extras)
-
-                if desired is None:
-                    if not archive_missing:
+                current_rows = _load_managed_alerts(cur, sources)
+                groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+                for row in current_rows:
+                    source = row.get("source")
+                    source_key = row.get("source_key")
+                    if not source or not source_key:
                         continue
-                    _archive_alert(cur, keeper["id"])
-                    stats["archived"] += 1
-                    continue
+                    groups[(source, source_key)].append(row)
 
-                action = _apply_upsert(cur, keeper, desired)
-                stats[action] += 1
+                for key, rows in groups.items():
+                    keeper = rows[0]
+                    extras = rows[1:]
+                    desired = desired_map.get(key)
 
-            for key, desired in desired_map.items():
-                if key in groups:
-                    continue
-                action = _apply_upsert(cur, None, desired)
-                stats[action] += 1
+                    if extras:
+                        for extra in extras:
+                            _archive_alert(cur, extra["id"])
+                        stats["deduped"] += len(extras)
 
-        if dry_run:
+                    if desired is None:
+                        if not archive_missing:
+                            continue
+                        _archive_alert(cur, keeper["id"])
+                        stats["archived"] += 1
+                        continue
+
+                    action = _apply_upsert(cur, keeper, desired)
+                    stats[action] += 1
+
+                for key, desired in desired_map.items():
+                    if key in groups:
+                        continue
+                    action = _apply_upsert(cur, None, desired)
+                    stats[action] += 1
+
+            if dry_run:
+                conn.rollback()
+            else:
+                conn.commit()
+            return stats
+        except _LockCoverageDrifted as drift:
             conn.rollback()
-        else:
-            conn.commit()
-        return stats
-    finally:
-        conn.close()
+            if drift.desired_map is not None:
+                next_attempt_seed = drift.desired_map
+            continue
+        finally:
+            conn.close()
+    raise RuntimeError('Could not stabilize lock coverage for this reconcile; retry later')
 
 
 def reconcile_structural_alerts(
@@ -821,7 +883,7 @@ def _clear_expires_at(source_key: str, *, dry_run: bool = False) -> None:
         conn.close()
 
 
-_KL_FIELDS = ("stop", "support", "resistance", "alert_above")
+_KL_FIELDS = ("stop", "support", "resistance", "alert_above", "note")
 
 
 def save_structural_key_levels(key_levels: dict, baseline_key_levels: dict, *, dry_run: bool = False) -> dict:
@@ -830,24 +892,38 @@ def save_structural_key_levels(key_levels: dict, baseline_key_levels: dict, *, d
     `baseline_key_levels` is whatever the caller last loaded from the DB
     before building `key_levels` from user edits. Under the same per-ticker
     locks the compiler uses, re-reads the authoritative key_levels and
-    refuses (raises ValueError) if any ticker/field differs from the
-    baseline — i.e. something else (e.g. a journal-review stop approval)
-    changed it since the UI loaded, and saving now would silently clobber
-    that change with stale widget state. Caller should reload and retry.
+    refuses (raises ValueError) if any (section, ticker) row this call
+    touches — including its `note` — differs from the baseline, in value
+    or in existence, from what's currently in the DB: i.e. something else
+    (e.g. a journal-review stop approval, or another session adding a row
+    this call never saw) changed it since the UI loaded. Caller should
+    reload and retry.
+
+    Only rows present in `baseline_key_levels` or `key_levels` are written:
+    a row in neither (added by someone else after baseline, concurrently
+    with this call) is left untouched rather than wiped by a blind
+    delete-and-replace of the whole table.
+
+    `dry_run=True` performs the comparison but writes nothing and rolls
+    back, same as `reconcile_structural_alerts`'s own `dry_run`.
     """
     from morning_brief.fetchers import load_key_levels_from_db
 
-    def _flat(levels):
-        flat = {}
+    def _rows(levels):
+        rows = {}
         for section in ("positions", "watch"):
             for ticker, vals in (levels.get(section) or {}).items():
-                for field in _KL_FIELDS:
-                    if (vals or {}).get(field) is not None:
-                        flat[(ticker.strip().upper(), field)] = float(vals[field])
-        return flat
+                vals = vals or {}
+                key = (section, ticker.strip().upper())
+                rows[key] = tuple(
+                    vals.get(f) if f == "note" else (float(vals[f]) if vals.get(f) is not None else None)
+                    for f in _KL_FIELDS
+                )
+        return rows
 
-    baseline_flat = _flat(baseline_key_levels)
-    touched = set(baseline_flat) | set(_flat(key_levels))
+    baseline_rows = _rows(baseline_key_levels)
+    new_rows = _rows(key_levels)
+    touched = set(baseline_rows) | set(new_rows)
 
     # Everything below shares one connection (locks + compare + save), so the
     # comparison can't read through a different, unpatched/unlocked session
@@ -855,31 +931,59 @@ def save_structural_key_levels(key_levels: dict, baseline_key_levels: dict, *, d
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            for ticker in sorted({t for t, _ in touched}):
+            for ticker in sorted({t for _, t in touched}):
                 symbol = int.from_bytes(hashlib.sha256(ticker.encode()).digest()[:4], 'big', signed=True)
                 cur.execute('SELECT pg_advisory_lock(%s,%s)', (LOCK_NAMESPACE + 1, symbol))
-            cur.execute("SELECT section,ticker,stop,support,resistance,alert_above FROM key_levels")
-            current_flat = {}
-            for section, ticker, stop, support, resistance, alert_above in cur.fetchall():
-                for field, value in (("stop", stop), ("support", support), ("resistance", resistance), ("alert_above", alert_above)):
-                    if value is not None:
-                        current_flat[(str(ticker).strip().upper(), field)] = float(value)
-            conflicts = sorted(f"{t}:{field}" for t, field in touched if current_flat.get((t, field)) != baseline_flat.get((t, field)))
+            cur.execute("SELECT section,ticker,stop,support,resistance,alert_above,note FROM key_levels")
+            current_rows = {}
+            for section, ticker, stop, support, resistance, alert_above, note in cur.fetchall():
+                key = (section, str(ticker).strip().upper())
+                current_rows[key] = (
+                    float(stop) if stop is not None else None,
+                    float(support) if support is not None else None,
+                    float(resistance) if resistance is not None else None,
+                    float(alert_above) if alert_above is not None else None,
+                    note,
+                )
+            conflicts = sorted(f"{s}:{t}" for (s, t) in touched if current_rows.get((s, t)) != baseline_rows.get((s, t)))
             if conflicts:
                 raise ValueError(f"Changed since this page loaded, refresh before saving: {', '.join(conflicts)}")
-            cur.execute("DELETE FROM key_levels")
+            for section, ticker_upper in sorted(set(baseline_rows) - set(new_rows)):
+                cur.execute("DELETE FROM key_levels WHERE section=%s AND upper(ticker)=%s", (section, ticker_upper))
             for section in ("positions", "watch"):
                 for ticker, vals in (key_levels.get(section) or {}).items():
+                    vals = vals or {}
                     cur.execute(
                         "INSERT INTO key_levels (section,ticker,stop,support,resistance,alert_above,note,updated_at) "
-                        "VALUES (%s,%s,%s,%s,%s,%s,%s,NOW())",
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,NOW()) "
+                        "ON CONFLICT (section,ticker) DO UPDATE SET stop=EXCLUDED.stop,support=EXCLUDED.support,"
+                        "resistance=EXCLUDED.resistance,alert_above=EXCLUDED.alert_above,note=EXCLUDED.note,"
+                        "updated_at=NOW()",
                         (section, ticker, vals.get("stop"), vals.get("support"), vals.get("resistance"),
                          vals.get("alert_above"), vals.get("note")),
                     )
-        conn.commit()
+            if dry_run:
+                conn.rollback()
+            else:
+                conn.commit()
     finally:
         conn.close()  # Releases the locks; reconcile below takes its own.
-    return reconcile_structural_alerts(key_levels, dry_run=dry_run, reload_key_levels=load_key_levels_from_db)
+
+    # key_levels is now committed (or, under dry_run, rolled back) — a failure
+    # from here on is NOT "nothing was saved". A CAS conflict above raises
+    # before this point and is reported as a full rejection; a failure here is
+    # a partial completion (levels saved, alert refresh failed) and must be
+    # reported as such, not conflated with the former.
+    try:
+        stats = reconcile_structural_alerts(key_levels, dry_run=dry_run, reload_key_levels=load_key_levels_from_db)
+    except Exception as exc:
+        return {
+            "created": 0, "updated": 0, "archived": 0, "deduped": 0, "backfilled": 0,
+            "key_levels_saved": not dry_run,
+            "error": str(exc),
+        }
+    stats["key_levels_saved"] = not dry_run
+    return stats
 
 
 def refresh_structural_alerts_from_db(*, dry_run: bool = False) -> dict:

@@ -5,10 +5,26 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from dashboard.morning_pipeline import run_command, run_morning_pipeline
+from dashboard.morning_pipeline import run_command, run_morning_pipeline, positions_sync_message
 
 
 class MorningPipelineTests(unittest.TestCase):
+    def test_position_sync_message_explains_metadata_and_archive_counts(self):
+        message=positions_sync_message(['CNC','GLD'],[],dict(created=0,updated=0,archived=26,deduped=0))
+        self.assertIn('Positions metadata synced successfully.',message)
+        self.assertIn('Added 2 symbols: CNC, GLD.',message)
+        self.assertIn('no alerts created or updated',message)
+        self.assertIn('marked or kept archived',message)
+        self.assertIn('includes previously archived',message)
+        self.assertIn('No trades were placed',message)
+        self.assertNotIn('created=',message)
+
+    def test_position_sync_message_no_changes_and_removed_entries(self):
+        self.assertIn('No changes to the saved symbol list',positions_sync_message([],[],{}))
+        message=positions_sync_message([],['OLD'],dict(created=1,updated=2,deduped=1))
+        self.assertIn('Removed 1 closed-position',message)
+        self.assertIn('1 new; 2 updated',message)
+        self.assertIn('1 duplicate alert archived',message)
     def test_sync_refreshes_holdings_before_brief(self):
         holdings = ["old"]
         calls = []

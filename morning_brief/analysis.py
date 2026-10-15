@@ -30,8 +30,6 @@ def build_evidence(overview, positions, key_levels):
         if last is not None and stop is not None and stop > 0:
             row["distance_above_saved_stop_pct"] = (last / stop - 1) * 100
         evidence[f"holding:{ticker}"] = row
-    for ticker, levels in (key_levels.get("watch") or {}).items():
-        evidence[f"watch:{ticker}"] = {"ticker": ticker, **levels}
     return {"fetched_at": overview["fetched_at"], "current_holdings": holdings, "evidence": evidence}
 
 
@@ -46,8 +44,7 @@ Use at most three items in each array and at most 350 words total. Every item
 needs valid evidence IDs. Distinguish facts from possible interpretations;
 correlation does not prove causation. Select meaningful moves and conflicting
 signals instead of narrating every row. Portfolio tickers must belong to
-current_holdings; if none are supplied return an empty portfolio array. A saved
-watch ticker is not a holding. Missing prices mean stop proximity is unknown.
+current_holdings; if none are supplied return an empty portfolio array. Journal ideas and alert symbols are not holdings. Missing prices mean stop proximity is unknown.
 Market yield_pct changes are BASIS POINTS; price and ratio changes are percent.
 Comparison bp and USD/barrel changes are absolute differences, not percentages.
 Use bar dates, distinguish differing sessions, and flag stale evidence. Daily

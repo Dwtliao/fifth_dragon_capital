@@ -131,7 +131,7 @@ class MarketContextTests(unittest.TestCase):
         row['above_ma20'] = None
         self.assertIn('— / :red[at/below]', formatter.render_market_overview(overview))
 
-    def test_market_failure_does_not_prevent_positions_or_watch_sections(self):
+    def test_market_failure_does_not_prevent_positions_or_journal_ideas(self):
         from morning_brief import brief
 
         with patch("morning_brief.brief.fetch_market_overview", side_effect=ValueError("market offline")), \
@@ -140,10 +140,8 @@ class MarketContextTests(unittest.TestCase):
              patch("morning_brief.fetchers.load_key_levels_from_db", return_value={}), \
              patch("morning_brief.fetchers.fetch_fed_events", return_value=[]), \
              patch("morning_brief.fetchers.fetch_positions", return_value=[{"label": "Holding"}]), \
-             patch("morning_brief.fetchers.fetch_watch_levels", return_value=[{"label": "Watch"}]), \
-             patch("morning_brief.formatter.render_positions", return_value="holdings retained"), \
-             patch("morning_brief.formatter.render_key_levels", return_value="watch retained"):
+             patch("morning_brief.formatter.render_positions", return_value="holdings retained"):
             output = brief.generate_brief()
         self.assertIn("market offline", output)
         self.assertIn("holdings retained", output)
-        self.assertIn("watch retained", output)
+        self.assertIn("JOURNAL IDEAS", output)

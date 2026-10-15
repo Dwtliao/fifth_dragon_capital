@@ -3,6 +3,30 @@ _Last updated: July 24, 2026. Read this at the start of every session._
 
 ---
 
+## October 15 — Watch Levels retired in production
+
+Step 5 is complete. Migration 078 was applied transactionally and verified against
+pre-migration fingerprints. P10 contains Position Stops/notes; P11 is the only
+discretionary alert editor. No saved Watch Levels grid, reference rows, watch-only
+columns, YAML seed, new brief table or analysis evidence remain. Old cached brief
+display hides the retired table without rewriting historical artifacts. Journal
+ideas/evidence and explicit alert creation are retained. Exact stop behavior and
+legacy alert/control identities remain intact, including `key_levels_watch`.
+
+Preserved 23 position rows, 39 alerts and all 50 other public/recovery tables;
+sequence values and shared triggers unchanged. Fresh backup:
+`fifth_dragon_capital_20261015_180344.dump` in the existing Dropbox db_backups folder.
+See `docs/watch_levels_step5_deployment_20261015.json` and PLAN.md for checksums,
+preservation evidence and rollback constraints. 222 isolated tests passed.
+Ordinary schema initialization now avoids replaying migration 069's expiry
+backfill once the expiry column exists, preserving explicit no-expiry alerts.
+
+Email remains disabled; keep the scheduled poller unloaded. The temporary
+Streamlit verification instance was stopped; the user starts the dashboard
+manually. No broker sync/orders, journal extraction, live quote polling, push or
+merge were performed as part of deployment. Do not revert to old key-level
+readers against the position-only schema or restore a full dump over newer data.
+
 ## Project Overview
 Personal trading infrastructure. PostgreSQL DB + Python + Streamlit dashboard.
 Owner: David Liao (david.liao@precisetarget.com)
@@ -28,7 +52,7 @@ fifth_dragon_capital/
 ├── etrade_sync/         # existing — DO NOT MODIFY
 ├── morning_brief/       # NEW module — all new work goes here
 │   ├── __init__.py
-│   ├── key_levels.yml   # user metadata: stops, notes, watch levels
+│   ├── key_levels.yml   # position-only seed metadata: stops, notes
 │   ├── fetchers.py      # data fetching + DB sync
 │   ├── formatter.py     # markdown renderer
 │   └── brief.py        # main entrypoint: python -m morning_brief.brief
@@ -43,7 +67,7 @@ fifth_dragon_capital/
 ## Architecture — Two-Layer Position Data
 
 1. **PostgreSQL DB (`mv_unrealized_pnl`)** — authoritative source for tickers + cost basis + P&L
-2. **`morning_brief/key_levels.yml`** — user metadata layer: stops, notes, watch levels
+2. **`key_levels` DB table** — position stops/notes; position-only YAML seed on an empty table
 
 `sync_positions_from_db()` smart merge rules:
 - Add new tickers from DB not in YAML
@@ -89,7 +113,6 @@ The latest confirmed pre-follow-up backup was
 | `fetch_positions_from_db()` | Queries `mv_unrealized_pnl` via `etrade_sync.db.get_connection()` |
 | `sync_positions_from_db(key_levels)` | Smart merge. Returns `(updated_kl, added, removed)` |
 | `fetch_positions(key_levels)` | DB-first, merges YAML metadata, falls back to YAML-only |
-| `fetch_watch_levels(key_levels)` | Computes distance to support/resistance |
 | `_fetch_snapshot(symbols)` | Batch yfinance download with per-ticker error handling |
 | `fetch_global_indices()` | Calls `_fetch_snapshot` |
 | `fetch_us_futures()` | Calls `_fetch_snapshot` |
@@ -119,7 +142,7 @@ Streamlit page at `dashboard/pages/P10_Morning_Brief.py`. User-built, Claude add
 
 **Tabs:**
 - **Tab 1 (Brief):** Renders `trading_diary/morning_brief.md` (output of `python -m morning_brief.brief`)
-- **Tab 2 (Key Levels):** Editable UI for positions (stops/notes) and watch levels. DB snapshot read-only table at top. Save All button syncs `alert_above` values to `price_alerts` DB table.
+- **Tab 2 (Position Stops):** Editable position stops/notes only. DB snapshot read-only table at top. Save All maintains configured stop alerts. Discretionary alerts belong in P11.
 - **Tab 3 (Sync History):** Reads `journal_sync_log` table.
 
 **Sidebar buttons:**
@@ -178,13 +201,6 @@ Columns used from `mv_unrealized_pnl`:
 positions:
   TICKER:
     stop: 54.95        # float, optional
-    note: "text"       # string, optional
-
-watch:
-  TICKER:
-    support: 4200.0    # float, optional
-    resistance: 4489.0 # float, optional
-    alert_above: 18.0  # float, optional — synced to price_alerts DB table on Save
     note: "text"       # string, optional
 ```
 

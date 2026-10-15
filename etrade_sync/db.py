@@ -22,13 +22,26 @@ def get_connection():
     return psycopg2.connect(DATABASE_URL)
 
 
+def _execute_schema_file(cur, path):
+    """Do not replay the legacy expiry backfill after the column is installed."""
+    contents = path.read_text()
+    if path.name == '069_price_alerts_source_tier_expiry.sql':
+        cur.execute("""SELECT EXISTS(SELECT 1 FROM information_schema.columns
+            WHERE table_schema=current_schema() AND table_name='price_alerts'
+            AND column_name='expires_at')""")
+        if cur.fetchone()[0]:
+            # Retain additive schema repair, but preserve explicit no-expiry rules.
+            contents = contents.partition('-- Back-fill:')[0]
+    cur.execute(contents)
+
+
 def create_tables():
     """Execute all data_model/*.sql files in numbered order."""
     sql_files = sorted(DATA_MODEL_DIR.glob("*.sql"))
     with get_connection() as conn:
         with conn.cursor() as cur:
             for path in sql_files:
-                cur.execute(path.read_text())
+                _execute_schema_file(cur, path)
 
 
 def migrate():
@@ -54,7 +67,7 @@ def migrate():
     with get_connection() as conn:
         with conn.cursor() as cur:
             for path in sql_files:
-                cur.execute(path.read_text())
+                _execute_schema_file(cur, path)
                 print(f"  applied: {path.name}")
 
     # Step 3: refresh views with data

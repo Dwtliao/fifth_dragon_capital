@@ -587,6 +587,138 @@ Before any future production removal, take another backup if newer trading or
 alert edits need protection. Do not restore the entire database over newer
 production data; isolate any validation and review targeted recovery separately.
 
+#### October 15 — Step 4 result: isolated Watch Levels removal tested
+
+User authorized Step 4 only. Implemented and tested in a separate detached
+checkout at `/private/tmp/fdc-watch-levels-step4`, based on `85f8e2e`; the running
+workspace `/Users/davidliao/git_repos/fifth_dragon_capital` is unchanged, clean,
+and still on `dev/journal-review-refinements`. No new commit, push or merge.
+Do not confuse the isolated checkout's modified files with a production deploy.
+
+**Implemented in the isolated checkout:**
+
+- P10's second tab is Position Stops. Removed the saved Watch Levels grid,
+  add/delete widgets and Save All watch payload. Added a direct Open Alerts
+  button. Historical extracted journal ideas remain visible as evidence.
+- Removed saved-watch quote fetching, brief table rendering, analysis evidence
+  injection and YAML seed entries. Journal extraction/review and explicit P11
+  creation are preserved. Existing P11 alert source identities are retained.
+- Position-only loading and both save paths work before and after migration.
+  DB-read failure is visible and disables P10 saving rather than treating it
+  as an empty successful read. The brief still renders its market sections
+  with a visible position-metadata-unavailable notice.
+- Added `078_retire_saved_watch_levels.sql`: one bounded transaction removes
+  only saved watch rows/columns and restricts `key_levels` to positions. Keeps
+  position IDs/stops/notes/timestamps, all alerts/controls/history and recovery
+  tables. No CASCADE. Unexpected position data or dependencies abort safely.
+
+**Verification:** full backup `fifth_dragon_capital_20261015_175416.dump` restored
+successfully into `/private/tmp` socket, port 55441, database
+`fdc_watch_levels_step4`. No production .env was copied into the checkout.
+Applied migration 078 twice. Removed 27 saved watch rows; preserved all 23
+position rows exactly, including original IDs/stops/notes/timestamps. Hashed
+all 50 other restored public/recovery tables before/after: row counts and
+contents unchanged, including all 39 price alerts and original recovery data.
+All sequence values unchanged. Dry-run stop reconciliation and read-only P10/P11
+Streamlit smoke checks passed against the migrated restored database.
+
+All **220 tests passed, none skipped**, using disposable schemas, dummy broker
+credentials, isolated database URLs and mocked market/LLM/delivery dependencies.
+Tests include double migration, preserved alerts/controls/sequences, rollback on
+unexpected position data and view dependency, bounded lock contention, old-schema
+reader/writer compatibility, stale-save and stop-approval concurrency, direct P11
+editing, ideas-only ingestion, position-only seeding (even with legacy YAML watch
+entries), and graceful brief metadata failure. `git diff --check` passed.
+No broker sync/order, live journal extraction, real quote polling or email sent.
+
+Detailed fingerprints/results: `docs/watch_levels_step4_verification_20261015.json`.
+Repro helper: `scripts/verify_watch_levels_retirement.py`. It refuses checkouts
+with `.env` and refuses any URL other than the designated local restored DB.
+Requires a fresh pre-migration restore for its before/after comparison.
+Regression log: `/private/tmp/watch_levels_step4_tests_final.log`.
+
+**Step 5 remains unstarted.** Production schema/data and live code are unchanged;
+email is disabled and background polling stays unloaded. For later review:
+
+1. Review the isolated diff and preservation report; choose when to deploy.
+2. Take a new backup if there have been intervening edits. Quiesce old P10/brief
+   writers and deploy/restart the position-only code before applying migration
+   078. New code supports the old schema, allowing read-only deployment checks
+   first; old code requires retired columns and must not remain running.
+3. Apply only the reviewed migration in its transaction, compare preserved data
+   and verify P10/P11. No automatic alert conversion, cleanup or restoration.
+4. A rollback after committed column removal is not a code-only revert to
+   `85f8e2e`: old readers would fail. Prefer a forward fix with position-only
+   code. Any schema/data restoration must be targeted, reviewed, backed up and
+   explicitly authorized; never replace newer production trading data with the
+   full test dump. Preserve recovery snapshots and sequence high-water marks.
+
+The isolated database is stopped after verification and retained for review.
+The temporary worktree contains uncommitted changes; keep it until the review
+and any separately authorized promotion are complete.
+
+#### October 15 — Step 5 complete: Watch Levels retired in production
+
+User explicitly authorized production completion. Promoted the tested Step 4
+files into `dev/journal-review-refinements` without overwriting local edits (the
+main checkout was clean). Applied only reviewed migration 078; did not run the
+broad production schema/bootstrap command, broker sync, live extraction or poll.
+
+**Backup and transaction:** fresh full backup created at 18:03:44 CDT using
+`bash scripts/backup_db.sh --no-prune`:
+`/Users/davidliao/Library/CloudStorage/Dropbox/Etrade/db_backups/fifth_dragon_capital_20261015_180344.dump`.
+Size 1,977,174 bytes; SHA-256
+`f713ef03ab4aa634a90c8fd7df89fdd39c6fd9b9a75d19d416a3968cbbf68081`.
+Archive listing verified, earlier backups retained. Migration committed at
+18:04:57 CDT under the poller maintenance advisory lock and exclusive key_levels
+lock with bounded timeouts. The exact tested SQL was executed within a wrapper
+transaction so preservation comparisons completed **before commit**.
+
+Removed exactly 27 `section='watch'` rows and the `support`, `resistance`,
+`alert_above` columns; restricted key_levels to positions. Preserved all 23
+position rows with original IDs/stops/notes/timestamps; all 39 alert rows; all
+50 other public/recovery tables byte-equivalent by sorted row fingerprints;
+all sequence values; and both shared alert-control/purge triggers. No alert
+conversion, automatic creation, historical purge clearing or recovery restore.
+Post-commit read-only comparisons confirmed the same preserved contents.
+
+**Final deployment checks:** 222 tests passed, none skipped, in the separate
+checkout against disposable PostgreSQL schemas with mocked external dependencies.
+Read-only production Streamlit AppTest checks passed for P10 and P11; live Chrome
+checks confirmed Position Stops and all 39 P11 alerts. Temporary Streamlit health
+endpoint returned `ok`. No UI save/create/delete/poll action was performed.
+The user chose to start Streamlit manually; the agent's temporary verification
+instance was stopped. The disposable test database was also stopped and retained.
+
+Two narrow integration fixes were included and tested before deployment:
+
+- Ordinary schema initialization and broad migrate no longer replay 069's
+  expiry data backfill when the expiry column is already installed. This
+  prevents future normal sync from assigning expiry to an explicit no-expiry
+  alert with a blank label; additive DDL repair remains available.
+- Display of a previously generated brief hides only its legacy KEY LEVELS
+  table, preserving the stored file and other sections. Fresh briefs no longer
+  generate it. Future attention instructions point to P11 and P10 stops.
+
+Evidence: `docs/watch_levels_step5_deployment_20261015.json` contains the fresh
+backup manifest, migration SHA, preserved-table hashes and final check results.
+`git diff --check` passed. These deployed changes are saved in the local commit
+containing this note. No push or merge; original checkpoint `85f8e2e` retained.
+Email remains disabled and `com.fifthdragon.alert-poller` is confirmed unloaded.
+
+Start manually from the main checkout with the existing venv's
+`streamlit run dashboard/app.py`. Review P10 Position Stops and P11 Alerts.
+The retired watch references are only in backups/recovery history, not active
+reference tables. The shared `key_levels` table remains for stops/notes.
+Old `key_levels_watch` alert identities are intentionally retained to preserve
+controls/history; they no longer imply source ownership of discretionary levels.
+
+Rollback constraints from Step 4 still apply: do not run old readers against the
+retired schema, rewind sequences, or overwrite newer production data with a full
+dump. Prefer a forward fix, keep notifications paused, and review any targeted
+restoration separately. Retain both backups, the recovery schema and isolated
+worktree until the user accepts the result.
+
 #### Section 2 — Decide holding-stop monitoring policy (deferred)
 
 - [ ] Choose universal opt-in or explicitly enabled automatic stop monitoring.

@@ -433,6 +433,29 @@ Before using Purge, back up the database and run `python -m alerts.migrate --pur
 to apply the additive `076_alert_purge.sql` migration. Explicitly created manual alerts remain
 allowed after purging; purged managed identities and matching journal ideas stay suppressed.
 
+### Saved Watch Levels retirement
+
+Migration `078_retire_saved_watch_levels.sql` removes saved watch rows and the
+`support`, `resistance`, `alert_above` columns from shared `key_levels`, restricting
+it to position metadata. The P10 Watch Levels editor, watch YAML seed, saved-watch
+brief table and analysis evidence are removed. Position stops/notes, existing P11
+alerts, operator controls, journal ideas and recovery/history tables are retained.
+No reference levels are automatically converted to alerts. Old source identities
+remain compatible. The migration is transactional/repeatable, uses bounded locks,
+and aborts on unexpected position data or dependencies instead of using CASCADE.
+
+Deployed October 15, 2026 after isolated restore/migration tests. Production
+verification preserved all 23 position rows and 39 alerts, with other data and
+recovery history unchanged. See PLAN.md and
+`docs/watch_levels_step5_deployment_20261015.json` for the fresh backup and report.
+Old cached briefs hide the retired table without rewriting their saved files.
+Schema refresh retains explicit no-expiry rules instead of replaying the legacy
+expiry backfill. Keep the background poller unloaded; alert email remains disabled.
+
+The new code works against either schema, but older code requires retired columns.
+A post-migration rollback needs a compatible schema/code plan; do not simply revert
+code or restore an old full dump over current trading data.
+
 ### Alert-controls migration
 
 P11's **Hygiene reports → Review alert exceptions — refresh data** provides an on-demand,
@@ -457,18 +480,17 @@ than four calendar days are not used to claim a current condition. Missing holdi
 alert data produces an unavailable notice instead of silently classifying symbols as unheld.
 No alert/source writes, emails, trades, or additional LLM calls occur; these local alert
 details are not added to the existing LLM payload. Regenerate the brief to refresh this
-saved snapshot. Use alert IDs in P11 for management and P10 Key Levels for source edits.
+saved snapshot. Use P11 for discretionary alert edits and P10 for position stops/notes.
 Attention items label the Alert threshold and Price snapshot separately. Red marks a held
 stop breach, green an active unheld watch crossing (not a buy signal), amber review/near-stop
 items, and gray unmet/unknown/inactive conditions. Poll/delivery details are on a quieter
 second line; the section includes its retrieval timestamp. Status colors do not change rules.
 
-Managed alerts exclude watch/support/resistance and journal ideas for currently held
-symbols, using the broker holdings snapshot. Existing non-stop managed alerts for those
-symbols are archived on reconciliation. Position stop alerts and manual alerts are preserved.
-Saved levels remain visible/editable; after a position closes, its watch alerts may return
-on reconciliation unless purged or explicitly suppressed. Journal ideas require a new sync.
-Holdings lookup failures abort reconciliation rather than assuming an empty portfolio.
+Source reconciliation maintains position-stop alerts only. Existing discretionary
+alerts stay unchanged when holdings or reference data change; it does not create,
+reactivate, rewrite or archive them. Holdings lookup failures abort stop reconciliation.
+P10 contains position stops/notes only; discretionary monitoring belongs on P11.
+Journal extraction still stages ideas for explicit approval, not saved Watch Levels.
 
 The brief's Positions section lists actual holdings only; saved stop/note metadata no
 longer adds closed positions. An empty portfolio stays empty, and lookup errors do not

@@ -8,10 +8,16 @@ fetcher and returns a markdown string. brief.py concatenates them.
 from __future__ import annotations
 
 import datetime
+import re
 from typing import Optional
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def strip_legacy_watch_section(content: str) -> str:
+    """Hide the retired saved-watch table in old briefs; never rewrite the artifact."""
+    return re.sub(r'(?ms)^##[ \t]+🔑[ \t]+KEY LEVELS[ \t]*\n.*?(?=^##[ \t]|^---[ \t]*$|\Z)', '', content)
+
 
 def _display_ticker(ticker: str) -> str:
     """Strip yfinance suffixes for clean display: NQ=F → NQ, ^VIX → VIX, DX-Y.NYB → DXY."""
@@ -293,47 +299,6 @@ def render_positions(data: list[dict]) -> str:
 
         lines.append(
             f"| {emoji} | **{label}** | {last_s} | {pct_s} | {cost_s} | {unreal_s} | {stop_s} | {note_s} |"
-        )
-
-    return "\n".join(lines) + "\n\n---\n"
-
-
-def render_key_levels(data: list[dict]) -> str:
-    if not data:
-        return ""
-
-    lines = ["## 🔑  KEY LEVELS\n"]
-    lines.append("| | Ticker | Price | Day % | Support | Resistance | Alert Above | Note |")
-    lines.append("|---|---|---:|---:|---:|---:|---:|---|")
-
-    for row in data:
-        if "error" in row:
-            lines.append(f"| ⚪ | **{row['label']}** | — | — | — | — | — | _{row.get('error', 'fetch error')}_ |")
-            continue
-
-        label   = _display_ticker(row["label"])
-        last    = row.get("last")
-        pct     = row.get("pct")
-
-        emoji  = _pct_emoji(pct)
-        pct_s  = _pct_arrow(pct) if pct is not None else "—"
-        last_s = f"{last:,.2f}" if last is not None else "—"
-
-        # Extract levels from level_notes back or from config directly
-        level_notes = row.get("level_notes", [])
-        sup_s = res_s = alrt_s = "—"
-        for ln in level_notes:
-            if "Resistance" in ln:
-                res_s = ln.split("→")[0].replace("Resistance", "").strip()
-            elif "Support" in ln and "⚠" not in ln:
-                sup_s = ln.split("→")[0].replace("Support", "").strip()
-            elif "alert level" in ln:
-                alrt_s = ln.split("alert level")[-1].strip()
-
-        note_s = row.get("key_note", "")
-
-        lines.append(
-            f"| {emoji} | **{label}** | {last_s} | {pct_s} | {sup_s} | {res_s} | {alrt_s} | {note_s} |"
         )
 
     return "\n".join(lines) + "\n\n---\n"

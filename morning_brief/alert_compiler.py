@@ -639,7 +639,7 @@ def _clear_expires_at(source_key: str, *, dry_run: bool = False) -> None:
         conn.close()
 
 
-_KL_FIELDS = ("stop", "support", "resistance", "alert_above", "note")
+_KL_FIELDS = ("stop", "note")
 
 
 def save_structural_key_levels(key_levels: dict, baseline_key_levels: dict, *, dry_run: bool = False) -> dict:
@@ -663,11 +663,13 @@ def save_structural_key_levels(key_levels: dict, baseline_key_levels: dict, *, d
     `dry_run=True` performs the comparison but writes nothing and rolls
     back, same as `reconcile_structural_alerts`'s own `dry_run`.
     """
+    if key_levels.get('watch'):
+        raise ValueError('Saved Watch Levels are retired; create an alert in P11 instead')
     from morning_brief.fetchers import load_key_levels_from_db
 
     def _rows(levels):
         rows = {}
-        for section in ("positions", "watch"):
+        for section in ("positions",):
             for ticker, vals in (levels.get(section) or {}).items():
                 vals = vals or {}
                 key = (section, ticker.strip().upper())
@@ -690,15 +692,12 @@ def save_structural_key_levels(key_levels: dict, baseline_key_levels: dict, *, d
             for ticker in sorted({t for _, t in touched}):
                 symbol = int.from_bytes(hashlib.sha256(ticker.encode()).digest()[:4], 'big', signed=True)
                 cur.execute('SELECT pg_advisory_lock(%s,%s)', (LOCK_NAMESPACE + 1, symbol))
-            cur.execute("SELECT section,ticker,stop,support,resistance,alert_above,note FROM key_levels")
+            cur.execute("SELECT section,ticker,stop,note FROM key_levels WHERE section='positions'")
             current_rows = {}
-            for section, ticker, stop, support, resistance, alert_above, note in cur.fetchall():
+            for section, ticker, stop, note in cur.fetchall():
                 key = (section, str(ticker).strip().upper())
                 current_rows[key] = (
                     float(stop) if stop is not None else None,
-                    float(support) if support is not None else None,
-                    float(resistance) if resistance is not None else None,
-                    float(alert_above) if alert_above is not None else None,
                     note,
                 )
             conflicts = sorted(f"{s}:{t}" for (s, t) in touched if current_rows.get((s, t)) != baseline_rows.get((s, t)))
@@ -706,17 +705,15 @@ def save_structural_key_levels(key_levels: dict, baseline_key_levels: dict, *, d
                 raise ValueError(f"Changed since this page loaded, refresh before saving: {', '.join(conflicts)}")
             for section, ticker_upper in sorted(set(baseline_rows) - set(new_rows)):
                 cur.execute("DELETE FROM key_levels WHERE section=%s AND upper(ticker)=%s", (section, ticker_upper))
-            for section in ("positions", "watch"):
+            for section in ("positions",):
                 for ticker, vals in (key_levels.get(section) or {}).items():
                     vals = vals or {}
                     cur.execute(
-                        "INSERT INTO key_levels (section,ticker,stop,support,resistance,alert_above,note,updated_at) "
-                        "VALUES (%s,%s,%s,%s,%s,%s,%s,NOW()) "
-                        "ON CONFLICT (section,ticker) DO UPDATE SET stop=EXCLUDED.stop,support=EXCLUDED.support,"
-                        "resistance=EXCLUDED.resistance,alert_above=EXCLUDED.alert_above,note=EXCLUDED.note,"
+                        "INSERT INTO key_levels (section,ticker,stop,note,updated_at) "
+                        "VALUES (%s,%s,%s,%s,NOW()) "
+                        "ON CONFLICT (section,ticker) DO UPDATE SET stop=EXCLUDED.stop,note=EXCLUDED.note,"
                         "updated_at=NOW()",
-                        (section, ticker, vals.get("stop"), vals.get("support"), vals.get("resistance"),
-                         vals.get("alert_above"), vals.get("note")),
+                        (section, ticker, vals.get("stop"), vals.get("note")),
                     )
             if dry_run:
                 conn.rollback()

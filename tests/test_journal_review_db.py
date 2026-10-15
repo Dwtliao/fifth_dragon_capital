@@ -18,10 +18,11 @@ class JournalReviewDatabaseTests(unittest.TestCase):
 
     def setUp(self):
         fixtures.AlertControlsDatabaseTests.setUp(self)
-        for file in ('066_key_levels.sql','067_journal_sync_log.sql','077_journal_review.sql'):
+        for file in ('066_key_levels.sql','067_journal_sync_log.sql','077_journal_review.sql','078_retire_saved_watch_levels.sql'):
             self.execute((fixtures.ROOT/'data_model'/file).read_text())
         self.execute('CREATE TABLE positions (account_id_key TEXT,symbol TEXT,security_type TEXT,quantity NUMERIC,fetched_at TIMESTAMPTZ)')
         self.enterContext(patch('morning_brief.journal_review.get_connection',self.connect))
+        self.enterContext(patch('etrade_sync.db.get_connection',self.connect))
 
     def stage(self, threshold=110, ticker='TEST', stop=False, evidence=None,timeframe='price_crossing'):
         evidence=evidence or f'Alert me if {ticker} is below {threshold}.'
@@ -312,23 +313,16 @@ class JournalReviewDatabaseTests(unittest.TestCase):
         self.assertFalse(t.is_alive())
         self.assertEqual(result['stats']['updated'],1)
 
-    def test_saving_watch_reference_levels_does_not_change_discretionary_alerts(self):
+    def test_retired_watch_payload_is_rejected_without_mutating_alerts(self):
         from morning_brief.alert_compiler import save_structural_key_levels
         alert_id=self.add_alert(source='key_levels_watch',source_key='watch:TEST:resistance',threshold=100)
         lifecycle.control_alert(alert_id,'pause')
         before=self.alert(alert_id)
-        baseline={'positions':{},'watch':{}}
-        saved={'positions':{},'watch':{'TEST':{'support':80,'resistance':120},'OTHER':{'alert_above':55}}}
-        with patch('morning_brief.alert_compiler.get_connection',self.connect), \
-             patch('etrade_sync.db.get_connection',self.connect):
-            stats=save_structural_key_levels(saved,baseline)
-            self.assertTrue(stats['key_levels_saved'])
-            self.assertEqual(stats['created'],0)
-            stats=save_structural_key_levels(saved,saved)
-            self.assertEqual(stats['updated'],0)
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            with self.assertRaisesRegex(ValueError,'retired'):
+                save_structural_key_levels({'watch':{'TEST':{'resistance':120}}},{})
         self.assertEqual(before,self.alert(alert_id))
-        self.assertEqual(self.execute('SELECT count(*) FROM price_alerts',fetch=True)[0][0],1)
-        self.assertEqual(self.execute('SELECT count(*) FROM key_levels',fetch=True)[0][0],2)
+        self.assertEqual(self.execute('SELECT count(*) FROM key_levels',fetch=True)[0][0],0)
 
     def test_discretionary_delete_does_not_blacklist_future_journal_ideas(self):
         from alerts.management import apply_bulk,preview_action
@@ -411,12 +405,12 @@ class JournalReviewDatabaseTests(unittest.TestCase):
         from morning_brief import alert_compiler
         baseline={'positions':{'TEST':{'stop':90}}}
         self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
-        self.execute("INSERT INTO key_levels(section,ticker,support) VALUES ('watch','OTHER',50)")  # added by someone else
+        self.execute("INSERT INTO key_levels(section,ticker,stop,note) VALUES ('positions','OTHER',50,'new position')")  # added by someone else
         edit={'positions':{'TEST':{'stop':92}}}
         with patch('morning_brief.alert_compiler.get_connection',self.connect):
             stats=alert_compiler.save_structural_key_levels(edit,baseline)
         self.assertNotIn('error',stats)
-        self.assertEqual(self.execute("SELECT support FROM key_levels WHERE section='watch' AND ticker='OTHER'",fetch=True)[0][0],50)
+        self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='OTHER'",fetch=True)[0][0],50)
         self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],92)
 
     def test_p10_save_removes_row_explicitly_dropped_by_user(self):

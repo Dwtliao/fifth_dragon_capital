@@ -1,8 +1,8 @@
 """Alert compiler/reconciler for price_alerts.
 
-This module keeps source-driven alerts in sync with the price_alerts table
-without touching the poller. It reconciles desired alerts from structural
-sources (key levels) and journal extraction against the live table.
+Only configured position stops are source-managed. Saved watch levels and
+journal evidence never create, refresh, reactivate, or retire discretionary alerts.
+Legacy discretionary identities and operator controls remain intact.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import hashlib
 from collections import defaultdict
 from typing import Any, Callable
 
-from alerts.lifecycle import LOCK_NAMESPACE
+from alerts.lifecycle import LOCK_NAMESPACE, is_position_stop
 from etrade_sync.db import get_connection
 
 MANAGED_SOURCES = ("key_levels_watch", "journal_sync")
@@ -79,37 +79,12 @@ def _held_symbols() -> set[str]:
             if float(row.get('quantity') or 0) > 0}
 
 
-def _archive_held_nonstop(held: set[str], *, dry_run: bool = False) -> int:
-    """Retire managed watch/journal alerts, never manual or configured position stops."""
-    if not held:
-        return 0
-    conn = get_connection()
-    count = 0
-    try:
-        with conn.cursor() as cur:
-            for row in _load_managed_alerts(cur, MANAGED_SOURCES):
-                ticker = str(row['ticker']).strip().upper()
-                stop = (row['source'] == 'key_levels_watch'
-                        and row.get('source_key') == f"position:{row['ticker']}:stop")
-                if ticker in held and not stop and row['archived_at'] is None:
-                    _archive_alert(cur, row['id'])
-                    count += 1
-        if dry_run:
-            conn.rollback()
-        else:
-            conn.commit()
-        return count
-    finally:
-        conn.close()
-
-
 def build_structural_alerts(key_levels: dict, *, held_symbols: set[str] | None = None) -> list[dict]:
-    """Compile structural alerts from positions and watch levels."""
+    """Compile holding stops only; saved watch levels are reference information."""
     desired: list[dict] = []
     seen: set[tuple[str, str]] = set()
 
     positions = dict(key_levels.get("positions") or {})
-    watch = dict(key_levels.get("watch") or {})
 
     for ticker in sorted(positions):
         vals = positions.get(ticker) or {}
@@ -132,78 +107,14 @@ def build_structural_alerts(key_levels: dict, *, held_symbols: set[str] | None =
             "pinned": False,
         })
 
-    for ticker in sorted(watch):
-        if ticker.strip().upper() in (held_symbols or set()):
-            continue
-        vals = watch.get(ticker) or {}
-        note = str(vals.get("note") or "").strip()
-
-        support = _as_float(vals.get("support"))
-        if support is not None and support > 0:
-            label = f"Support: {ticker} below {_format_threshold(support)}"
-            if note:
-                label = f"{label} — {note}"
-            _append_unique(desired, seen, {
-                "source": "key_levels_watch",
-                "source_key": f"watch:{ticker}:support",
-                "tier": 2,
-                "ticker": ticker,
-                "label": label,
-                "condition": "below",
-                "threshold": support,
-                "expires_at": None,
-                "pinned": False,
-            })
-
-        resistance = _as_float(vals.get("resistance"))
-        if resistance is not None and resistance > 0:
-            label = f"Resistance: {ticker} above {_format_threshold(resistance)}"
-            if note:
-                label = f"{label} — {note}"
-            _append_unique(desired, seen, {
-                "source": "key_levels_watch",
-                "source_key": f"watch:{ticker}:resistance",
-                "tier": 2,
-                "ticker": ticker,
-                "label": label,
-                "condition": "above",
-                "threshold": resistance,
-                "expires_at": None,
-                "pinned": False,
-            })
-
-        alert_above = _as_float(vals.get("alert_above"))
-        # alert_above and resistance are the same concept (a level to watch for a
-        # breakout above) — if the user set both to the same price, only emit one
-        # row instead of two identical "above X" alerts for the same ticker.
-        if alert_above is not None and resistance is not None and abs(alert_above - resistance) < 1e-6:
-            alert_above = None
-        if alert_above is not None and alert_above > 0:
-            label = f"Watch: {ticker} above {_format_threshold(alert_above)}"
-            if note:
-                label = f"{label} — {note}"
-            _append_unique(desired, seen, {
-                "source": "key_levels_watch",
-                "source_key": f"watch:{ticker}:alert_above",
-                "tier": 2,
-                "ticker": ticker,
-                "label": label,
-                "condition": "above",
-                "threshold": alert_above,
-                "expires_at": None,
-                "pinned": False,
-            })
-
     return desired
 
 
 def build_journal_alerts(alerts: list[dict]) -> list[dict]:
     """Normalize raw journal extraction into candidate alerts.
 
-    No dedup/keying here — matching against existing tactical journal alerts
-    (same idea vs. a genuinely new one) happens per-candidate in
-    `upsert_journal_alert`, since it depends on live DB state (tolerance
-    against an existing row's threshold), not just this batch.
+    This is a pure legacy normalization helper. Candidates are reference data;
+    they do not authorize live alert creation or refresh.
     """
     candidates: list[dict] = []
 
@@ -284,49 +195,8 @@ def upsert_journal_alert(
     cur, ticker: str, condition: str, threshold: float, label: str,
     *, ttl_days: int = DEFAULT_JOURNAL_ALERT_TTL_DAYS,
 ) -> str:
-    """Match against existing tactical journal alerts within tolerance; update in place or start a new idea.
-
-    If a structural alert already covers the same ticker/condition/threshold, skip
-    creating a tactical shadow of it entirely — the idea is already captured
-    long-lived in key_levels_watch, so a new journal_sync row would just be noise.
-    """
-    now = _utcnow()
-    expires_at = now + dt.timedelta(days=ttl_days)
-    existing = _find_matching_journal_alert(cur, ticker, condition, threshold)
-
-    if existing is None:
-        if _matches_existing_structural_alert(cur, ticker, condition, threshold):
-            return "skipped_structural"
-        source_key = f"journal:{ticker}:{condition}:{now.strftime('%Y%m%dT%H%M%S%f')}"
-        cur.execute(
-            """
-            INSERT INTO price_alerts
-                (ticker, label, condition, threshold, source, source_key, tier,
-                 expires_at, pinned, refreshed_at, enabled, archived_at, triggered,
-                 recurrence_count, first_seen_at, last_seen_at)
-            VALUES
-                (%s, %s, %s, %s, 'journal_sync', %s, 3,
-                 %s, FALSE, %s, TRUE, NULL, FALSE,
-                 1, %s, %s)
-            """,
-            (ticker, label or None, condition, threshold, source_key, expires_at, now, now, now),
-        )
-        return "purged" if getattr(cur, "statusmessage", "") == "INSERT 0 0" else "created"
-
-    cur.execute(
-        """
-        UPDATE price_alerts
-        SET label = %s,
-            threshold = %s,
-            expires_at = %s,
-            refreshed_at = %s,
-            last_seen_at = %s,
-            recurrence_count = recurrence_count + 1
-        WHERE id = %s
-        """,
-        (label or None, threshold, expires_at, now, now, existing["id"]),
-    )
-    return "updated"
+    """Legacy compatibility entrypoint: journal evidence never authorizes an alert."""
+    return "skipped_opt_in"
 
 
 def _load_managed_alerts(cur, sources: tuple[str, ...]) -> list[dict]:
@@ -478,54 +348,8 @@ def prune_expired_alerts(*, dry_run: bool = False) -> int:
 
 
 def backfill_legacy_structural_alerts(*, dry_run: bool = False) -> int:
-    """Convert legacy P10 watch alerts into managed structural rows."""
-    now = _utcnow()
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, ticker, label, condition, threshold::float
-                FROM price_alerts
-                WHERE (source IS NULL OR source = 'manual')
-                  AND source_key IS NULL
-                  AND label LIKE 'Watch: %%'
-                ORDER BY id
-                """
-            )
-            rows = cur.fetchall()
-            if not rows:
-                if dry_run:
-                    conn.rollback()
-                return 0
-
-            cols = [d.name for d in cur.description]
-            count = 0
-            for row in rows:
-                alert = dict(zip(cols, row))
-                source_key = f"watch:{alert['ticker']}:alert_above"
-                cur.execute(
-                    """
-                    UPDATE price_alerts
-                    SET source = 'key_levels_watch',
-                        source_key = %s,
-                        tier = 2,
-                        pinned = FALSE,
-                        archived_at = NULL,
-                        refreshed_at = %s
-                    WHERE id = %s
-                    """,
-                    (source_key, now, alert["id"]),
-                )
-                count += 1
-
-        if dry_run:
-            conn.rollback()
-        else:
-            conn.commit()
-        return count
-    finally:
-        conn.close()
+    """Legacy watch ownership is retained unchanged pending explicit migration."""
+    return 0
 
 
 def _desired_map(desired_alerts: list[dict]) -> dict[tuple[str, str], dict]:
@@ -533,7 +357,7 @@ def _desired_map(desired_alerts: list[dict]) -> dict[tuple[str, str], dict]:
     for alert in desired_alerts or []:
         source = str(alert.get("source") or "").strip()
         source_key = str(alert.get("source_key") or "").strip()
-        if not source or not source_key:
+        if not source or not source_key or not is_position_stop(alert):
             continue
         desired_map[(source, source_key)] = dict(alert)
     return desired_map
@@ -562,7 +386,9 @@ def reconcile_alerts(
     sources: tuple[str, ...] = MANAGED_SOURCES,
     reload_desired: Callable[[], list[dict]] | None = None,
 ) -> dict:
-    """Reconcile managed alerts against a desired source-driven set.
+    """Reconcile position stops against a desired source-driven set.
+
+    Both desired and existing discretionary rows are excluded, including on reload.
 
     Only rows whose source is in `sources` are loaded/touched — this keeps a
     structural-only reconcile from treating journal_sync rows (or vice versa)
@@ -679,6 +505,8 @@ def reconcile_alerts(
                 current_rows = _load_managed_alerts(cur, sources)
                 groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
                 for row in current_rows:
+                    if not is_position_stop(row):
+                        continue
                     source = row.get("source")
                     source_key = row.get("source_key")
                     if not source or not source_key:
@@ -737,7 +565,7 @@ def reconcile_structural_alerts(
     via `reload_key_levels` (see `reconcile_alerts`'s `reload_desired`).
     """
     held = _held_symbols()
-    backfilled = backfill_legacy_structural_alerts(dry_run=dry_run)
+    backfilled = 0
     reload_desired = (
         (lambda: build_structural_alerts(reload_key_levels(), held_symbols=held))
         if reload_key_levels is not None else None
@@ -746,7 +574,7 @@ def reconcile_structural_alerts(
         build_structural_alerts(key_levels, held_symbols=held), dry_run=dry_run, sources=("key_levels_watch",),
         reload_desired=reload_desired,
     )
-    stats['held_archived'] = _archive_held_nonstop(held, dry_run=dry_run)
+    stats['held_archived'] = 0
     stats["backfilled"] = backfilled
     return stats
 
@@ -754,88 +582,16 @@ def reconcile_structural_alerts(
 def reconcile_journal_alerts(
     alerts: list[dict], *, dry_run: bool = False, ttl_days: int = DEFAULT_JOURNAL_ALERT_TTL_DAYS,
 ) -> dict:
-    """Match/refresh journal-derived alerts in place, then promote recurring ideas."""
-    held = _held_symbols()
-    all_candidates = build_journal_alerts(alerts)
-    candidates = [a for a in all_candidates if a['ticker'].upper() not in held]
-    stats = {"created": 0, "updated": 0, "purged": 0, "skipped_structural": 0, "promoted": 0, "desired": len(candidates)}
-    stats['skipped_held'] = len(all_candidates) - len(candidates)
-    stats['held_archived'] = _archive_held_nonstop(held, dry_run=dry_run)
-
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            for alert in candidates:
-                action = upsert_journal_alert(
-                    cur, alert["ticker"], alert["condition"], alert["threshold"], alert["label"],
-                    ttl_days=ttl_days,
-                )
-                stats[action] += 1
-
-        if dry_run:
-            conn.rollback()
-        else:
-            conn.commit()
-    finally:
-        conn.close()
-
-    # Recurrence is evidence, never authorization to make an idea permanent.
-    stats["promoted"] = 0
-    return stats
+    """Legacy compatibility entrypoint: ingestion stages ideas via journal review."""
+    return dict(created=0, updated=0, purged=0, skipped_structural=0, promoted=0,
+                desired=0, skipped_held=0, held_archived=0, skipped_opt_in=len(alerts or []))
 
 
 def promote_recurring_journal_alerts(
     *, threshold: int = PROMOTION_RECURRENCE_THRESHOLD, dry_run: bool = False,
 ) -> int:
-    """Move journal alerts that have recurred `threshold`+ times into structural (key_levels_watch) alerts."""
-    held = _held_symbols()
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT source_key, ticker, condition
-                FROM price_alerts
-                WHERE source = 'journal_sync'
-                  AND pinned = FALSE
-                  AND enabled = TRUE
-                  AND archived_at IS NULL
-                  AND recurrence_count >= %s
-                """,
-                (threshold,),
-            )
-            cols = [d.name for d in cur.description]
-            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-    finally:
-        conn.close()
-
-    promoted = 0
-    for row in rows:
-        if row['ticker'].strip().upper() in held:
-            continue
-        field = "resistance" if row["condition"] == "above" else "support"
-        new_key = f"watch:{row['ticker']}:{field}"
-
-        if _structural_row_exists(new_key):
-            # key_levels.yml already has a structural belief at this ticker/field — it's
-            # regenerated fresh from the YAML on every reconcile, so overwriting its
-            # threshold here would just get reverted on the next brief.py/Save All run.
-            # The recurring journal idea has effectively already been captured
-            # structurally, so retire the tactical duplicate instead of colliding with it.
-            _archive_by_source_key("journal_sync", row["source_key"], dry_run=dry_run)
-            promoted += 1
-            continue
-
-        if reclassify(
-            "journal_sync", row["source_key"], "key_levels_watch", new_key,
-            tier=2, dry_run=dry_run,
-        ):
-            # reclassify() only overrides fields you pass a non-None value for, so it
-            # can't be used to clear expires_at — structural alerts must be long-lived,
-            # not keep carrying the journal TTL they were promoted from.
-            _clear_expires_at(new_key, dry_run=dry_run)
-            promoted += 1
-    return promoted
+    """Recurrence is evidence, never authorization to activate or rewrite an alert."""
+    return 0
 
 
 def _structural_row_exists(source_key: str) -> bool:
@@ -1166,9 +922,8 @@ def archive_duplicate_alert(candidate_id: int, structural_id: int, *, dry_run: b
     """Narrow, deterministic consolidation: archive a manual or journal_sync alert
     that exactly duplicates a structural (key_levels_watch) alert — same ticker,
     condition, and threshold, both currently active. Structural wins because it's
-    regenerated from key_levels.yml/DB on every reconcile and would just get
-    reverted otherwise (same reasoning promote_recurring_journal_alerts() uses for
-    its own manual/structural and journal/structural collision cases).
+    retained by this explicit consolidation policy. Discretionary source refresh
+    no longer regenerates or overwrites either side.
 
     Re-verifies eligibility against live data rather than trusting a caller-supplied
     cluster — returns False and archives nothing if the pair no longer qualifies
@@ -1220,9 +975,8 @@ def find_stale_alerts(*, min_age_days: int = STALE_MANUAL_ALERT_DAYS) -> list[di
     Read-only — never modifies, archives, disables, or deletes anything.
 
     Structural (key_levels_watch) and journal_sync alerts are out of scope: structural
-    staleness is already handled by reconcile_structural_alerts()'s archive-on-removal
-    behavior, and journal alerts already have TTL pruning (prune_expired_alerts()).
-    Manual alerts are the only source with no expiry mechanism at all.
+    rows retain their legacy classification. This report does not convert their
+    ownership; configured expirations continue through prune_expired_alerts().
 
     Each row is cross-checked against mv_unrealized_pnl (open positions). A ticker
     with no matching open position is the stronger signal (confidence="no_open_position") —

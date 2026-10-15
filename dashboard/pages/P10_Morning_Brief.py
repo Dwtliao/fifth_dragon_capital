@@ -353,8 +353,8 @@ with tab_levels:
     # ── Watch Levels ───────────────────────────────────────────────────────────
 
     st.subheader("Watch Levels")
-    st.caption("Support, resistance, and alert levels shown in the brief. Held symbols do not "
-               "generate automatic watch/journal alerts; position stop alerts and manual alerts remain enabled.")
+    st.caption("Support, resistance, and alert levels shown in the brief. These are reference levels and do not "
+               "create or update discretionary alerts. Position-stop monitoring is unchanged.")
 
     watch_dict = dict(kl.get("watch") or {})
     new_watch = {}
@@ -421,7 +421,7 @@ with tab_levels:
         if flash["level"] == "success":
             synced = [f"{t} > {v['alert_above']}" for t, v in new_watch.items() if v.get("alert_above", 0) > 0]
             if synced:
-                flash["message"] += f"  Configured watch levels (held symbols excluded from alerts): {', '.join(synced)}"
+                flash["message"] += f"  Saved reference levels (no discretionary alerts created): {', '.join(synced)}"
         st.session_state["p10_save_all_flash"] = flash
         st.rerun()
 

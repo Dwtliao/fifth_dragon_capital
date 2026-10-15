@@ -54,18 +54,14 @@ class AlertControlsTests(unittest.TestCase):
 
     @patch.dict(os.environ, {'ALERT_SMTP_HOST': 'localhost', 'ALERT_SMTP_USER': 'u',
                             'ALERT_SMTP_PASS': 'secret', 'ALERT_EMAIL_TO': 't'}, clear=True)
-    @patch('alerts.notify.smtplib.SMTP')
-    def test_email_success_uses_timeout(self, smtp):
-        self.assertEqual(deliver_alert_email('TEST', '', 'above', 100, 101).status, 'sent')
-        smtp.assert_called_once_with('localhost', 587, timeout=20)
-
-    @patch.dict(os.environ, {'ALERT_SMTP_HOST': 'localhost', 'ALERT_SMTP_USER': 'u',
-                            'ALERT_SMTP_PASS': 'secret', 'ALERT_EMAIL_TO': 't'}, clear=True)
-    @patch('alerts.notify.smtplib.SMTP', side_effect=RuntimeError('secret'))
-    def test_delivery_failure_does_not_retain_secrets(self, smtp):
-        result = deliver_alert_email('TEST', '', 'above', 100, 101)
-        self.assertEqual(result.status, 'failed')
-        self.assertNotIn('secret', result.error)
+    def test_saved_credentials_cannot_enable_email(self):
+        from alerts.notify import email_configured, send_alert_email
+        with patch('smtplib.SMTP') as smtp:
+            result = deliver_alert_email('TEST', '', 'above', 100, 101)
+            self.assertEqual(result.status, 'not_configured')
+            self.assertFalse(email_configured())
+            self.assertFalse(send_alert_email('TEST', '', 'above', 100, 101))
+            smtp.assert_not_called()
 
 
 if __name__ == '__main__':

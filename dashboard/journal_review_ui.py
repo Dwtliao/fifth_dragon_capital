@@ -1,5 +1,5 @@
 """P10 journal approval UI; no quote fetches or live changes on ordinary reruns."""
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import hashlib
 import pandas as pd
 import streamlit as st
@@ -22,9 +22,8 @@ def render_idea_alert(item, prefix):
     price = st.number_input('Alert price', min_value=0.0,
         value=float(item['threshold']) if valid_price(item['threshold']) else 0.0,
         format='%.4f', key=prefix+'_price')
-    days = st.number_input('Expires after (days)', min_value=1, max_value=3650,
-        value=21, key=prefix+'_days')
-    signature = (symbol, condition, price, days)
+    st.caption('No expiry. Keep this alert until you pause or delete it.')
+    signature = (symbol, condition, price)
     preview_key = prefix+'_manual_preview'
     if st.session_state.get(preview_key) != signature:
         st.session_state.pop(preview_key, None)
@@ -36,13 +35,13 @@ def render_idea_alert(item, prefix):
         else:
             st.session_state[preview_key] = signature
     if st.session_state.get(preview_key) == signature:
-        st.write(f'Create manual alert: {symbol.strip().upper()} {condition} {price:g}; expires after {days} days.')
+        st.write(f'Create manual alert: {symbol.strip().upper()} {condition} {price:g}; no expiry.')
         st.caption('If the price is already on this side of the level, the next poll can notify. '
                    'Quotes may be delayed. Creation sends no email.')
         if st.button('Create this alert', key=prefix+'_create_manual'):
             try:
                 alert_id = save_manual(symbol, f'Manual alert from journal idea #{item["id"]}',
-                    condition, price, datetime.now(timezone.utc)+timedelta(days=int(days)))
+                    condition, price)
             except Exception as exc:
                 st.error(str(exc))
             else:
@@ -145,8 +144,8 @@ def render_journal_review():
         return
     action = st.selectbox('Selected review action',['approve','reject','prepare'],
         format_func=lambda x:{'approve':'Approve selected candidates','reject':'Reject selected ideas','prepare':'Prepare watch ideas for approval — no alerts'}[x],key='jr_action')
-    expiry = st.number_input('New/replaced manual alert expiry (days)',min_value=1,max_value=3650,value=21,key='jr_expiry')
-    st.caption('Held stop alerts have no expiry. Preparation and rejection never change live alerts.')
+    expiry = None
+    st.caption('New alerts have no expiry. Preparation and rejection never change live alerts.')
     signature = repr(([(i['id'],item_token(i)) for i in selected],options,action,expiry))
     if st.button('Preview selected review action',key='jr_preview_button'):
         try:

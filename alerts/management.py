@@ -6,7 +6,7 @@ import math
 import re
 
 from alerts.lifecycle import (LOCK_NAMESPACE, identity, is_eligible,
-                              load_alerts, state, valid_price)
+                              load_alerts, state, valid_price, is_position_stop)
 from etrade_sync.db import get_connection
 
 
@@ -101,11 +101,12 @@ def apply_bulk(preview, action, snoozed_until=None):
                     columns = [d.name for d in cur.description]
                     events = [dict(zip(columns, row)) for row in cur.fetchall()]
                     _audit(cur, alert, 'purge', {'bulk_ids': ids, 'alert': alert, 'notifications': events})
-                    cur.execute('''INSERT INTO alert_purge_blocks
-                        (original_alert_id,source,identity,ticker,condition,threshold,legacy_identity)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (original_alert_id) DO NOTHING''',
-                        (alert['id'], alert['source'], identity(alert), alert['ticker'],
-                         alert['condition'], alert['threshold'], not bool(alert.get('source_key'))))
+                    if is_position_stop(alert):
+                        cur.execute('''INSERT INTO alert_purge_blocks
+                            (original_alert_id,source,identity,ticker,condition,threshold,legacy_identity)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (original_alert_id) DO NOTHING''',
+                            (alert['id'], alert['source'], identity(alert), alert['ticker'],
+                             alert['condition'], alert['threshold'], not bool(alert.get('source_key'))))
                     cur.execute('DELETE FROM price_alerts WHERE id=%s', (alert['id'],))
                     continue
                 if action == 'consolidate' and alert['source'] == 'key_levels_watch':
@@ -205,6 +206,63 @@ def save_manual(ticker, label, condition, threshold, expires_at=None, *,
                     'after': dict(zip(('ticker','label','condition','threshold','expires_at'), values))})
         conn.commit()
         return alert_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def save_inline_edits(changes, *, allow_duplicate=False):
+    """Atomically edit discretionary rows in place, preserving identity and controls."""
+    if not changes or len({c['id'] for c in changes}) != len(changes):
+        raise ValueError('Choose distinct changed alerts')
+    conn = get_connection()
+    try:
+        ids = sorted(c['id'] for c in changes)
+        with conn.cursor() as cur:
+            # Keep the same symbol-before-row order as manual editing and compilation.
+            for ticker in sorted({c['ticker'] for c in changes}):
+                symbol = int.from_bytes(hashlib.sha256(ticker.encode()).digest()[:4], 'big', signed=True)
+                cur.execute('SELECT pg_advisory_lock(%s,%s)', (LOCK_NAMESPACE + 1, symbol))
+            for alert_id in ids:
+                cur.execute('SELECT pg_advisory_lock(%s,%s)', (LOCK_NAMESPACE, alert_id))
+        conn.commit()
+        with conn.cursor() as cur:
+            cur.execute('SELECT id FROM price_alerts WHERE id=ANY(%s) ORDER BY id FOR UPDATE', (ids,))
+        updated = []
+        for change in sorted(changes, key=lambda c:c['id']):
+            rows = load_alerts(conn, alert_id=change['id'])
+            if not rows or fingerprint(rows[0]) != change['fingerprint'] or rows[0]['ticker'] != change['ticker']:
+                raise ValueError(f"Alert #{change['id']} changed since this table loaded. Refresh and retry; nothing saved.")
+            old = rows[0]
+            if is_position_stop(old):
+                raise ValueError(f"Alert #{old['id']} is a position stop. Edit its saved stop in P10; nothing saved.")
+            values = _manual_values(old['ticker'], change.get('label') or '', change['condition'], change['threshold'], None)
+            expiry = None if change.get('remove_expiry') else old.get('expires_at')
+            rearm = (old['condition'], old['threshold']) != (values[2], values[3])
+            with conn.cursor() as cur:
+                cur.execute('''UPDATE price_alerts SET label=%s,condition=%s,threshold=%s,expires_at=%s,
+                    triggered=CASE WHEN %s THEN FALSE ELSE triggered END WHERE id=%s''',
+                    (values[1], values[2], values[3], expiry, rearm, old['id']))
+                if rearm:
+                    cur.execute("UPDATE alert_notification_events SET status='cancelled',updated_at=NOW() "
+                                "WHERE alert_id=%s AND status IN ('failed','not_configured','pending','unknown')", (old['id'],))
+                _audit(cur, old, 'inline_edit', dict(before={k:old.get(k) for k in ('label','condition','threshold','expires_at')},
+                    after=dict(label=values[1],condition=values[2],threshold=values[3],expires_at=expiry)))
+            updated.append((old['id'], values, rearm))
+        if not allow_duplicate:
+            with conn.cursor() as cur:
+                for alert_id, values, rearm in updated:
+                    if not rearm:
+                        continue
+                    cur.execute('''SELECT id FROM price_alerts WHERE ticker=%s AND condition=%s AND threshold=%s
+                        AND enabled AND archived_at IS NULL AND (expires_at IS NULL OR expires_at>NOW()) AND id<>%s''',
+                        (values[0], values[2], values[3], alert_id))
+                    if cur.fetchone():
+                        raise ValueError('An edited level duplicates an existing alert. Confirm an intentional duplicate to save; nothing saved.')
+        conn.commit()
+        return ids
     except Exception:
         conn.rollback()
         raise

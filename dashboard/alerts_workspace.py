@@ -135,3 +135,39 @@ def table_records(rows, quotes, nearby_percent=2.0):
             'Attention': '; '.join(attention_reasons(alert, quote, nearby_percent)),
         })
     return records
+
+
+def page_notifications(alerts, quotes, now=None):
+    """Current satisfied conditions from fresh snapshots, without polling or writes."""
+    now = now or datetime.now(timezone.utc)
+    result = []
+    for alert in alerts:
+        quote = quotes.get(alert['ticker']) or {}
+        price = quote.get('price')
+        retrieved = quote.get('retrieved_at')
+        if (not is_eligible(alert, now) or not valid_price(price)
+                or not valid_price(alert['threshold']) or quote.get('error')
+                or retrieved is None or not 0 <= (now - retrieved).total_seconds() <= 600):
+            continue
+        price, level = float(price), float(alert['threshold'])
+        if ((alert['condition'] == 'above' and price > level)
+                or (alert['condition'] == 'below' and price < level)):
+            result.append(dict(id=alert['id'], ticker=alert['ticker'], condition=alert['condition'],
+                               threshold=level, price=price))
+    return result
+
+
+def inline_changes(rows, records):
+    """Resolve editable cells by stable ID; preserve all unedited lifecycle fields."""
+    from alerts.management import fingerprint
+    by_id = {r['id']:r for r in rows}
+    if len(records) != len(rows) or {r['ID'] for r in records} != set(by_id):
+        raise ValueError('Displayed alerts changed; refresh before saving')
+    changes = []
+    for record in records:
+        old = by_id[record['ID']]
+        remove_expiry = bool(record['Remove expiry']) and old.get('expires_at') is not None
+        if (record['Label'], record['Condition'], record['Level']) != (old.get('label') or '', old['condition'], old['threshold']) or remove_expiry:
+            changes.append(dict(id=old['id'],ticker=old['ticker'],fingerprint=fingerprint(old),
+                label=record['Label'],condition=record['Condition'],threshold=record['Level'],remove_expiry=remove_expiry))
+    return changes

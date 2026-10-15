@@ -29,7 +29,8 @@ render_idea_alert(dict(id=58,ticker='SI=F',condition='below',threshold=47), 'tes
             self.assertFalse(app.exception)
             self.assertEqual(save.call_args.args[:4],
                 ('SLV', 'Manual alert from journal idea #58', 'above', 50.0))
-            self.assertIsNotNone(save.call_args.args[4].tzinfo)
+            self.assertEqual(len(save.call_args.args), 4)
+            self.assertFalse(any('Expir' in n.label for n in app.number_input))
 
     def test_edit_invalidates_preview_and_invalid_input_cannot_create(self):
         with patch('dashboard.journal_review_ui.save_manual') as save:

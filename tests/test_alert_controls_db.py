@@ -83,15 +83,14 @@ class AlertControlsDatabaseTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_pause_survives_real_compiler_refresh_and_recreation(self):
+    def test_stop_pause_survives_real_compiler_refresh_and_recreation(self):
         from morning_brief.alert_compiler import reconcile_structural_alerts
-        desired = {'positions': {}, 'watch': {'TEST': {'resistance': 100}}}
+        desired = {'positions': {'TEST': {'stop': 100}}, 'watch': {}}
         with patch('morning_brief.alert_compiler.get_connection', self.connect):
             reconcile_structural_alerts(desired)
             alert_id = self.execute('SELECT id FROM price_alerts', fetch=True)[0][0]
             lifecycle.control_alert(alert_id, 'pause')
-            desired['watch']['TEST']['resistance'] = 102
-            reconcile_structural_alerts(desired)
+            desired['positions']['TEST']['stop'] = 102
             reconcile_structural_alerts(desired)
             self.assertEqual(self.alert(alert_id)['threshold'], 102)
             self.assertFalse(lifecycle.is_eligible(self.alert(alert_id)))
@@ -100,6 +99,8 @@ class AlertControlsDatabaseTests(unittest.TestCase):
             new_id = self.execute('SELECT id FROM price_alerts', fetch=True)[0][0]
             self.assertNotEqual(new_id, alert_id)
             self.assertFalse(lifecycle.is_eligible(self.alert(new_id)))
+            reconcile_structural_alerts({'positions': {}, 'watch': {}})
+            self.assertIsNotNone(self.alert(new_id)['archived_at'])
 
     def test_snooze_expiration_and_resume(self):
         alert_id = self.add_alert()
@@ -253,19 +254,35 @@ class AlertControlsDatabaseTests(unittest.TestCase):
         self.assertIsNotNone(rows[0][1])
         self.assertIn('RuntimeError', rows[0][2])
 
-    def test_journal_reconciliation_and_promotion_preserve_pause(self):
-        from morning_brief.alert_compiler import reconcile_journal_alerts
-        desired = [{'ticker': 'TEST', 'condition': 'above', 'threshold': 100, 'label': 'Journal level'}]
-        with patch('morning_brief.alert_compiler.get_connection', self.connect):
-            reconcile_journal_alerts(desired)
-            alert_id = self.execute('SELECT id FROM price_alerts', fetch=True)[0][0]
-            lifecycle.control_alert(alert_id, 'pause')
-            reconcile_journal_alerts(desired)
-            reconcile_journal_alerts(desired)
-            alert = self.alert(alert_id)
-            self.assertEqual(alert['source'], 'journal_sync')  # Recurrence no longer authorizes promotion.
-            self.assertTrue(alert['paused'])
-            self.assertFalse(lifecycle.is_eligible(alert))
+    def test_existing_discretionary_rows_are_unchanged_across_all_source_refreshes(self):
+        from morning_brief import alert_compiler as compiler
+        watch = self.add_alert(source='key_levels_watch', source_key='watch:TEST:resistance', threshold=91)
+        journal = self.add_alert(source='journal_sync', source_key='journal:TEST:old', threshold=92,
+                                 expires_at=datetime.now(timezone.utc)+timedelta(days=3))
+        legacy = self.add_alert()
+        self.execute("UPDATE price_alerts SET label='Watch: TEST above 100' WHERE id=%s", (legacy,))
+        lifecycle.control_alert(watch, 'pause')
+        lifecycle.control_alert(journal, 'snooze', snoozed_until=datetime.now(timezone.utc)+timedelta(hours=2))
+        archived = self.add_alert(source='key_levels_watch', source_key='watch:TEST:support',
+                                  archived_at=datetime.now(timezone.utc), enabled=False)
+        before = {i:self.alert(i) for i in (watch,journal,legacy,archived)}
+        with patch.object(compiler, 'get_connection', self.connect):
+            for held in (set(), {'TEST'}, set()):
+                with patch.object(compiler, '_held_symbols', return_value=held):
+                    compiler.reconcile_structural_alerts({'watch':{'TEST':{'resistance':120,'support':80}}})
+                    compiler.reconcile_structural_alerts({})
+                    compiler.reconcile_journal_alerts([dict(ticker='TEST',condition='above',threshold=125)])
+                    compiler.promote_recurring_journal_alerts(threshold=1)
+                    compiler.backfill_legacy_structural_alerts()
+            # Direct legacy callers cannot bypass the same stop-only boundary, even on reload.
+            desired = [dict(source='key_levels_watch',source_key='watch:TEST:resistance',ticker='TEST',
+                            condition='above',threshold=130,label='new'),
+                       dict(source='journal_sync',source_key='journal:NEW:old',ticker='NEW',
+                            condition='above',threshold=15,label='new')]
+            compiler.reconcile_alerts(desired, reload_desired=lambda:desired)
+        self.assertEqual(before, {i:self.alert(i) for i in before})
+        self.assertEqual(self.execute('SELECT count(*) FROM price_alerts',fetch=True)[0][0],4)
+        self.delivery.assert_not_called()
 
     def test_browser_controls_render_pause_and_resume(self):
         import streamlit as st
@@ -273,15 +290,14 @@ class AlertControlsDatabaseTests(unittest.TestCase):
         from types import SimpleNamespace
         alert_id = self.add_alert()
         st.cache_data.clear()
-        original_dataframe = st.dataframe
+        original_editor = st.data_editor
         selected_indices = []
-        def dataframe(*args, **kwargs):
-            displayed = original_dataframe(*args, **kwargs)
-            if kwargs.get('on_select') == 'rerun':
-                return SimpleNamespace(selection=SimpleNamespace(rows=selected_indices))
+        def editor(*args, **kwargs):
+            displayed = original_editor(*args, **kwargs)
+            displayed['Select'] = [i in selected_indices for i in range(len(displayed))]
             return displayed
         with patch('dashboard.db.get_connection', self.connect), \
-             patch('streamlit.dataframe', side_effect=dataframe), \
+             patch('streamlit.data_editor', side_effect=editor), \
              patch('dashboard.alerts_workspace.quote_snapshot') as quotes, \
              patch('morning_brief.alert_compiler.find_duplicate_alerts') as duplicates:
             app = AppTest.from_file(str(ROOT / 'dashboard/pages/P11_Alerts.py'), default_timeout=20).run()
@@ -322,7 +338,7 @@ class AlertControlsDatabaseTests(unittest.TestCase):
             select_first()
             app.selectbox(key='workspace_action').select('purge').run()
             app.button(key='workspace_preview_button').click().run()
-            next(c for c in app.checkbox if c.label.startswith('Confirm purge')).check().run()
+            next(c for c in app.checkbox if c.label.startswith('Confirm delete')).check().run()
             app.button(key='workspace_apply').click().run()
             self.assertEqual(len(app.exception), 0)
             self.assertEqual(self.execute('SELECT count(*) FROM price_alerts WHERE id=%s', (alert_id,), True)[0][0], 0)
@@ -372,56 +388,55 @@ class AlertControlsDatabaseTests(unittest.TestCase):
         self.assertEqual(self.execute('SELECT id FROM price_alerts ORDER BY id', fetch=True), [(hidden,)])
         self.assertEqual(self.execute("SELECT count(*) FROM alert_action_history WHERE action='purge'", fetch=True)[0][0], 3)
 
-    def test_held_policy_archives_watch_and_journal_preserves_stop_and_manual(self):
-        from morning_brief.alert_compiler import reconcile_structural_alerts, reconcile_journal_alerts
-        watch = self.add_alert(source='key_levels_watch', source_key='watch:TEST:resistance')
-        stop = self.add_alert(source='key_levels_watch', source_key='position:TEST:stop', threshold=90)
-        journal = self.add_alert(source='journal_sync', source_key='journal:TEST:idea')
-        manual = self.add_alert()
-        levels = {'positions': {'TEST': {'stop': 90}}, 'watch': {'TEST': {'resistance': 100}}}
-        with patch('morning_brief.alert_compiler.get_connection', self.connect), \
-             patch('morning_brief.alert_compiler._held_symbols', return_value={'TEST'}):
-            stats = reconcile_structural_alerts(levels)
-            journal_stats = reconcile_journal_alerts([{'ticker': 'TEST', 'condition': 'above', 'threshold': 105}])
-            self.assertEqual(journal_stats['skipped_held'], 1)
-            self.assertGreaterEqual(stats['archived'] + stats['held_archived'], 2)
-            self.assertIsNotNone(self.alert(watch)['archived_at'])
-            self.assertIsNotNone(self.alert(journal)['archived_at'])
-            self.assertTrue(lifecycle.is_eligible(self.alert(stop)))
-            self.assertTrue(lifecycle.is_eligible(self.alert(manual)))
-            self.assertEqual(self.execute("SELECT count(*) FROM price_alerts", fetch=True)[0][0], 4)
-        with patch('morning_brief.alert_compiler.get_connection', self.connect):
-            reconcile_structural_alerts(levels)
-        self.assertTrue(lifecycle.is_eligible(self.alert(watch)))
+    def test_saved_watch_levels_never_create_alerts_while_stops_still_refresh(self):
+        from morning_brief import alert_compiler as compiler
+        levels = {'positions': {'TEST': {'stop': 90}},
+                  'watch': {'TEST': {'support': 80,'resistance':100,'alert_above':110},
+                            'OTHER': {'resistance': 55}}}
+        with patch.object(compiler,'get_connection',self.connect):
+            for held in (set(), {'TEST'}):
+                with patch.object(compiler,'_held_symbols',return_value=held):
+                    compiler.reconcile_structural_alerts(levels)
+        rows=self.execute('SELECT source_key,threshold FROM price_alerts',fetch=True)
+        self.assertEqual(rows,[('position:TEST:stop',90)])
 
-    def test_held_policy_dry_run_does_not_archive(self):
-        from morning_brief.alert_compiler import reconcile_journal_alerts
-        journal = self.add_alert(source='journal_sync', source_key='journal:TEST:idea')
-        with patch('morning_brief.alert_compiler.get_connection', self.connect), \
-             patch('morning_brief.alert_compiler._held_symbols', return_value={'TEST'}):
-            stats = reconcile_journal_alerts([], dry_run=True)
-        self.assertEqual(stats['held_archived'], 1)
-        self.assertTrue(lifecycle.is_eligible(self.alert(journal)))
-        self.delivery.assert_not_called()
+    def test_stop_refresh_dry_run_writes_nothing(self):
+        from morning_brief.alert_compiler import reconcile_structural_alerts
+        stop=self.add_alert(source='key_levels_watch',source_key='position:TEST:stop',threshold=90)
+        before=self.alert(stop)
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            reconcile_structural_alerts({'positions':{'TEST':{'stop':95}},'watch':{'OTHER':{'support':55}}},dry_run=True)
+        self.assertEqual(before,self.alert(stop))
 
-    def test_purged_managed_and_journal_levels_do_not_reappear(self):
+    def test_delete_adds_no_discretionary_blocks_and_refresh_cannot_recreate(self):
         from alerts.management import apply_bulk, preview_action
-        from morning_brief.alert_compiler import reconcile_structural_alerts, reconcile_journal_alerts
-        structural = self.add_alert(source='key_levels_watch', source_key='watch:TEST:resistance')
-        journal = self.add_alert(source='journal_sync', source_key='journal:OTHER:old')
-        self.execute("UPDATE price_alerts SET ticker='OTHER' WHERE id=%s", (journal,))
-        apply_bulk(preview_action([self.alert(structural), self.alert(journal)], 'purge'), 'purge')
-        with patch('morning_brief.alert_compiler.get_connection', self.connect):
-            stats = reconcile_structural_alerts({'positions': {}, 'watch': {'TEST': {'resistance': 105}}})
-            self.assertEqual(stats['purged'], 1)
-            stats = reconcile_journal_alerts([{'ticker':'OTHER','condition':'above','threshold':100.2}])
-            self.assertEqual(stats['purged'], 1)
-        self.assertEqual(self.execute('SELECT count(*) FROM price_alerts', fetch=True)[0][0], 0)
-        # A genuinely different journal idea or an explicitly added manual level is allowed.
-        with patch('morning_brief.alert_compiler.get_connection', self.connect):
-            stats = reconcile_journal_alerts([{'ticker':'OTHER','condition':'above','threshold':110}])
-            self.assertEqual(stats['created'], 1)
-        self.add_alert()
+        from morning_brief import alert_compiler as compiler
+        ids=[self.add_alert(source='key_levels_watch',source_key='watch:TEST:resistance'),
+             self.add_alert(source='journal_sync',source_key='journal:TEST:old'),self.add_alert()]
+        apply_bulk(preview_action([self.alert(i) for i in ids],'purge'),'purge')
+        self.assertEqual(self.execute('SELECT count(*) FROM alert_purge_blocks',fetch=True)[0][0],0)
+        with patch.object(compiler,'get_connection',self.connect):
+            for _ in range(3):
+                compiler.reconcile_structural_alerts({'watch':{'TEST':{'resistance':100}}})
+                compiler.reconcile_journal_alerts([dict(ticker='TEST',condition='above',threshold=100)])
+                compiler.promote_recurring_journal_alerts(threshold=1)
+        self.assertEqual(self.execute('SELECT count(*) FROM price_alerts',fetch=True)[0][0],0)
+        self.assertEqual(self.execute("SELECT count(*) FROM alert_action_history WHERE action='purge'",fetch=True)[0][0],3)
+        from alerts.management import save_manual
+        self.assertIsInstance(save_manual('TEST','Explicit recreation','above',100),int)
+
+    def test_stop_deletion_retains_purge_protection_and_historical_blocks(self):
+        from alerts.management import apply_bulk,preview_action
+        from morning_brief.alert_compiler import reconcile_structural_alerts
+        self.execute("""INSERT INTO alert_purge_blocks(original_alert_id,source,identity,ticker,condition,threshold)
+            VALUES (9999,'key_levels_watch','watch:OLD:support','OLD','below',50)""")
+        stop=self.add_alert(source='key_levels_watch',source_key='position:TEST:stop',threshold=90)
+        apply_bulk(preview_action([self.alert(stop)],'purge'),'purge')
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            stats=reconcile_structural_alerts({'positions':{'TEST':{'stop':90}}})
+        self.assertEqual(stats['purged'],1)
+        self.assertEqual(self.execute('SELECT count(*) FROM price_alerts',fetch=True)[0][0],0)
+        self.assertEqual(self.execute('SELECT count(*) FROM alert_purge_blocks',fetch=True)[0][0],2)
 
     def test_purge_rejects_changed_target_without_deleting_anything(self):
         from alerts.management import apply_bulk, preview_action
@@ -475,6 +490,74 @@ class AlertControlsDatabaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply_bulk(preview, 'consolidate')
         self.assertIsNone(self.alert(manual)['archived_at'])
+
+    def test_inline_edits_preserve_identity_controls_and_source_refresh(self):
+        from alerts.management import save_inline_edits,fingerprint
+        from morning_brief.alert_compiler import reconcile_structural_alerts
+        expiry=datetime.now(timezone.utc)+timedelta(days=3)
+        alert_id=self.add_alert(source='key_levels_watch',source_key='watch:TEST:resistance',
+                                threshold=100,triggered=True,expires_at=expiry)
+        lifecycle.control_alert(alert_id,'pause')
+        old=self.alert(alert_id)
+        change=dict(id=alert_id,ticker='TEST',fingerprint=fingerprint(old),label='My level',
+                    condition='below',threshold=95)
+        save_inline_edits([change])
+        new=self.alert(alert_id)
+        self.assertEqual((new['source'],new['source_key']),(old['source'],old['source_key']))
+        self.assertEqual((new['threshold'],new['condition'],new['paused'],new['expires_at']),(95,'below',True,expiry))
+        self.assertFalse(new['triggered'])
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            reconcile_structural_alerts({'watch':{'TEST':{'resistance':120}}})
+        self.assertEqual(new,self.alert(alert_id))
+        with self.assertRaises(ValueError): save_inline_edits([change])
+        change.update(fingerprint=fingerprint(new),remove_expiry=True)
+        save_inline_edits([change])
+        self.assertIsNone(self.alert(alert_id)['expires_at'])
+        self.delivery.assert_not_called()
+
+    def test_inline_batch_rolls_back_on_stop_or_duplicate(self):
+        from alerts.management import save_inline_edits,fingerprint
+        first=self.add_alert(threshold=100)
+        second=self.add_alert(threshold=105)
+        stop=self.add_alert(source='key_levels_watch',source_key='position:TEST:stop',threshold=90)
+        def change(alert_id,level):
+            return dict(id=alert_id,ticker='TEST',fingerprint=fingerprint(self.alert(alert_id)),
+                        label='Edit',condition='above',threshold=level)
+        with self.assertRaises(ValueError): save_inline_edits([change(first,102),change(stop,95)])
+        self.assertEqual(self.alert(first)['threshold'],100)
+        with self.assertRaises(ValueError): save_inline_edits([change(first,105)])
+        self.assertEqual(self.alert(first)['threshold'],100)
+        save_inline_edits([change(first,105)],allow_duplicate=True)
+        self.assertEqual(self.alert(first)['threshold'],105)
+
+    def test_browser_inline_edit_and_create_without_expiry(self):
+        import streamlit as st
+        from streamlit.testing.v1 import AppTest
+        alert_id=self.add_alert(source='key_levels_watch',source_key='watch:TEST:resistance')
+        st.cache_data.clear()
+        original=st.data_editor
+        modify=[]
+        def editor(*a,**kw):
+            frame=original(*a,**kw)
+            if modify:
+                frame.loc[frame['ID']==alert_id,'Level']=107.0
+            return frame
+        with patch('dashboard.db.get_connection',self.connect),patch('streamlit.data_editor',side_effect=editor), \
+             patch('dashboard.alerts_workspace.quote_snapshot') as quotes:
+            app=AppTest.from_file(str(ROOT/'dashboard/pages/P11_Alerts.py'),default_timeout=20).run()
+            self.assertFalse(app.exception)
+            self.assertFalse(any('Expiry' in t.label for t in app.text_input))
+            modify.append(True)
+            app.button(key='workspace_save_edits').click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(self.alert(alert_id)['threshold'],107)
+            modify.clear()
+            app.text_input(key='new_ticker').set_value('^VIX').run()
+            app.number_input(key='new_threshold').set_value(18.0).run()
+            next(b for b in app.button if b.label=='Create manual alert').click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(self.execute("SELECT expires_at FROM price_alerts WHERE ticker='^VIX'",fetch=True),[(None,)])
+            quotes.assert_not_called()
 
     def test_manual_create_edit_duplicates_and_preserved_pause(self):
         from alerts.management import save_manual, fingerprint

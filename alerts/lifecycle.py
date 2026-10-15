@@ -10,6 +10,12 @@ LOCK_NAMESPACE = 75075
 POLL_LOCK = 0
 
 
+def is_position_stop(alert):
+    """Only the exact configured stop identity retains automatic source ownership."""
+    return (alert.get('source') == 'key_levels_watch'
+            and alert.get('source_key') == f"position:{alert.get('ticker')}:stop")
+
+
 def identity(alert):
     return alert.get('source_key') or f"row:{alert['id']}"
 

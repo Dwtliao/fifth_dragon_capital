@@ -35,12 +35,7 @@ cp .env.example .env
 #   ETRADE_DEV=true                     # false for production
 #   DATABASE_URL=postgresql://postgres@localhost:5432/yourdb
 #
-# Optional — enables email notifications for price alerts:
-#   ALERT_SMTP_HOST=smtp.gmail.com
-#   ALERT_SMTP_PORT=587
-#   ALERT_SMTP_USER=you@gmail.com
-#   ALERT_SMTP_PASS=your_app_password
-#   ALERT_EMAIL_TO=you@gmail.com
+# Alert email is disabled; review price conditions in P11.
 ```
 
 ---
@@ -319,14 +314,13 @@ and saved levels remain unchanged by migration/sync; historical SMH alerts are n
   crossing; these are not implemented as confirmed-close or sustained rules. Missing or
   inconsistent evidence must be corrected in the journal, not silently approved.
 - Select specific items (unchecked by default), choose add/replace/keep-existing, preview,
-  and confirm. New watch alerts are operator-owned manual alerts with a 21-day expiry,
-  editable before approval. Replace targets must be same-symbol manual alerts; existing
+  and confirm. New watch alerts are operator-owned manual alerts with no expiry. Replace targets must be same-symbol manual alerts; existing
   exact alerts may be linked with Keep existing without changes. Stops update only their
   own source field/managed alert and require an actual holding snapshot within 4 calendar
   days. Lookups failing, stale targets, conflicting batches, and purged managed stops block
   acceptance. Pause/snooze/archive state is preserved; changed conditions rearm deliberately.
-- Approval itself sends no email or trade, but the scheduled poller may notify an active
-  met condition afterward. Refresh quotes explicitly to see already-met warnings; quotes
+- Approval itself sends no email or trade. Alert email is disabled and background polling
+  is paused; P11 Refresh quotes shows satisfied conditions. Refresh quotes explicitly to see already-met warnings; quotes
   may be delayed/missing, and evidence/notification timing requires acknowledgment.
 - Accepted/rejected conditions do not return merely because wording/file/sync time changes.
   Material levels/timeframes require new review; repeats never extend alert expiry.
@@ -335,8 +329,8 @@ and saved levels remain unchanged by migration/sync; historical SMH alerts are n
   Sync output separates extracted/pending/blocked/repeated counts and explicitly reports
   zero live activations/replacements; review decisions and alert changes retain audit trails.
 
-Approved journal watch alerts remain editable in P11 as manual alerts. Existing source-managed
-levels remain editable in P10. Do not revert to automatic journal activation as a rollback.
+Discretionary alert labels, directions and levels are editable directly in P11.
+Position stops remain editable in P10. Do not revert to automatic journal activation as a rollback.
 
 The default model is `claude-sonnet-5-5` with `low` journal effort. Set
 `CLAUDE_MODEL` and `CLAUDE_JOURNAL_EFFORT` in `.env` to override them; accepted
@@ -370,7 +364,8 @@ and skips unchanged files. No new journal is needed for brief analysis.
 
 ## Price Alerts
 
-Price level alerts are polled via yfinance and notified by email. Eligible conditions use
+Alert email is disabled, even with saved SMTP credentials. Background polling is paused.
+Use P11 Refresh quotes to see on-page notices from fresh Yahoo snapshots. Eligible conditions use
 strict `above`/`below` comparisons: an already satisfied condition can notify without a
 witnessed crossing. An alert re-arms after its condition becomes false. Yahoo quotes may
 be delayed; this is not a real-time trading execution system.
@@ -380,8 +375,8 @@ Use **P11 Alerts** in the sidebar, or **P7 Market Monitor → Open Alerts worksp
 No additional migration is needed for Task 2 if the Task 1 migration is already installed.
 
 The workspace provides **All alerts**, **Needs attention**, and **History**, with ticker/label/ID
-search and source/status/condition filters. Select a row for its editor or select several
-for a bulk action. The table shows price, level, percentage distance, quote retrieval time,
+search and source/status/condition filters. Edit Label, Condition or Level directly in the
+table, then click Save changes. Select rows only for bulk controls or history. The table shows price, level, percentage distance, quote retrieval time,
 source, lifecycle, expiry, delivery outcome, and attention reasons. Quote retrieval time is
 not an exchange trade timestamp; quotes may be delayed or from a closed market.
 
@@ -406,22 +401,23 @@ ineligible mixed-source selections are never silently partially applied.
 - Snooze expiry resumes eligibility without repeating an already delivered, continuously
   satisfied condition. A pending failed notification cancelled by suppression can create
   a new notification after snooze expiry if the condition still holds.
-- Only manual thresholds are editable here. Managed stops/watch/journal levels must be
-  changed at their authoritative source. Manual archive and rearm require confirmation;
-  **Purge permanently** supports every source and state with a selected-ID preview and
-  explicit confirmation. It deletes the selected rows, retains audit snapshots, and blocks
-  managed automation from recreating the same idea without changing source trading levels.
+- Discretionary labels, directions and thresholds are editable directly in the table,
+  including legacy watch/journal rows; IDs, source identities and controls are preserved.
+  Position stops must be edited in P10. **Delete selected alerts** uses the existing scoped
+  preview/confirmation and audit snapshots. Only position-stop deletion creates new purge
+  blocks. Historical blocks and journal approval guards remain intact. Source refresh no
+  longer creates, rewrites, reactivates or retires discretionary watches.
 - **Inactive** distinguishes Paused, Snoozed, Archived, Expired, and Disabled. Condition
   state is separate from delivery status. Old alerts without notification events have no
   recorded delivery outcome; their historical trigger flag is not proof of email delivery.
-- **Check Alerts — No Emails** is read-only and retains output across reruns. **Run Alert
-  Poll** is live and can send email; P11 requires an explicit live-poll checkbox. The existing
-  scheduled poller remains live as well. These controls are under **Poll health and diagnostics**.
+- **Check Alerts — No Emails** is a read-only diagnostic under Poll health and diagnostics.
+  Email is disabled and the scheduled poller remains paused.
 
-Manual creation/editing validates symbols, finite positive levels, condition, and optional
-future timezone-aware expiry. Exact duplicate levels require explicit opt-in; distinct levels
-remain allowed. Changing a ticker/condition/threshold rearms that alert without clearing its
-Pause/Snooze/Archive state. Managed levels link to P10 rather than allowing direct edits.
+New alerts have **no expiry**: keep them until you pause or delete them. Existing expirations
+are preserved unless you check **Remove expiry** and save. No timestamp entry is required.
+Creation/editing validates symbols, conditions and finite positive levels. Exact duplicate
+levels require explicit opt-in. Changing a condition/threshold rearms the edited alert without
+clearing Pause/Snooze/Archive. Inline saves are atomic and reject stale targets.
 
 Hygiene reports load only on request. Aging manual alerts remain review-only with the existing
 90-day cutoff. Exact manual/journal + structural pairs can be previewed and consolidated after
@@ -517,7 +513,7 @@ it is not merely an acknowledgment. Latest poll health, summary, quote failures,
 ### Run the poller
 
 ```bash
-# Poll every 5 minutes indefinitely (recommended: run in a terminal or via launchd)
+# Legacy command reference only: background polling is paused; do not restart without direction
 python -m alerts.poller
 
 # Single poll and exit (for cron)
@@ -538,17 +534,8 @@ concurrency, read-only checks, migration preservation, and Streamlit Pause/Resum
 
 ### Email notifications
 
-Add these to `.env` to enable email alerts (all optional — alerts still log to console without them):
-
-```
-ALERT_SMTP_HOST=smtp.gmail.com
-ALERT_SMTP_PORT=587
-ALERT_SMTP_USER=you@gmail.com
-ALERT_SMTP_PASS=your_app_password
-ALERT_EMAIL_TO=you@gmail.com
-```
-
-For Gmail, use an [App Password](https://myaccount.google.com/apppasswords) rather than your account password.
+Disabled by operator policy. SMTP credentials do not enable alert email. Use **P11 →
+Refresh quotes** for on-page notices; the page does not monitor prices when closed.
 
 ---
 

@@ -5,8 +5,13 @@ _Last updated: October 18, 2026. Read this at the start of every session._
 **Resume here:** [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) records the
 current deployed state, backup/recovery constraints and next actions. The
 October 15 removal is complete, not pending. On October 18, the user accepted
-alert testing and authorized committing, pushing and opening a PR. Leave the PR
-unmerged; merging and further production operations require direction.
+alert testing and authorized committing, pushing and opening PR #88. After the
+review fixes and 220 passing isolated tests, the user explicitly authorized
+committing/pushing the follow-up and merging PR #88. No further production
+operations or notification resumption are authorized.
+The alert simplification and review fixes intentionally modify `alerts/` and
+`etrade_sync/db.py` under explicit user direction; the older directory-level
+“DO NOT MODIFY” annotations below do not prohibit this authorized scope.
 
 ---
 
@@ -33,6 +38,14 @@ Streamlit verification instance was stopped; the user starts the dashboard
 manually. No broker sync/orders, journal extraction, live quote polling, push or
 merge were performed as part of deployment. Do not revert to old key-level
 readers against the position-only schema or restore a full dump over newer data.
+
+## Database-backed tests
+
+Follow [docs/isolated_postgres_tests.md](docs/isolated_postgres_tests.md). Use a
+fresh disposable PostgreSQL cluster with its own data directory/private socket
+and a source copy without `.env`; never use the production database for these
+mutating tests. The runbook includes setup, dummy configuration, execution and
+shutdown instructions for any coding agent.
 
 ## Project Overview
 Personal trading infrastructure. PostgreSQL DB + Python + Streamlit dashboard.

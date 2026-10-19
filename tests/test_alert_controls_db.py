@@ -273,7 +273,6 @@ class AlertControlsDatabaseTests(unittest.TestCase):
                     compiler.reconcile_structural_alerts({})
                     compiler.reconcile_journal_alerts([dict(ticker='TEST',condition='above',threshold=125)])
                     compiler.promote_recurring_journal_alerts(threshold=1)
-                    compiler.backfill_legacy_structural_alerts()
             # Direct legacy callers cannot bypass the same stop-only boundary, even on reload.
             desired = [dict(source='key_levels_watch',source_key='watch:TEST:resistance',ticker='TEST',
                             condition='above',threshold=130,label='new'),
@@ -471,7 +470,7 @@ class AlertControlsDatabaseTests(unittest.TestCase):
     def test_exact_consolidation_preserves_structural_and_suppresses_duplicate(self):
         from alerts.management import apply_bulk, consolidation_preview
         journal = self.add_alert(source='journal_sync', source_key='journal:TEST:idea')
-        structural = self.add_alert(source='key_levels_watch', source_key='watch:TEST:resistance')
+        structural = self.add_alert(source='key_levels_watch', source_key='position:TEST:stop')
         before = self.alert(structural)
         preview = consolidation_preview([self.alert(journal), before])
         apply_bulk(preview, 'consolidate')
@@ -484,12 +483,26 @@ class AlertControlsDatabaseTests(unittest.TestCase):
     def test_consolidation_rejects_changed_pair(self):
         from alerts.management import apply_bulk, consolidation_preview
         manual = self.add_alert()
-        structural = self.add_alert(source='key_levels_watch', source_key='watch:TEST:resistance')
+        structural = self.add_alert(source='key_levels_watch', source_key='position:TEST:stop')
         preview = consolidation_preview([self.alert(manual), self.alert(structural)])
+        self.assertIsNotNone(preview)
         self.execute('UPDATE price_alerts SET threshold=100.01 WHERE id=%s', (structural,))
         with self.assertRaises(ValueError):
             apply_bulk(preview, 'consolidate')
         self.assertIsNone(self.alert(manual)['archived_at'])
+
+    def test_consolidation_rejects_legacy_watch_pair_without_mutation(self):
+        from alerts.management import apply_bulk, consolidation_preview, preview_action
+        for source in ('manual', 'journal_sync'):
+            candidate = self.add_alert(source=source)
+            legacy = self.add_alert(source='key_levels_watch',
+                                    source_key=f'watch:TEST:{source}')
+            before = [self.alert(candidate), self.alert(legacy)]
+            self.assertIsNone(consolidation_preview(before))
+            # Even a caller-supplied preview cannot bypass execution validation.
+            with self.assertRaisesRegex(ValueError, 'no longer qualifies'):
+                apply_bulk(preview_action(before, 'pause'), 'consolidate')
+            self.assertEqual(before, [self.alert(candidate), self.alert(legacy)])
 
     def test_inline_edits_preserve_identity_controls_and_source_refresh(self):
         from alerts.management import save_inline_edits,fingerprint

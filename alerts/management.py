@@ -109,7 +109,7 @@ def apply_bulk(preview, action, snoozed_until=None):
                              alert['condition'], alert['threshold'], not bool(alert.get('source_key'))))
                     cur.execute('DELETE FROM price_alerts WHERE id=%s', (alert['id'],))
                     continue
-                if action == 'consolidate' and alert['source'] == 'key_levels_watch':
+                if action == 'consolidate' and is_position_stop(alert):
                     continue  # Structural row and its notification history are untouched.
                 if action != 'rearm':
                     cur.execute('''INSERT INTO alert_controls (source,identity,paused,snoozed_until)
@@ -142,6 +142,9 @@ def consolidation_preview(alerts):
     sources = {a['source'] for a in alerts}
     if sources not in ({'manual', 'key_levels_watch'}, {'journal_sync', 'key_levels_watch'}):
         return None
+    structural = next((a for a in alerts if a['source'] == 'key_levels_watch'), None)
+    if not is_position_stop(structural):
+        return None  # Not the configured stop identity; not a real structural duplicate.
     if len({(a['ticker'], a['condition'], a['threshold']) for a in alerts}) != 1:
         return None
     return [dict(id=a['id'], ticker=a['ticker'], source=a['source'], threshold=a['threshold'],

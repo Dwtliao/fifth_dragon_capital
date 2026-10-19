@@ -18,16 +18,13 @@ from etrade_sync.db import get_connection
 MANAGED_SOURCES = ("key_levels_watch", "journal_sync")
 DEFAULT_JOURNAL_ALERT_TTL_DAYS = 21
 
-# Two journal mentions of the same ticker+condition count as the same idea when
-# their thresholds are within this band of each other. Percentage-based so it
-# scales across asset prices, clamped so it's neither too loose on high-priced
-# futures nor too tight on cheap stocks.
+# Near-duplicate reporting tolerance, scaled across asset prices and clamped
+# for expensive futures and cheap stocks. Legacy constant names are retained.
 JOURNAL_MATCH_PCT = 0.01
 JOURNAL_MATCH_MIN_ABS = 0.05
 JOURNAL_MATCH_MAX_ABS = 25.0
 
-# Recurrences (distinct sync runs matching the same journal idea) required
-# before it gets promoted from a tactical journal alert into a structural one.
+# Legacy default retained for the inert promotion compatibility entrypoint.
 PROMOTION_RECURRENCE_THRESHOLD = 3
 
 # A manual alert that's never fired and has sat this long gets flagged in the
@@ -108,87 +105,6 @@ def build_structural_alerts(key_levels: dict, *, held_symbols: set[str] | None =
         })
 
     return desired
-
-
-def build_journal_alerts(alerts: list[dict]) -> list[dict]:
-    """Normalize raw journal extraction into candidate alerts.
-
-    This is a pure legacy normalization helper. Candidates are reference data;
-    they do not authorize live alert creation or refresh.
-    """
-    candidates: list[dict] = []
-
-    for alert in alerts or []:
-        ticker = str(alert.get("ticker") or "").strip().upper()
-        condition = str(alert.get("condition") or "").strip().lower()
-        threshold = _as_float(alert.get("threshold"))
-        if not ticker or condition not in {"above", "below"} or threshold is None:
-            continue
-
-        label = str(alert.get("label") or "").strip()
-        if not label:
-            label = f"Journal: {ticker} {condition} {_format_threshold(threshold)}"
-
-        candidates.append({
-            "ticker": ticker,
-            "condition": condition,
-            "threshold": threshold,
-            "label": label,
-            "tier": 3,
-        })
-
-    return candidates
-
-
-def _journal_match_tolerance(threshold: float) -> float:
-    band = abs(threshold) * JOURNAL_MATCH_PCT
-    return min(max(band, JOURNAL_MATCH_MIN_ABS), JOURNAL_MATCH_MAX_ABS)
-
-
-def _find_matching_journal_alert(cur, ticker: str, condition: str, threshold: float) -> dict | None:
-    """Return the most-recently-refreshed active, non-pinned journal alert within tolerance, if any."""
-    cur.execute(
-        """
-        SELECT id, ticker, label, condition, threshold::float, tier, expires_at,
-               pinned, enabled, archived_at, source_key, recurrence_count,
-               first_seen_at, last_seen_at, refreshed_at
-        FROM price_alerts
-        WHERE source = 'journal_sync'
-          AND pinned = FALSE
-          AND enabled = TRUE
-          AND archived_at IS NULL
-          AND ticker = %s
-          AND condition = %s
-        ORDER BY refreshed_at DESC NULLS LAST, id DESC
-        """,
-        (ticker, condition),
-    )
-    cols = [d.name for d in cur.description]
-    for row in cur.fetchall():
-        candidate = dict(zip(cols, row))
-        if abs(candidate["threshold"] - threshold) <= _journal_match_tolerance(candidate["threshold"]):
-            return candidate
-    return None
-
-
-def _matches_existing_structural_alert(cur, ticker: str, condition: str, threshold: float) -> bool:
-    """True if an active structural alert already covers this ticker/condition within tolerance."""
-    cur.execute(
-        """
-        SELECT threshold::float
-        FROM price_alerts
-        WHERE source = 'key_levels_watch'
-          AND enabled = TRUE
-          AND archived_at IS NULL
-          AND ticker = %s
-          AND condition = %s
-        """,
-        (ticker, condition),
-    )
-    for (existing_threshold,) in cur.fetchall():
-        if abs(existing_threshold - threshold) <= _journal_match_tolerance(existing_threshold):
-            return True
-    return False
 
 
 def upsert_journal_alert(
@@ -345,11 +261,6 @@ def prune_expired_alerts(*, dry_run: bool = False) -> int:
         return archived
     finally:
         conn.close()
-
-
-def backfill_legacy_structural_alerts(*, dry_run: bool = False) -> int:
-    """Legacy watch ownership is retained unchanged pending explicit migration."""
-    return 0
 
 
 def _desired_map(desired_alerts: list[dict]) -> dict[tuple[str, str], dict]:
@@ -592,51 +503,6 @@ def promote_recurring_journal_alerts(
 ) -> int:
     """Recurrence is evidence, never authorization to activate or rewrite an alert."""
     return 0
-
-
-def _structural_row_exists(source_key: str) -> bool:
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM price_alerts WHERE source = 'key_levels_watch' AND source_key = %s LIMIT 1",
-                (source_key,),
-            )
-            return cur.fetchone() is not None
-    finally:
-        conn.close()
-
-
-def _archive_by_source_key(source: str, source_key: str, *, dry_run: bool = False) -> None:
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id FROM price_alerts WHERE source = %s AND source_key = %s", (source, source_key))
-            row = cur.fetchone()
-            if row:
-                _archive_alert(cur, row[0])
-        if dry_run:
-            conn.rollback()
-        else:
-            conn.commit()
-    finally:
-        conn.close()
-
-
-def _clear_expires_at(source_key: str, *, dry_run: bool = False) -> None:
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE price_alerts SET expires_at = NULL WHERE source = 'key_levels_watch' AND source_key = %s",
-                (source_key,),
-            )
-        if dry_run:
-            conn.rollback()
-        else:
-            conn.commit()
-    finally:
-        conn.close()
 
 
 _KL_FIELDS = ("stop", "note")
@@ -908,63 +774,6 @@ def print_duplicate_report() -> None:
         print(f"\n{cluster['ticker']} {cluster['condition']}:")
         for row in cluster["rows"]:
             print(f"  id={row['id']:<4} source={row['source']:<16} threshold={row['threshold']:<10} {row['label']}")
-
-
-# Non-structural sources eligible for one-click consolidation against an exact
-# structural match — structural is always the side that wins, per #63.
-CONSOLIDATABLE_SOURCES = ("manual", "journal_sync")
-
-
-def archive_duplicate_alert(candidate_id: int, structural_id: int, *, dry_run: bool = False) -> bool:
-    """Narrow, deterministic consolidation: archive a manual or journal_sync alert
-    that exactly duplicates a structural (key_levels_watch) alert — same ticker,
-    condition, and threshold, both currently active. Structural wins because it's
-    retained by this explicit consolidation policy. Discretionary source refresh
-    no longer regenerates or overwrites either side.
-
-    Re-verifies eligibility against live data rather than trusting a caller-supplied
-    cluster — returns False and archives nothing if the pair no longer qualifies
-    (already archived/disabled, sources don't match, or thresholds have diverged).
-    Never touches the structural row.
-    """
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, ticker, source, condition, threshold::float, enabled, archived_at
-                FROM price_alerts
-                WHERE id = ANY(%s)
-                """,
-                ([candidate_id, structural_id],),
-            )
-            cols = [d.name for d in cur.description]
-            by_id = {row[0]: dict(zip(cols, row)) for row in cur.fetchall()}
-
-            candidate = by_id.get(candidate_id)
-            structural = by_id.get(structural_id)
-            qualifies = (
-                candidate is not None and structural is not None
-                and candidate["source"] in CONSOLIDATABLE_SOURCES and structural["source"] == "key_levels_watch"
-                and candidate["enabled"] and candidate["archived_at"] is None
-                and structural["enabled"] and structural["archived_at"] is None
-                and candidate["ticker"] == structural["ticker"]
-                and candidate["condition"] == structural["condition"]
-                and candidate["threshold"] == structural["threshold"]
-            )
-            if not qualifies:
-                conn.rollback()
-                return False
-
-            _archive_alert(cur, candidate_id)
-
-        if dry_run:
-            conn.rollback()
-        else:
-            conn.commit()
-        return True
-    finally:
-        conn.close()
 
 
 def find_stale_alerts(*, min_age_days: int = STALE_MANUAL_ALERT_DAYS) -> list[dict]:

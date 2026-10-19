@@ -12,7 +12,9 @@ This records completed work; do not restart the old October 14 phased plan.
 - October 18: `git fetch origin` confirmed the remote branch now includes both
   implementation commits through `368f514`; no divergence before this update.
 - User accepted alert testing on October 18 and explicitly requested saving,
-  committing, pushing and creating a PR. **Do not merge the PR.**
+  committing, pushing and creating PR #88. Subsequently, after review fixes and
+  220 passing isolated tests, the user explicitly authorized committing/pushing
+  the follow-up and merging PR #88.
 - This final update records acceptance and corrects P1's misleading “90d” default
   label to incremental sync, with help explaining overlap and initial fallback.
   Syntax parsing and `git diff --check` passed; no production sync was run.
@@ -102,6 +104,11 @@ Latest deployment backup (confirmed present October 18):
 
 ## Isolated test artifacts
 
+For new test runs, follow [isolated_postgres_tests.md](isolated_postgres_tests.md).
+It creates a fresh disposable cluster and source copy rather than relying on
+old temporary artifacts below. October 18 review validation passed 228 tests
+with zero skips; its test cluster was stopped.
+
 - Registered detached worktree: `/private/tmp/fdc-watch-levels-step4`, base `85f8e2e`.
   Contains the tested prototype and uncommitted follow-up copies. Production
   source at `368f514` is authoritative now; do not blindly copy this worktree
@@ -120,11 +127,12 @@ Latest deployment backup (confirmed present October 18):
 
 ## Next actions
 
-1. Commit this handoff/plan and P1 label update, then normally push
+1. Commit/push the reviewed fixes and unused-code cleanup normally on
    `dev/journal-review-refinements`; never force-push.
-2. Open a PR against main covering the completed alert simplification and saved
-   Watch Levels retirement. Check GitHub for its current publication status.
-3. Leave the PR unmerged for user review. Merge requires explicit direction.
+2. Merge PR #88 against main as explicitly authorized October 18. Check GitHub
+   for its current publication/merge status; do not repeat a completed merge.
+3. Final full-suite validation: 220 tests passed with zero skips, including
+   78 database-backed tests. The disposable PostgreSQL cluster is stopped.
 4. Keep email disabled and polling unloaded. Do not assume older unchecked plan
    sections authorize table consolidation, holding-stop policy changes, journal
    dismissal/recurrence redesign, production cleanup/restoration, history cleanup

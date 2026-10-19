@@ -363,8 +363,10 @@ def save_key_levels_to_db(key_levels: dict) -> None:
     """Save position metadata without changing identities or retired watch rows."""
     if key_levels.get('watch'):
         raise ValueError('Saved Watch Levels are retired; create an alert in P11 instead')
-    from etrade_sync.db import get_connection
     positions = key_levels.get('positions') or {}
+    if not positions:
+        raise ValueError('Refusing to save empty positions: this replaces the whole positions table, not a diff')
+    from etrade_sync.db import get_connection
     conn = get_connection()
     try:
         with conn.cursor() as cur:

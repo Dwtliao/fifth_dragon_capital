@@ -31,7 +31,13 @@ def _execute_schema_file(cur, path):
             AND column_name='expires_at')""")
         if cur.fetchone()[0]:
             # Retain additive schema repair, but preserve explicit no-expiry rules.
-            contents = contents.partition('-- Back-fill:')[0]
+            before, marker, _ = contents.partition('-- Back-fill:')
+            if not marker:
+                raise RuntimeError(
+                    "069_price_alerts_source_tier_expiry.sql no longer contains the "
+                    "'-- Back-fill:' marker; refusing to risk replaying the expiry "
+                    "backfill against explicit no-expiry alerts. Update this guard.")
+            contents = before
     cur.execute(contents)
 
 

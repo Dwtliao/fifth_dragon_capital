@@ -276,7 +276,7 @@ class JournalReviewDatabaseTests(unittest.TestCase):
             return conn
         # Calling reconcile_alerts directly (not via reconcile_structural_alerts)
         # keeps this deterministic: no unrelated connections from
-        # _held_symbols()/backfill_legacy_structural_alerts() to miscount.
+        # _held_symbols() to miscount.
         with patch('morning_brief.alert_compiler.get_connection',get_connection_probe):
             stats=reconcile_alerts(build_structural_alerts({'positions':{'Z':{'stop':99}}}),
                                     sources=('key_levels_watch',),reload_desired=reload)

@@ -397,9 +397,11 @@ is disabled. The poller was rechecked October 18 and is still unloaded.
 - [x] User accepted alert testing on October 18.
 - [x] Correct P1's misleading default sync label from “90d” to incremental,
   documenting its watermark overlap and initial-history fallback.
-- [ ] Commit and push the final handoff/label update and open a PR against main,
-  as explicitly requested October 18. Leave the PR **unmerged** for review.
-- [ ] Merge only after explicit direction. Keep email disabled and polling
+- [x] Commit/push final handoff and label update as `9711e62`; open
+  [PR #88](https://github.com/Dwtliao/fifth_dragon_capital/pull/88).
+- [ ] User explicitly authorized committing/pushing review fixes and merging
+  PR #88 on October 18 after 220 passing tests. Complete publication and merge.
+  Keep email disabled and polling
   unloaded; do not restore snapshots, remove backups or modify stop policy.
 
 The October 14 phased plan below is historical design context, superseded where
@@ -408,6 +410,45 @@ Section 1, reintroduce saved Watch Levels, treat retired schema work as pending,
 or automatically start Sections 2–6. Shared control/history/journal tables and
 legacy alert source identities remain intentional. Counts in deployment notes
 are October 15 observations, not an October 18 production inventory query.
+
+### PR review follow-up — October 18, 2026
+
+Reusable database-test workflow: [isolated PostgreSQL runbook](docs/isolated_postgres_tests.md),
+also linked from CLAUDE.md. Use fresh data/socket directories and a checkout
+without production `.env`; production must never be the test target.
+
+Reviewed fixes ready for the authorized follow-up commit: reject empty position saves, restrict duplicate
+consolidation to exact position-stop identities, fail closed if migration 069's
+backfill marker is missing, and enforce rejection-only watch-idea selections.
+The simplified editable idea-alert creation form remains intact. Final focused
+validation: 67 tests passed in an isolated copy without production configuration,
+including rejection of idea/pending watch items with stale approve UI state, empty
+save guards, exact-stop consolidation and expiry-backfill guards. Subsequent full-suite validation passed **228 tests with zero skips**, including
+all 78 database-backed tests (the original 77 plus a new legacy-consolidation
+rejection regression). A fresh disposable PostgreSQL cluster and checkout were
+used with dummy credentials and mocked delivery/quotes; the cluster was stopped
+afterward. Corrected old consolidation fixtures to use actual position stops.
+No production migrations, cleanup or notification changes.
+These alert/etrade_sync edits are intentional exceptions to CLAUDE.md's older
+module restrictions, authorized by the requested alert behavior and review fixes.
+
+Deferred low-priority code work (not required for this PR):
+
+- [ ] Share strict above/below comparison logic across poller, attention reasons
+  and page notices while retaining each caller's freshness/eligibility checks.
+- [ ] Consider batching inline-edit reads/writes only if measured latency warrants
+  it; retain atomic validation, lock ordering and per-alert audit history.
+- [x] Remove unused journal normalization/backfill helpers, orphaned journal
+  matching/promotion DB helpers and the old archive_duplicate_alert mutation path,
+  plus tests/fakes that exercised only those removed APIs. Repository search found
+  no production callers. Retain harmless opt-in compatibility no-ops and active
+  management consolidation coverage; no change to alert history or data. Final cleanup
+  validation: **220 tests passed, zero skips**, including all 78 DB-backed tests.
+  Eight tests solely for removed APIs were deleted; the disposable cluster stopped.
+- [ ] Replace migration-comment parsing with explicit migration/backfill tracking
+  if broader migration work is commissioned; the current guard fails closed.
+- [ ] Harden the full-state position-save API against partial snapshots (or make
+  seeding insert-only); do not change P10's explicit deletion/baseline workflow.
 
 ### Historical handoff and phased plan — October 14, 2026
 

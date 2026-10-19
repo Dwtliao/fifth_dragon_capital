@@ -52,3 +52,38 @@ render_idea_alert(dict(id=58,ticker='SI=F',condition='below',threshold=47), 'tes
             app.button(key='test_create_manual').click().run()
             self.assertIn('Exact existing level', app.error[0].value)
             self.assertFalse(app.exception)
+
+
+class WatchIdeaRejectionTests(unittest.TestCase):
+    def test_watch_selection_can_only_reject_even_with_stale_approve_state(self):
+        from morning_brief.journal_review import item_token
+        for status, view in (('idea', 'Watch ideas'), ('pending', 'Pending approval')):
+            item = dict(id=58, revision=1, ticker='TEST', kind='watch', status=status,
+                        condition='below', threshold=47, timeframe='price', evidence='Test evidence',
+                        validation_error=None, needs_clarification=False, source_date=None,
+                        file_path='/fake/journal.md')
+            prefix = f"jr_58_{item_token(item)[:12]}"
+            with self.subTest(status=status), \
+                 patch('dashboard.journal_review_ui.list_items', return_value=[item]), \
+                 patch('dashboard.journal_review_ui.current_alerts', return_value=[]), \
+                 patch('dashboard.journal_review_ui.preview_selection', return_value=[{'id':58}]) as preview, \
+                 patch('dashboard.journal_review_ui.review_action', return_value=[58]) as review, \
+                 patch('dashboard.journal_review_ui.save_manual') as save:
+                app = AppTest.from_string('''
+import streamlit as st
+from dashboard.journal_review_ui import render_journal_review
+render_journal_review()
+''')
+                app.session_state['jr_action'] = 'approve'
+                app.run()
+                app.radio(key='jr_view').set_value(view).run()
+                app.checkbox(key=prefix+'_selected').check().run()
+                self.assertFalse(any(s.key=='jr_action' for s in app.selectbox))
+                app.button(key='jr_preview_button').click().run()
+                preview.assert_called_once()
+                confirm = next(c for c in app.checkbox if c.key.startswith('jr_confirm_'))
+                confirm.check().run()
+                app.button(key='jr_apply').click().run()
+                self.assertFalse(app.exception)
+                self.assertEqual(review.call_args.args, ([{'id':58}], 'reject'))
+                save.assert_not_called()

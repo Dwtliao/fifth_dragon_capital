@@ -36,7 +36,7 @@ def render_idea_alert(item, prefix):
             st.session_state[preview_key] = signature
     if st.session_state.get(preview_key) == signature:
         st.write(f'Create manual alert: {symbol.strip().upper()} {condition} {price:g}; no expiry.')
-        st.caption('If the price is already on this side of the level, the next poll can notify. '
+        st.caption('Use Refresh quotes on P11 Alerts to check whether this price condition is met. '
                    'Quotes may be delayed. Creation sends no email.')
         if st.button('Create this alert', key=prefix+'_create_manual'):
             try:
@@ -103,6 +103,9 @@ def render_journal_review():
                     st.warning('Evidence is older than 21 days. Confirm it still expresses your intent; sync time is not evidence freshness.')
                 if item['kind']=='watch' and item['status'] in ('idea','pending'):
                     render_idea_alert(item, prefix)
+                    st.caption('Use this only with "Reject selected ideas" below — it does not create or change an alert.')
+                    if st.checkbox(f"Select idea #{item['id']} to reject",key=prefix+'_selected'):
+                        selected.append(item)
                     continue
                 if item['status'] not in ('accepted','rejected','context'):
                     if st.checkbox(f"Select idea #{item['id']}",key=prefix+'_selected'):
@@ -142,8 +145,13 @@ def render_journal_review():
         st.caption('Select specific items to prepare, approve, or reject. Nothing is selected by default.')
         st.session_state.pop('jr_preview',None)
         return
-    action = st.selectbox('Selected review action',['approve','reject','prepare'],
-        format_func=lambda x:{'approve':'Approve selected candidates','reject':'Reject selected ideas','prepare':'Prepare watch ideas for approval — no alerts'}[x],key='jr_action')
+    if any(i['kind']=='watch' and i['status'] in ('idea','pending') for i in selected):
+        action = 'reject'
+        st.caption('Selected review action: Reject selected ideas. This selection includes '
+                   'watch ideas marked for rejection; the whole batch can only be rejected.')
+    else:
+        action = st.selectbox('Selected review action',['approve','reject','prepare'],
+            format_func=lambda x:{'approve':'Approve selected candidates','reject':'Reject selected ideas','prepare':'Prepare watch ideas for approval — no alerts'}[x],key='jr_action')
     expiry = None
     st.caption('New alerts have no expiry. Preparation and rejection never change live alerts.')
     signature = repr(([(i['id'],item_token(i)) for i in selected],options,action,expiry))

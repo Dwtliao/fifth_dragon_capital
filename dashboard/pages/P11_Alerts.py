@@ -10,17 +10,17 @@ import streamlit as st
 from psycopg2.errors import UndefinedTable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from alerts.lifecycle import is_eligible, state, valid_price
-from alerts.management import apply_bulk, consolidation_preview, fingerprint, preview_action, save_manual
+from alerts.lifecycle import is_eligible, state, is_position_stop
+from alerts.management import apply_bulk, consolidation_preview, preview_action, save_manual, save_inline_edits
 from alerts.hygiene import review_exceptions
 from dashboard.alerts_workspace import (current_alerts, filter_alerts, quote_snapshot,
-                                        selected_alerts, table_records, split_snapshot, distance_percent)
+                                        table_records, split_snapshot, distance_percent, page_notifications, inline_changes)
 from dashboard.db import query
 from morning_brief.alert_compiler import find_duplicate_alerts, find_stale_alerts
 
 st.set_page_config(page_title='Alerts — Fifth Dragon Capital', layout='wide')
 st.title('Price Alerts')
-st.caption('Manage alerts here; P7 keeps the charts. Selection and filtering do not fetch quotes or send email.')
+st.caption('Alert email is disabled. Refresh quotes here for on-page notifications; P7 keeps the charts.')
 
 try:
     alerts = current_alerts()
@@ -45,6 +45,7 @@ c.metric('Archived / Expired / Disabled', sum(state(r) in ('Archived', 'Expired'
 
 refresh, reload_data = st.columns(2)
 if reload_data.button('Refresh alert status', key='workspace_reload'):
+    st.session_state['workspace_table_epoch'] = st.session_state.get('workspace_table_epoch', 0) + 1
     st.rerun()
 if refresh.button('Refresh quotes', key='workspace_quotes_refresh'):
     # Explicit invalidation, independent of table/filter interactions.
@@ -57,6 +58,14 @@ quotes = st.session_state.get('workspace_quotes', {})
 if not quotes:
     st.info('Click Refresh quotes to load current prices and distance. Alert controls work without quotes.')
 st.caption('Quote timestamps show retrieval time, not exchange trade time. Yahoo quotes may be delayed. Refresh is explicit; snapshots older than 10 minutes are flagged.')
+
+st.subheader('On-page notifications')
+st.caption('Checked when you refresh quotes on this page. Background monitoring is paused. These notices show satisfied conditions, not confirmed price crossings; snapshots expire after 10 minutes.')
+notices = page_notifications(alerts, quotes)
+for notice in notices:
+    st.warning(f"#{notice['id']} {notice['ticker']}: {notice['price']:,.4f} is {notice['condition']} {notice['threshold']:,.4f}")
+if quotes and not notices:
+    st.info('No active alert conditions met in the fresh, available quotes.')
 
 view = st.radio('View', ['All alerts', 'Needs attention', 'History'], horizontal=True, key='workspace_view')
 search = st.text_input('Search ticker, label, or ID', key='workspace_search')
@@ -77,19 +86,45 @@ if st.session_state.get('workspace_context') != table_key:
     st.session_state.pop('workspace_preview', None)
     st.session_state['workspace_context'] = table_key
 
-st.caption(f'{len(rows)} of {len(alerts)} alerts shown. Select row checkboxes for details or bulk actions. Selection resets when filters or displayed IDs change; hidden rows are never included.')
+st.caption(f'{len(rows)} of {len(alerts)} alerts shown. Edit Label, Condition, or Level directly, then Save changes. Select checkboxes are only for bulk actions and history.')
 selected = []
 if rows:
-    event = st.dataframe(pd.DataFrame(table_records(rows, quotes, nearby)),
-        key=table_key, on_select='rerun', selection_mode='multi-row', hide_index=True,
-        width='stretch', column_config={
+    if st.session_state.get('workspace_edit_context') != table_key:
+        st.session_state['workspace_edit_context'] = table_key
+        st.session_state['workspace_edit_baseline'] = rows
+    baseline = st.session_state['workspace_edit_baseline']
+    records = table_records(baseline, quotes, nearby)
+    for record, alert in zip(records, baseline):
+        record['Select'] = False
+        record['Remove expiry'] = False
+    frame = pd.DataFrame(records)
+    edited = st.data_editor(frame, key=table_key, hide_index=True, width='stretch',
+        column_order=['Select','Ticker','Label','Condition','Level','Remove expiry','Status','Price','Distance %','ID','Source'],
+        disabled=[c for c in frame.columns if c not in ('Select','Label','Condition','Level','Remove expiry')],
+        column_config={
+            'Select': st.column_config.CheckboxColumn('Select', default=False),
+            'Condition': st.column_config.SelectboxColumn(options=['above','below'], required=True),
+            'Level': st.column_config.NumberColumn(min_value=0.0001, format='%.4f', required=True),
+            'Remove expiry': st.column_config.CheckboxColumn(help='Check only if you want to remove an existing expiry. New alerts have no expiry.'),
             'Price': st.column_config.NumberColumn(format='%.4f'),
-            'Level': st.column_config.NumberColumn(format='%.4f'),
-            'Distance %': st.column_config.NumberColumn(format='%.2f', help='Absolute level-to-price gap divided by current price × 100. Can exceed 100%; check old levels, splits, or units.'),
-            'Source': st.column_config.TextColumn(help='manual: operator-owned; key_levels_watch: structural position/watch level; journal_sync: journal-derived level'),
-            'Last fired': st.column_config.DatetimeColumn(help='Legacy timestamps may predate delivery tracking. New timestamps reflect successful email delivery.'),
+            'Distance %': st.column_config.NumberColumn(format='%.2f'),
         })
-    selected = selected_alerts(rows, event.selection.rows)
+    edited_records = edited.to_dict('records')
+    selected_ids = {r['ID'] for r in edited_records if r['Select']}
+    selected = [r for r in rows if r['id'] in selected_ids]
+    st.caption('New alerts stay until you pause or delete them. Existing expirations are preserved unless you check Remove expiry. Position stops are maintained in P10; editing them here is blocked.')
+    allow_inline_duplicate = st.checkbox('Allow intentional duplicate levels when saving edits', key='workspace_inline_duplicate')
+    if st.button('Save changes', key='workspace_save_edits', type='primary'):
+        try:
+            changes = inline_changes(baseline, edited_records)
+            ids = save_inline_edits(changes, allow_duplicate=allow_inline_duplicate) if changes else []
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            if ids:
+                notify(f'Saved changes for alert IDs {ids}.')
+            else:
+                st.info('No alert edits to save.')
 else:
     st.info('No alerts match these filters.')
 
@@ -101,11 +136,11 @@ if selected:
     if not purge_ready:
         st.caption('Purge requires the targeted migration: python -m alerts.migrate --purge')
     action = st.selectbox('Action', actions,
-                          format_func=lambda a: 'Purge permanently — any source' if a == 'purge' else a.capitalize(), key='workspace_action')
+                          format_func=lambda a: 'Delete selected alerts' if a == 'purge' else a.capitalize(), key='workspace_action')
     hours = st.selectbox('Snooze duration (hours)', [1, 4, 24, 72, 168], key='workspace_hours', disabled=action != 'snooze')
-    st.caption('Archive is manual-only. Resume/Rearm can notify at the next scheduled poll if the condition is met. These buttons themselves do not send email.')
+    st.caption('Archive is manual-only. Refresh quotes to check active conditions on this page. Email is disabled.')
     if action == 'purge':
-        st.warning('Purge permanently removes these alert rows, including archived/expired and managed alerts. Audit snapshots are retained. Managed alerts are blocked from automatic recreation; underlying position/watch/journal levels are not deleted.')
+        st.warning('Delete removes the selected alerts and retains audit snapshots. Discretionary alerts receive no new recreation block. Position-stop deletion retains its permanent purge protection. Saved levels and journal ideas are retained.')
     if st.button('Preview selected action', key='workspace_preview_button'):
         preview = preview_action(selected, action)
         st.session_state['workspace_preview'] = dict(rows=preview, action=action,
@@ -124,7 +159,7 @@ if selected:
         if blocked:
             st.warning('Adjust selection: some rows cannot receive this action. Nothing will be silently skipped.')
         confirmation_key = 'workspace_confirm_' + hashlib.sha256(repr(pending).encode()).hexdigest()[:16]
-        confirmed = st.checkbox(f"Confirm {pending['action']} for these {len(pending['rows'])} IDs only", key=confirmation_key)
+        confirmed = st.checkbox(f"Confirm {('delete' if pending['action'] == 'purge' else pending['action'])} for these {len(pending['rows'])} IDs only", key=confirmation_key)
         confirm, cancel = st.columns(2)
         if confirm.button('Apply confirmed action', key='workspace_apply', disabled=blocked or not confirmed):
             try:
@@ -132,7 +167,7 @@ if selected:
             except ValueError as exc:
                 st.error(str(exc))
             else:
-                notify(f"{pending['action'].capitalize()} saved for alert IDs {ids}.")
+                notify(f"{('Delete' if pending['action'] == 'purge' else pending['action'].capitalize())} saved for alert IDs {ids}.")
         if cancel.button('Cancel preview', key='workspace_cancel'):
             st.session_state.pop('workspace_preview', None)
             st.rerun()
@@ -143,37 +178,16 @@ if selected:
         st.caption(f"Source: {alert['source']} · identity: {alert.get('source_key') or 'manual row'} · {state(alert)}")
         if alert.get('delivery_error'):
             st.warning(alert['delivery_error'])
-        if alert['source'] != 'manual':
-            st.info('This level is source-managed. Edit its position/watch/journal source; Pause/Snooze works here.')
+        if is_position_stop(alert):
+            st.info('Edit this position stop in P10 Key Levels.')
             st.page_link('pages/P10_Morning_Brief.py', label='Open Morning Brief / Key Levels')
         else:
-            with st.form(f"manual_edit_{alert['id']}_{fingerprint(alert)[:12]}"):
-                ticker = st.text_input('Ticker', value=alert['ticker'])
-                label = st.text_input('Label', value=alert.get('label') or '')
-                cond = st.selectbox('Condition', ['above', 'below'], index=0 if alert['condition'] == 'above' else 1)
-                if not valid_price(alert['threshold']):
-                    st.warning('Stored level is invalid. You can purge this alert or save a positive replacement.')
-                level = st.number_input('Threshold', min_value=0.0001,
-                    value=float(alert['threshold']) if valid_price(alert['threshold']) else 1.0, format='%.4f')
-                expires = st.text_input('Expiry (ISO timestamp with timezone; blank = none)',
-                                       value=alert['expires_at'].isoformat() if alert.get('expires_at') else '',
-                                       placeholder='e.g. 2026-10-15T16:00:00-05:00')
-                duplicate = st.checkbox('Allow an intentional exact duplicate')
-                st.caption('Changing ticker/condition/threshold rearms this alert; pause/snooze/archive stays unchanged.')
-                if st.form_submit_button('Save manual alert'):
-                    try:
-                        expiry = datetime.fromisoformat(expires.strip()) if expires.strip() else None
-                        save_manual(ticker, label, cond, level, expiry,
-                                    expected=dict(id=alert['id'], fingerprint=fingerprint(alert)), allow_duplicate=duplicate)
-                    except ValueError as exc:
-                        st.error(str(exc))
-                    else:
-                        notify(f"Manual alert #{alert['id']} saved.")
+            st.caption('Edit this alert directly in the table above and click Save changes.')
         with st.expander('Action / notification history'):
             st.dataframe(query('SELECT action, details, created_at FROM alert_action_history WHERE alert_id=%s ORDER BY id DESC LIMIT 50', (alert['id'],)), hide_index=True)
             st.dataframe(query('SELECT status, attempts, error, price, updated_at FROM alert_notification_events WHERE alert_id=%s ORDER BY id DESC LIMIT 50', (alert['id'],)), hide_index=True)
 else:
-    st.caption('Select one row for its detail editor, or several rows for a scoped action preview.')
+    st.caption('Edit alerts directly in the table. Select rows only for bulk controls or history.')
 
 with st.expander('Add manual alert'):
     with st.form('workspace_add_manual'):
@@ -181,12 +195,11 @@ with st.expander('Add manual alert'):
         label = st.text_input('Label', key='new_label')
         cond = st.selectbox('Condition', ['above', 'below'], key='new_condition')
         level = st.number_input('Threshold', min_value=0.0001, value=1.0, format='%.4f', key='new_threshold')
-        expires = st.text_input('Expiry (ISO timestamp with timezone; blank = none)', key='new_expiry', placeholder='e.g. 2026-10-15T16:00:00-05:00')
+        st.caption('No expiry. This alert stays until you pause or delete it.')
         duplicate = st.checkbox('Allow an intentional exact duplicate', key='new_duplicate')
         if st.form_submit_button('Create manual alert'):
             try:
-                expiry = datetime.fromisoformat(expires.strip()) if expires.strip() else None
-                alert_id = save_manual(ticker, label, cond, level, expiry, allow_duplicate=duplicate)
+                alert_id = save_manual(ticker, label, cond, level, allow_duplicate=duplicate)
             except ValueError as exc:
                 st.error(str(exc))
             else:
@@ -291,12 +304,6 @@ with st.expander('Poll health and diagnostics'):
             result = subprocess.run([sys.executable, '-m', 'alerts.poller', '--dry-run'],
                 capture_output=True, text=True, cwd=str(Path(__file__).resolve().parents[2]), timeout=180)
         st.session_state['workspace_poll_output'] = result.stdout + result.stderr
-    live_confirm = st.checkbox('Allow live polling (can send emails)', key='workspace_live_confirm')
-    if st.button('Run live alert poll', key='workspace_live_poll', disabled=not live_confirm):
-        with st.spinner('Running live poll…'):
-            result = subprocess.run([sys.executable, '-m', 'alerts.poller', '--once'],
-                capture_output=True, text=True, cwd=str(Path(__file__).resolve().parents[2]), timeout=180)
-        st.session_state['workspace_poll_output'] = result.stdout + result.stderr
     if 'workspace_poll_output' in st.session_state:
         st.code(st.session_state['workspace_poll_output'], language=None)
-    st.caption('The scheduled five-minute poller remains live independently of this page.')
+    st.caption('Background polling is paused. Email delivery is disabled. Use Refresh quotes for on-page notices.')

@@ -18,10 +18,11 @@ class JournalReviewDatabaseTests(unittest.TestCase):
 
     def setUp(self):
         fixtures.AlertControlsDatabaseTests.setUp(self)
-        for file in ('066_key_levels.sql','067_journal_sync_log.sql','077_journal_review.sql'):
+        for file in ('066_key_levels.sql','067_journal_sync_log.sql','077_journal_review.sql','078_retire_saved_watch_levels.sql'):
             self.execute((fixtures.ROOT/'data_model'/file).read_text())
         self.execute('CREATE TABLE positions (account_id_key TEXT,symbol TEXT,security_type TEXT,quantity NUMERIC,fetched_at TIMESTAMPTZ)')
         self.enterContext(patch('morning_brief.journal_review.get_connection',self.connect))
+        self.enterContext(patch('etrade_sync.db.get_connection',self.connect))
 
     def stage(self, threshold=110, ticker='TEST', stop=False, evidence=None,timeframe='price_crossing'):
         evidence=evidence or f'Alert me if {ticker} is below {threshold}.'
@@ -58,11 +59,11 @@ class JournalReviewDatabaseTests(unittest.TestCase):
         self.assertEqual(self.execute('SELECT count(*) FROM price_alerts',fetch=True)[0][0],1)
         self.assertEqual(self.stage(130)['status'],'pending')
 
-    def test_manual_approval_default_expiry_and_no_email(self):
+    def test_manual_approval_has_no_expiry_and_no_email(self):
         self.approve(self.stage())
         alert=self.alert(review.list_items()[0]['alert_id'])
         self.assertEqual(alert['source'],'manual')
-        self.assertAlmostEqual((alert['expires_at']-datetime.now(timezone.utc)).total_seconds()/86400,21,places=2)
+        self.assertIsNone(alert['expires_at'])
         self.delivery.assert_not_called()
 
     def test_watch_idea_requires_preparation_and_timeframe_clarification(self):
@@ -125,11 +126,10 @@ class JournalReviewDatabaseTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.approve(self.stage(95,stop=True,evidence='TEST stop 95.'))
         self.assertEqual(self.execute('SELECT count(*) FROM key_levels',fetch=True)[0][0],0)
 
-    def test_purged_watch_alert_cannot_be_silently_restored(self):
-        from alerts.management import apply_bulk,preview_action
-        old=self.add_alert(threshold=110)
-        self.execute("UPDATE price_alerts SET condition='below' WHERE id=%s",(old,))
-        apply_bulk(preview_action([self.alert(old)],'purge'),'purge')
+    def test_historical_watch_purge_guard_is_not_bypassed_by_approval(self):
+        self.execute("""INSERT INTO alert_purge_blocks
+            (original_alert_id,source,identity,ticker,condition,threshold,legacy_identity)
+            VALUES (9999,'manual','row:9999','TEST','below',110,TRUE)""")
         with self.assertRaises(ValueError): self.approve(self.stage(110))
         self.assertEqual(self.execute('SELECT count(*) FROM price_alerts',fetch=True)[0][0],0)
 
@@ -276,7 +276,7 @@ class JournalReviewDatabaseTests(unittest.TestCase):
             return conn
         # Calling reconcile_alerts directly (not via reconcile_structural_alerts)
         # keeps this deterministic: no unrelated connections from
-        # _held_symbols()/backfill_legacy_structural_alerts() to miscount.
+        # _held_symbols() to miscount.
         with patch('morning_brief.alert_compiler.get_connection',get_connection_probe):
             stats=reconcile_alerts(build_structural_alerts({'positions':{'Z':{'stop':99}}}),
                                     sources=('key_levels_watch',),reload_desired=reload)
@@ -312,6 +312,27 @@ class JournalReviewDatabaseTests(unittest.TestCase):
         t.join(timeout=5)
         self.assertFalse(t.is_alive())
         self.assertEqual(result['stats']['updated'],1)
+
+    def test_retired_watch_payload_is_rejected_without_mutating_alerts(self):
+        from morning_brief.alert_compiler import save_structural_key_levels
+        alert_id=self.add_alert(source='key_levels_watch',source_key='watch:TEST:resistance',threshold=100)
+        lifecycle.control_alert(alert_id,'pause')
+        before=self.alert(alert_id)
+        with patch('morning_brief.alert_compiler.get_connection',self.connect):
+            with self.assertRaisesRegex(ValueError,'retired'):
+                save_structural_key_levels({'watch':{'TEST':{'resistance':120}}},{})
+        self.assertEqual(before,self.alert(alert_id))
+        self.assertEqual(self.execute('SELECT count(*) FROM key_levels',fetch=True)[0][0],0)
+
+    def test_discretionary_delete_does_not_blacklist_future_journal_ideas(self):
+        from alerts.management import apply_bulk,preview_action
+        self.approve(self.stage(110))
+        old=review.list_items()[0]['alert_id']
+        apply_bulk(preview_action([self.alert(old)],'purge'),'purge')
+        new=self.stage(120,evidence='New journal: alert me if TEST is below 120.')
+        self.assertEqual(new['status'],'pending')
+        self.assertEqual(self.execute('SELECT count(*) FROM price_alerts',fetch=True)[0][0],0)
+        self.assertEqual(self.execute('SELECT count(*) FROM alert_purge_blocks',fetch=True)[0][0],0)
 
     def test_p10_save_rejects_stale_baseline_instead_of_clobbering_approval(self):
         """Reproduces the P10 scenario: a page loaded stop=90, an approval moved
@@ -384,12 +405,12 @@ class JournalReviewDatabaseTests(unittest.TestCase):
         from morning_brief import alert_compiler
         baseline={'positions':{'TEST':{'stop':90}}}
         self.execute("INSERT INTO key_levels(section,ticker,stop) VALUES ('positions','TEST',90)")
-        self.execute("INSERT INTO key_levels(section,ticker,support) VALUES ('watch','OTHER',50)")  # added by someone else
+        self.execute("INSERT INTO key_levels(section,ticker,stop,note) VALUES ('positions','OTHER',50,'new position')")  # added by someone else
         edit={'positions':{'TEST':{'stop':92}}}
         with patch('morning_brief.alert_compiler.get_connection',self.connect):
             stats=alert_compiler.save_structural_key_levels(edit,baseline)
         self.assertNotIn('error',stats)
-        self.assertEqual(self.execute("SELECT support FROM key_levels WHERE section='watch' AND ticker='OTHER'",fetch=True)[0][0],50)
+        self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='OTHER'",fetch=True)[0][0],50)
         self.assertEqual(self.execute("SELECT stop FROM key_levels WHERE section='positions' AND ticker='TEST'",fetch=True)[0][0],92)
 
     def test_p10_save_removes_row_explicitly_dropped_by_user(self):

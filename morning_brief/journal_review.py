@@ -246,12 +246,12 @@ def preview_selection(items, options=None):
         conn.close()
 
 
-def review_action(preview, action, *, expiry_days=21, acknowledge_market=False):
+def review_action(preview, action, *, expiry_days=None, acknowledge_market=False):
     """Atomic approval/rejection/preparation, with shared poll/edit/purge locks."""
     if action not in ('approve','reject','prepare') or not preview or len({p['id'] for p in preview}) != len(preview):
         raise ValueError('Choose distinct review items and a supported action')
-    if action == 'approve' and (not acknowledge_market or not 1 <= expiry_days <= 3650):
-        raise ValueError('Acknowledge quote/notification timing and choose an expiry')
+    if action == 'approve' and (not acknowledge_market or (expiry_days is not None and not 1 <= expiry_days <= 3650)):
+        raise ValueError('Acknowledge quote/notification timing')
     conn = get_connection()
     try:
         plans = sorted(preview,key=lambda p:p['id'])
@@ -348,7 +348,7 @@ def review_action(preview, action, *, expiry_days=21, acknowledge_market=False):
                         if (live[0] if live else None) != p.get('target_id'):
                             raise ValueError('Managed stop identity changed since preview')
                         cur.execute("INSERT INTO key_levels (section,ticker,stop) VALUES ('positions',%s,%s) ON CONFLICT(section,ticker) DO UPDATE SET stop=EXCLUDED.stop,updated_at=NOW() WHERE key_levels.stop IS DISTINCT FROM EXCLUDED.stop",(ticker,level))
-                    expiry = None if mode=='stop' else datetime.now(timezone.utc)+timedelta(days=expiry_days)
+                    expiry = None if mode=='stop' or expiry_days is None else datetime.now(timezone.utc)+timedelta(days=expiry_days)
                     if mode in ('add','replace'):
                         cur.execute('''SELECT id FROM price_alerts WHERE ticker=%s AND condition=%s AND threshold=%s
                             AND enabled AND archived_at IS NULL AND (expires_at IS NULL OR expires_at>NOW()) AND id<>%s''',

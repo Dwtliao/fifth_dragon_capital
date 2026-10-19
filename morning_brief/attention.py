@@ -74,7 +74,7 @@ def render_attention(groups, limit=5, generated_at=None):
     lines = ['## What needs my attention?\n',
         '_Read-only alert snapshot. Yahoo daily bars may be delayed or still forming—not live prices. '
         'Last-poll condition and recorded delivery are separate. Review IDs in P11 Alerts; '
-        'position/watch levels are edited in P10 Key Levels. No changes or extra LLM calls._\n']
+        'edit discretionary alerts in P11 and position stops in P10. No changes or extra LLM calls._\n']
     if generated_at:
         lines.append(f"_Snapshot retrieved {generated_at:%Y-%m-%d %H:%M:%S UTC}; regenerate Brief only to refresh._\n")
     for group in GROUPS:

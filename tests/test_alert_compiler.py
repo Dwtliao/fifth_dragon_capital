@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("DATABASE_URL", "postgresql://localhost/fake")
 
-from morning_brief.alert_compiler import build_journal_alerts, build_structural_alerts
+from morning_brief.alert_compiler import build_structural_alerts
 
 
 class _Col:
@@ -316,74 +316,30 @@ class _FakeStaleConnection:
         pass
 
 
-class _FakeConsolidateCursor:
-    """Fake cursor for archive_duplicate_alert(): answers the id=ANY(...)
-    eligibility read, then the shared _archive_alert() update-by-id."""
-
-    def __init__(self, db):
-        self.db = db
-        self.executed = []
-        self.description = []
-        self._fetchall_rows = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def execute(self, sql, params=None):
-        self.executed.append((sql, params))
-        sql_l = " ".join(sql.lower().split())
-        if sql_l.startswith("select id, ticker, source, condition, threshold::float, enabled, archived_at from price_alerts where id = any"):
-            (ids,) = params
-            cols = ["id", "ticker", "source", "condition", "threshold", "enabled", "archived_at"]
-            self.description = [_Col(c) for c in cols]
-            matches = [r for r in self.db if r["id"] in ids]
-            self._fetchall_rows = [tuple(r.get(c) for c in cols) for r in matches]
-        elif sql_l.startswith("update price_alerts set enabled = false, triggered = false, archived_at = %s, refreshed_at = %s where id = %s"):
-            archived_at, refreshed_at, row_id = params
-            for r in self.db:
-                if r["id"] == row_id:
-                    r.update(enabled=False, triggered=False, archived_at=archived_at, refreshed_at=refreshed_at)
-
-    def fetchall(self):
-        return self._fetchall_rows
-
-
-class _FakeConsolidateConnection:
-    def __init__(self, rows):
-        self.db = rows
-        self.committed = False
-        self.rolled_back = False
-
-    @contextmanager
-    def cursor(self):
-        yield _FakeConsolidateCursor(self.db)
-
-    def commit(self):
-        self.committed = True
-
-    def rollback(self):
-        self.rolled_back = True
-
-    def close(self):
-        pass
-
-
 class AlertCompilerTests(unittest.TestCase):
     def setUp(self):
         from morning_brief.alert_compiler import _held_symbols
         self.original_held = _held_symbols
         self.held = self.enterContext(patch('morning_brief.alert_compiler._held_symbols', return_value=set()))
 
-    def test_held_symbols_keep_stops_but_skip_all_watch_levels(self):
-        levels = {'positions': {'AAPL': {'stop': 190}},
-                  'watch': {'AAPL': {'support': 180, 'resistance': 210, 'alert_above': 220},
-                            'CL=F': {'support': 60}}}
-        rows = build_structural_alerts(levels, held_symbols={'AAPL'})
-        self.assertEqual({r['source_key'] for r in rows}, {'position:AAPL:stop', 'watch:CL=F:support'})
-        self.assertEqual(len(build_structural_alerts(levels, held_symbols=set())), 5)
+
+    def test_only_stop_identities_are_compiled_with_or_without_holdings(self):
+        levels = dict(positions={'AAPL': dict(stop=190, note='hold')},
+                      watch={'AAPL': dict(support=180, resistance=210, alert_above=220),
+                             'CL=F': dict(support=60)})
+        for held in (set(), {'AAPL'}):
+            rows = build_structural_alerts(levels, held_symbols=held)
+            self.assertEqual([r['source_key'] for r in rows], ['position:AAPL:stop'])
+            self.assertEqual(rows[0]['threshold'], 190)
+            self.assertIn('hold', rows[0]['label'])
+
+    def test_legacy_journal_entrypoints_never_access_database(self):
+        from morning_brief import alert_compiler as compiler
+        with patch.object(compiler, 'get_connection') as connect:
+            self.assertEqual(compiler.upsert_journal_alert(None, 'TEST', 'above', 100, ''), 'skipped_opt_in')
+            self.assertEqual(compiler.reconcile_journal_alerts([dict(ticker='TEST')])['created'], 0)
+            self.assertEqual(compiler.promote_recurring_journal_alerts(), 0)
+            connect.assert_not_called()
 
     def test_holdings_failure_aborts_before_any_alert_write(self):
         from morning_brief.alert_compiler import reconcile_structural_alerts
@@ -399,62 +355,6 @@ class AlertCompilerTests(unittest.TestCase):
             # Call the original implementation behind the mock.
             self.assertEqual(self.original_held(), {'AAPL'})
 
-    def test_build_structural_alerts_compiles_all_structural_sources(self):
-        key_levels = {
-            "positions": {
-                "AAPL": {"stop": 195.0, "note": "hold"},
-            },
-            "watch": {
-                "SPY": {
-                    "support": 500.0,
-                    "resistance": 510.0,
-                    "alert_above": 505.0,
-                    "note": "watch",
-                }
-            },
-        }
-
-        alerts = build_structural_alerts(key_levels)
-        source_keys = {row["source_key"] for row in alerts}
-
-        self.assertEqual(
-            source_keys,
-            {
-                "position:AAPL:stop",
-                "watch:SPY:support",
-                "watch:SPY:resistance",
-                "watch:SPY:alert_above",
-            },
-        )
-        by_key = {row["source_key"]: row for row in alerts}
-        self.assertEqual(by_key["position:AAPL:stop"]["tier"], 1)
-        self.assertEqual(by_key["watch:SPY:support"]["condition"], "below")
-        self.assertEqual(by_key["watch:SPY:resistance"]["condition"], "above")
-        self.assertIn("hold", by_key["position:AAPL:stop"]["label"])
-        self.assertIn("watch", by_key["watch:SPY:alert_above"]["label"])
-
-    def test_build_structural_alerts_skips_redundant_alert_above_when_equal_to_resistance(self):
-        key_levels = {
-            "positions": {},
-            "watch": {"^VIX": {"resistance": 20.0, "alert_above": 20.0}},
-        }
-
-        alerts = build_structural_alerts(key_levels)
-        source_keys = {row["source_key"] for row in alerts}
-
-        # only one "above 20" alert, not two identical ones
-        self.assertEqual(source_keys, {"watch:^VIX:resistance"})
-
-    def test_build_structural_alerts_keeps_distinct_resistance_and_alert_above(self):
-        key_levels = {
-            "positions": {},
-            "watch": {"^VIX": {"resistance": 20.0, "alert_above": 22.5}},
-        }
-
-        alerts = build_structural_alerts(key_levels)
-        source_keys = {row["source_key"] for row in alerts}
-
-        self.assertEqual(source_keys, {"watch:^VIX:resistance", "watch:^VIX:alert_above"})
 
     def test_find_duplicate_alerts_clusters_cross_source_near_matches(self):
         now = datetime.now(timezone.utc)
@@ -502,172 +402,6 @@ class AlertCompilerTests(unittest.TestCase):
 
         self.assertEqual(clusters, [])  # the archived row is excluded, so there's no active pair to cluster
 
-    def test_build_journal_alerts_normalizes_without_keying(self):
-        alerts = build_journal_alerts([
-            {"ticker": "NQ=F", "condition": "above", "threshold": 30200, "label": "Breakout"},
-            {"ticker": "bad", "condition": "sideways", "threshold": 1},  # invalid condition, dropped
-        ])
-
-        self.assertEqual(len(alerts), 1)
-        alert = alerts[0]
-        self.assertNotIn("source_key", alert)
-        self.assertNotIn("expires_at", alert)
-        self.assertEqual(alert["ticker"], "NQ=F")
-        self.assertEqual(alert["tier"], 3)
-        self.assertEqual(alert["condition"], "above")
-        self.assertEqual(alert["threshold"], 30200.0)
-        self.assertEqual(alert["label"], "Breakout")
-
-    def test_journal_match_tolerance_is_percent_clamped(self):
-        from morning_brief.alert_compiler import _journal_match_tolerance, JOURNAL_MATCH_MIN_ABS, JOURNAL_MATCH_MAX_ABS
-
-        # cheap stock: 1% would be tiny, clamped up to the floor
-        self.assertAlmostEqual(_journal_match_tolerance(2.0), JOURNAL_MATCH_MIN_ABS)
-        # expensive future: 1% would be huge, clamped down to the ceiling
-        self.assertAlmostEqual(_journal_match_tolerance(30000.0), JOURNAL_MATCH_MAX_ABS)
-        # mid-range: plain 1%
-        self.assertAlmostEqual(_journal_match_tolerance(1000.0), 10.0)
-
-    def test_reconcile_journal_alerts_updates_recurrence_within_tolerance(self):
-        conn = _FakeJournalConnection()
-
-        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
-            from morning_brief.alert_compiler import reconcile_journal_alerts
-
-            stats1 = reconcile_journal_alerts([
-                {"ticker": "GC=F", "condition": "below", "threshold": 4200, "label": "Gold re-entry"},
-            ])
-            self.assertEqual(stats1["created"], 1)
-            self.assertEqual(stats1["updated"], 0)
-            self.assertEqual(len(conn.db), 1)
-            self.assertEqual(conn.db[0]["recurrence_count"], 1)
-
-            # same idea, slightly different threshold (within 1% band, well under $25 clamp)
-            stats2 = reconcile_journal_alerts([
-                {"ticker": "GC=F", "condition": "below", "threshold": 4180, "label": "Gold re-entry (updated)"},
-            ])
-            self.assertEqual(stats2["created"], 0)
-            self.assertEqual(stats2["updated"], 1)
-            self.assertEqual(len(conn.db), 1)  # still one row, matched not duplicated
-            self.assertEqual(conn.db[0]["recurrence_count"], 2)
-            self.assertEqual(conn.db[0]["threshold"], 4180.0)
-
-    def test_reconcile_journal_alerts_creates_new_row_outside_tolerance(self):
-        conn = _FakeJournalConnection()
-
-        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
-            from morning_brief.alert_compiler import reconcile_journal_alerts
-
-            reconcile_journal_alerts([
-                {"ticker": "CL=F", "condition": "above", "threshold": 80, "label": "Resistance"},
-            ])
-            # 83 vs 80 is $3 away — beyond the $25 max clamp band? No: 1% of 80 = 0.80,
-            # clamped up to the $0.05 floor... clamp min applies only when pct is too small.
-            # 1% of 80 = 0.80 (already above the floor), so anything beyond ~$0.80 is a new idea.
-            stats2 = reconcile_journal_alerts([
-                {"ticker": "CL=F", "condition": "above", "threshold": 83, "label": "Breakout above resistance cluster"},
-            ])
-
-        self.assertEqual(stats2["created"], 1)
-        self.assertEqual(stats2["updated"], 0)
-        self.assertEqual(len(conn.db), 2)  # two distinct ideas, not merged
-
-    def test_reconcile_journal_alerts_never_updates_manual_rows(self):
-        now = datetime.now(timezone.utc)
-        conn = _FakeJournalConnection(rows=[{
-            "id": 1, "source": "manual", "source_key": None, "ticker": "GC=F",
-            "label": "manual gold alert", "condition": "below", "threshold": 4200.0,
-            "pinned": True, "enabled": True, "archived_at": None,
-            "recurrence_count": 1, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
-        }], next_id=2)
-
-        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
-            from morning_brief.alert_compiler import reconcile_journal_alerts
-            stats = reconcile_journal_alerts([
-                {"ticker": "GC=F", "condition": "below", "threshold": 4195, "label": "Gold re-entry"},
-            ])
-
-        # a manual alert at the same price doesn't block or absorb the new journal idea —
-        # only structural alerts do (manual intent is ambiguous, structural is authoritative)
-        self.assertEqual(stats["created"], 1)
-        self.assertEqual(stats["skipped_structural"], 0)
-        self.assertEqual(len(conn.db), 2)
-        self.assertEqual(conn.db[0]["recurrence_count"], 1)  # manual row untouched
-
-    def test_reconcile_journal_alerts_skips_when_structural_alert_already_covers_it(self):
-        now = datetime.now(timezone.utc)
-        conn = _FakeJournalConnection(rows=[{
-            "id": 1, "source": "key_levels_watch", "source_key": "watch:GC=F:support", "ticker": "GC=F",
-            "label": "Support: GC=F below 4200", "condition": "below", "threshold": 4200.0,
-            "pinned": False, "enabled": True, "archived_at": None,
-            "recurrence_count": 1, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
-        }], next_id=2)
-
-        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
-            from morning_brief.alert_compiler import reconcile_journal_alerts
-            stats = reconcile_journal_alerts([
-                {"ticker": "GC=F", "condition": "below", "threshold": 4195, "label": "Gold re-entry"},
-            ])
-
-        # already covered structurally — no tactical shadow row gets created
-        self.assertEqual(stats["created"], 0)
-        self.assertEqual(stats["skipped_structural"], 1)
-        self.assertEqual(len(conn.db), 1)
-        self.assertEqual(conn.db[0]["recurrence_count"], 1)  # structural row untouched, not "matched" either
-
-    def test_promotion_reclassifies_after_threshold_recurrences(self):
-        now = datetime.now(timezone.utc)
-        conn = _FakeJournalConnection(rows=[{
-            "id": 5, "source": "journal_sync", "source_key": "journal:XLE:above:20260101T000000000000",
-            "ticker": "XLE", "label": "XLE breakout", "condition": "above", "threshold": 58.0,
-            "pinned": False, "enabled": True, "archived_at": None,
-            "recurrence_count": 3, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
-            "expires_at": now + timedelta(days=10),
-        }], next_id=6)
-
-        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
-            from morning_brief.alert_compiler import promote_recurring_journal_alerts
-            promoted = promote_recurring_journal_alerts()
-
-        self.assertEqual(promoted, 1)
-        row = conn.db[0]
-        self.assertEqual(row["source"], "key_levels_watch")
-        self.assertEqual(row["source_key"], "watch:XLE:resistance")
-        self.assertEqual(row["tier"], 2)
-        self.assertIsNone(row["expires_at"])  # TTL cleared on promotion — structural alerts are long-lived
-
-    def test_promotion_archives_journal_alert_instead_of_colliding_with_existing_structural(self):
-        now = datetime.now(timezone.utc)
-        conn = _FakeJournalConnection(rows=[
-            {
-                "id": 5, "source": "journal_sync", "source_key": "journal:XLE:above:x",
-                "ticker": "XLE", "label": "XLE breakout", "condition": "above", "threshold": 58.6,
-                "pinned": False, "enabled": True, "archived_at": None,
-                "recurrence_count": 3, "first_seen_at": now, "last_seen_at": now, "refreshed_at": now,
-                "expires_at": now + timedelta(days=10),
-            },
-            {
-                # key_levels.yml already has a structural resistance alert at this slot
-                "id": 6, "source": "key_levels_watch", "source_key": "watch:XLE:resistance",
-                "ticker": "XLE", "label": "Resistance: XLE above 58", "condition": "above", "threshold": 58.0,
-                "pinned": False, "enabled": True, "archived_at": None,
-                "recurrence_count": 1, "first_seen_at": None, "last_seen_at": None, "refreshed_at": now,
-                "expires_at": None,
-            },
-        ], next_id=7)
-
-        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
-            from morning_brief.alert_compiler import promote_recurring_journal_alerts
-            promoted = promote_recurring_journal_alerts()
-
-        self.assertEqual(promoted, 1)
-        journal_row = next(r for r in conn.db if r["id"] == 5)
-        structural_row = next(r for r in conn.db if r["id"] == 6)
-        # journal duplicate retired, not merged into (structural stays authoritative from key_levels.yml)
-        self.assertFalse(journal_row["enabled"])
-        self.assertIsNotNone(journal_row["archived_at"])
-        self.assertEqual(journal_row["source"], "journal_sync")  # never reclassified — would've collided
-        self.assertEqual(structural_row["threshold"], 58.0)  # untouched
 
     def test_promotion_leaves_alerts_below_threshold_alone(self):
         now = datetime.now(timezone.utc)
@@ -779,7 +513,7 @@ class AlertCompilerTests(unittest.TestCase):
 
     def test_refresh_structural_alerts_from_db_wires_fetchers_into_compiler(self):
         conn = _FakeConnection(managed_rows=[])
-        key_levels = {"positions": {}, "watch": {"SPY": {"alert_above": 505.0}}}
+        key_levels = {"positions": {"SPY": {"stop": 495.0}}, "watch": {"SPY": {"alert_above": 505.0}}}
 
         with patch("morning_brief.alert_compiler.get_connection", return_value=conn), \
              patch("morning_brief.fetchers.load_key_levels_from_db", return_value=key_levels):
@@ -943,105 +677,6 @@ class AlertCompilerTests(unittest.TestCase):
 
         self.assertEqual(len(report), 1)
         self.assertEqual(report[0]["id"], 9)
-
-    def test_archive_duplicate_alert_archives_exact_manual_structural_match(self):
-        conn = _FakeConsolidateConnection([
-            {"id": 1, "ticker": "^VIX", "source": "manual", "condition": "above",
-             "threshold": 20.0, "enabled": True, "archived_at": None},
-            {"id": 2, "ticker": "^VIX", "source": "key_levels_watch", "condition": "above",
-             "threshold": 20.0, "enabled": True, "archived_at": None},
-        ])
-
-        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
-            from morning_brief.alert_compiler import archive_duplicate_alert
-            result = archive_duplicate_alert(1, 2)
-
-        self.assertTrue(result)
-        self.assertTrue(conn.committed)
-        manual_row = next(r for r in conn.db if r["id"] == 1)
-        structural_row = next(r for r in conn.db if r["id"] == 2)
-        self.assertFalse(manual_row["enabled"])
-        self.assertIsNotNone(manual_row["archived_at"])
-        self.assertTrue(structural_row["enabled"])  # structural untouched
-        self.assertIsNone(structural_row["archived_at"])
-
-    def test_archive_duplicate_alert_archives_exact_journal_structural_match(self):
-        conn = _FakeConsolidateConnection([
-            {"id": 3, "ticker": "XLE", "source": "journal_sync", "condition": "above",
-             "threshold": 58.0, "enabled": True, "archived_at": None},
-            {"id": 4, "ticker": "XLE", "source": "key_levels_watch", "condition": "above",
-             "threshold": 58.0, "enabled": True, "archived_at": None},
-        ])
-
-        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
-            from morning_brief.alert_compiler import archive_duplicate_alert
-            result = archive_duplicate_alert(3, 4)
-
-        self.assertTrue(result)
-        journal_row = next(r for r in conn.db if r["id"] == 3)
-        structural_row = next(r for r in conn.db if r["id"] == 4)
-        self.assertFalse(journal_row["enabled"])
-        self.assertIsNotNone(journal_row["archived_at"])
-        self.assertTrue(structural_row["enabled"])  # structural untouched
-
-    def test_archive_duplicate_alert_rejects_threshold_mismatch(self):
-        conn = _FakeConsolidateConnection([
-            {"id": 1, "ticker": "^VIX", "source": "manual", "condition": "above",
-             "threshold": 20.0, "enabled": True, "archived_at": None},
-            {"id": 2, "ticker": "^VIX", "source": "key_levels_watch", "condition": "above",
-             "threshold": 20.5, "enabled": True, "archived_at": None},
-        ])
-
-        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
-            from morning_brief.alert_compiler import archive_duplicate_alert
-            result = archive_duplicate_alert(1, 2)
-
-        self.assertFalse(result)
-        manual_row = next(r for r in conn.db if r["id"] == 1)
-        self.assertTrue(manual_row["enabled"])  # untouched
-
-    def test_archive_duplicate_alert_rejects_non_structural_pair(self):
-        conn = _FakeConsolidateConnection([
-            {"id": 1, "ticker": "GC=F", "source": "manual", "condition": "below",
-             "threshold": 4200.0, "enabled": True, "archived_at": None},
-            {"id": 2, "ticker": "GC=F", "source": "manual", "condition": "below",
-             "threshold": 4200.0, "enabled": True, "archived_at": None},
-        ])
-
-        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
-            from morning_brief.alert_compiler import archive_duplicate_alert
-            result = archive_duplicate_alert(1, 2)
-
-        self.assertFalse(result)
-
-    def test_archive_duplicate_alert_rejects_manual_journal_pair(self):
-        conn = _FakeConsolidateConnection([
-            {"id": 1, "ticker": "GC=F", "source": "manual", "condition": "below",
-             "threshold": 4200.0, "enabled": True, "archived_at": None},
-            {"id": 2, "ticker": "GC=F", "source": "journal_sync", "condition": "below",
-             "threshold": 4200.0, "enabled": True, "archived_at": None},
-        ])
-
-        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
-            from morning_brief.alert_compiler import archive_duplicate_alert
-            result = archive_duplicate_alert(1, 2)
-
-        self.assertFalse(result)  # neither side is structural — stays review-only
-
-    def test_archive_duplicate_alert_rejects_already_archived_row(self):
-        now = datetime.now(timezone.utc)
-        conn = _FakeConsolidateConnection([
-            {"id": 1, "ticker": "NQ=F", "source": "manual", "condition": "above",
-             "threshold": 22000.0, "enabled": False, "archived_at": now},
-            {"id": 2, "ticker": "NQ=F", "source": "key_levels_watch", "condition": "above",
-             "threshold": 22000.0, "enabled": True, "archived_at": None},
-        ])
-
-        with patch("morning_brief.alert_compiler.get_connection", return_value=conn):
-            from morning_brief.alert_compiler import archive_duplicate_alert
-            result = archive_duplicate_alert(1, 2)
-
-        self.assertFalse(result)
 
 
 if __name__ == "__main__":

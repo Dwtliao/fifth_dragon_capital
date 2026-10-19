@@ -17,6 +17,7 @@ PROJECT_ROOT  = Path(__file__).parent.parent.parent
 DEFAULT_DIARY = Path.home() / "Library/CloudStorage/Dropbox/Etrade/trading_diary"
 
 load_dotenv(PROJECT_ROOT / ".env")
+from morning_brief.formatter import strip_legacy_watch_section
 from morning_brief.alert_compiler import reconcile_structural_alerts, save_structural_key_levels
 from dashboard.morning_pipeline import run_command, run_morning_pipeline, positions_sync_message
 from morning_brief.fetchers import (
@@ -76,7 +77,7 @@ def _flash_from_stats(success_message: str, stats: dict) -> dict:
     return {"level": "success", "message": msg}
 
 
-_WIDGET_KEY_PREFIXES = ("pos_stop_", "pos_note_", "pos_del_", "w_sup_", "w_res_", "w_alrt_", "w_note_", "w_del_")
+_WIDGET_KEY_PREFIXES = ("pos_stop_", "pos_note_", "pos_del_")
 
 
 def _reset_key_levels_session_state():
@@ -221,7 +222,7 @@ if last_result:
 
 # ── tabs ───────────────────────────────────────────────────────────────────────
 
-tab_brief, tab_levels, tab_history, tab_review = st.tabs(["📋 Brief", "🔑 Key Levels", "📜 Sync History", "Journal Review"])
+tab_brief, tab_levels, tab_history, tab_review = st.tabs(["📋 Brief", "Position Stops", "📜 Sync History", "Journal Review"])
 
 with tab_review:
     from dashboard.journal_review_ui import render_journal_review
@@ -238,15 +239,15 @@ with tab_brief:
         )
     else:
         content = brief_path.read_text(encoding="utf-8")
-        st.markdown(content)
+        st.markdown(strip_legacy_watch_section(content))
 
 
-# ══ Tab 2: Key Levels ═════════════════════════════════════════════════════════
+# ══ Tab 2: Position Stops ═════════════════════════════════════════════════════════
 
 with tab_levels:
     st.caption(
-        "Edit stops, levels, and notes below. "
-        "Click **💾 Save** on any row to persist, or use **💾 Save All** at the bottom."
+        "Edit position stops and notes below, then click **💾 Save All**. "
+        "Manage discretionary price alerts on P11 Alerts."
     )
 
     flash = st.session_state.pop("p10_save_all_flash", None)
@@ -260,7 +261,11 @@ with tab_levels:
         else:
             st.success(message)
 
-    kl = load_key_levels_from_db()
+    try:
+        kl = load_key_levels_from_db()
+    except Exception as exc:
+        st.error(f"Position metadata unavailable; saving is disabled: {exc}")
+        st.stop()
     import copy
     # Pinned to whatever was loaded the FIRST time this session rendered Tab 2 —
     # not re-synced on every rerun — because the widgets below are exactly as
@@ -350,78 +355,18 @@ with tab_levels:
 
     st.divider()
 
-    # ── Watch Levels ───────────────────────────────────────────────────────────
-
-    st.subheader("Watch Levels")
-    st.caption("Support, resistance, and alert levels shown in the brief. Held symbols do not "
-               "generate automatic watch/journal alerts; position stop alerts and manual alerts remain enabled.")
-
-    watch_dict = dict(kl.get("watch") or {})
-    new_watch = {}
-
-    for ticker, vals in watch_dict.items():
-        st.markdown(f"**{ticker}**")
-        w1, w2, w3, w4, w5 = st.columns([1, 1, 1, 3, 1])
-        support    = w1.number_input("Support",    value=float(vals.get("support")     or 0.0), min_value=0.0, step=0.01, format="%.2f", key=f"w_sup_{ticker}",  label_visibility="collapsed")
-        resistance = w2.number_input("Resistance", value=float(vals.get("resistance")  or 0.0), min_value=0.0, step=0.01, format="%.2f", key=f"w_res_{ticker}",  label_visibility="collapsed")
-        alert_abv  = w3.number_input("Alert",      value=float(vals.get("alert_above") or 0.0), min_value=0.0, step=0.01, format="%.2f", key=f"w_alrt_{ticker}", label_visibility="collapsed")
-        note       = w4.text_input("Note", value=vals.get("note") or "", key=f"w_note_{ticker}", label_visibility="collapsed", placeholder="note…")
-        delete     = w5.checkbox("🗑", key=f"w_del_{ticker}", help="Mark for deletion")
-        w1.caption("support"); w2.caption("resistance"); w3.caption("alert above")
-
-        if not delete:
-            entry = {}
-            if support    > 0: entry["support"]     = support
-            if resistance > 0: entry["resistance"]  = resistance
-            if alert_abv  > 0: entry["alert_above"] = alert_abv
-            if note.strip():   entry["note"]        = note.strip()
-            new_watch[ticker] = entry
-
-    st.divider()
-
-    # Add new watch level
-    with st.expander("➕ Add Watch Level"):
-        with st.form("add_watch_form"):
-            aw1, aw2, aw3, aw4, aw5 = st.columns([1, 1, 1, 1, 3])
-            wt = aw1.text_input("Ticker").strip().upper()
-            ws = aw2.number_input("Support",    min_value=0.0, step=0.01, format="%.2f")
-            wr = aw3.number_input("Resistance", min_value=0.0, step=0.01, format="%.2f")
-            wa = aw4.number_input("Alert Above", min_value=0.0, step=0.01, format="%.2f")
-            wn = aw5.text_input("Note")
-            if st.form_submit_button("Add", type="primary"):
-                if wt:
-                    entry = {}
-                    if ws > 0: entry["support"]     = ws
-                    if wr > 0: entry["resistance"]  = wr
-                    if wa > 0: entry["alert_above"] = wa
-                    if wn.strip(): entry["note"]    = wn.strip()
-                    new_watch[wt] = entry
-                    kl["watch"] = new_watch
-                    stats = _save_levels_and_refresh_alerts(kl, baseline_kl)
-                    flash = _flash_from_stats(f"Added {wt}.", stats)
-                    if stats.get("key_levels_saved"):
-                        st.session_state["p10_kl_baseline"] = copy.deepcopy(kl)
-                    if flash["level"] == "error":
-                        st.error(flash["message"])
-                    else:
-                        st.success(flash["message"])
-                        st.rerun()
-
-    st.divider()
+    if st.button('Open Alerts — add or edit price alerts', key='p10_open_alerts'):
+        st.switch_page('pages/P11_Alerts.py')
 
     if st.button("💾 Save All", key="p10_save_all_button", type="primary"):
-        new_key_levels = {"positions": new_positions, "watch": new_watch}
+        new_key_levels = {"positions": new_positions}
         compiler_stats = _save_levels_and_refresh_alerts(new_key_levels, baseline_kl)
-        flash = _flash_from_stats("Key levels saved and structural alerts reconciled.", compiler_stats)
+        flash = _flash_from_stats("Position stops and notes saved; stop alerts reconciled.", compiler_stats)
         if compiler_stats.get("key_levels_saved"):
             # True whenever the key_levels write itself committed, even if the
             # alert refresh afterward failed — the saved values are real and a
             # later comparison must be against them, not the pre-save baseline.
             st.session_state["p10_kl_baseline"] = copy.deepcopy(new_key_levels)
-        if flash["level"] == "success":
-            synced = [f"{t} > {v['alert_above']}" for t, v in new_watch.items() if v.get("alert_above", 0) > 0]
-            if synced:
-                flash["message"] += f"  Configured watch levels (held symbols excluded from alerts): {', '.join(synced)}"
         st.session_state["p10_save_all_flash"] = flash
         st.rerun()
 
@@ -470,7 +415,7 @@ with tab_history:
                             stop_s = f"  stop {p['stop']}" if p.get("stop") else ""
                             st.markdown(f"- `{p['ticker']}`{stop_s}  _{p.get('note','')}_")
                     with c2:
-                        st.markdown("**Watch Levels**")
+                        st.markdown("**Extracted journal ideas (historical evidence)**")
                         for w in ex.get("watch_levels") or []:
                             parts = []
                             if w.get("support"):    parts.append(f"sup {w['support']}")

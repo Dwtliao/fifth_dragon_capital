@@ -33,7 +33,7 @@ class BriefAnalysisTests(unittest.TestCase):
         payload = build_evidence(self.overview, self.positions, {"watch": {"GC=F": {"support": 4300}}})
         self.assertEqual(payload["current_holdings"], ["URNM"])
         self.assertNotIn("holding:OLD", payload["evidence"])
-        self.assertIn("watch:GC=F", payload["evidence"])
+        self.assertNotIn("watch:GC=F", payload["evidence"])
         self.assertAlmostEqual(payload["evidence"]["holding:URNM"]["distance_above_saved_stop_pct"],
                                (55 / 54.95 - 1) * 100)
 
@@ -77,7 +77,7 @@ class BriefAnalysisTests(unittest.TestCase):
             self.assertIn("no usable market data", output)
             call.assert_not_called()
 
-    def generate(self, analysis_error=None):
+    def generate(self, analysis_error=None, metadata_error=None):
         with ExitStack() as stack:
             for target, result in (
                 ("morning_brief.fetchers.load_key_levels_from_db", {}),
@@ -86,15 +86,15 @@ class BriefAnalysisTests(unittest.TestCase):
                 ("morning_brief.fetchers.fetch_fed_events", []),
                 ("morning_brief.brief.fetch_market_overview", self.overview),
                 ("morning_brief.fetchers.fetch_positions", self.positions),
-                ("morning_brief.fetchers.fetch_watch_levels", []),
                 ("morning_brief.formatter.render_market_overview", "MARKET TABLES"),
                 ("morning_brief.formatter.render_positions", "HOLDINGS TABLE"),
             ):
-                stack.enter_context(patch(target, return_value=result))
+                stack.enter_context(patch(target, return_value=result,
+                    side_effect=metadata_error if target.endswith("load_key_levels_from_db") else None))
             render = stack.enter_context(patch("morning_brief.brief.render_analysis",
                                                return_value="WHAT MATTERS", side_effect=analysis_error))
             output = brief.generate_brief()
-            render.assert_called_once_with(self.overview, self.positions, {})
+            render.assert_called_once_with(self.overview, self.positions, {'positions': {}} if metadata_error else {})
             return output
 
     def test_real_brief_path_calls_analysis_without_a_journal(self):
@@ -107,3 +107,21 @@ class BriefAnalysisTests(unittest.TestCase):
         self.assertIn("Claude analysis unavailable", output)
         self.assertIn("MARKET TABLES", output)
         self.assertIn("HOLDINGS TABLE", output)
+
+    def test_position_metadata_failure_is_visible_and_market_brief_still_renders(self):
+        output = self.generate(metadata_error=RuntimeError('DB unavailable'))
+        self.assertIn('Position stops/notes unavailable: DB unavailable', output)
+        self.assertIn('MARKET TABLES', output)
+        self.assertIn('JOURNAL IDEAS', output)
+
+    def test_old_brief_display_hides_only_retired_watch_table(self):
+        from morning_brief.formatter import strip_legacy_watch_section
+        for end in ('---\nFooter', '## Next section\nKeep this', ''):
+            content = '## Positions\nKeep stops\n\n## 🔑  KEY LEVELS\n| Old watch table |\n' + end
+            shown = strip_legacy_watch_section(content)
+            self.assertNotIn('KEY LEVELS', shown)
+            self.assertNotIn('Old watch table', shown)
+            self.assertIn('Keep stops', shown)
+            self.assertTrue(shown.endswith(end))
+        ordinary = '## Market context\nKeep all\n## Journal ideas\nKeep ideas\n'
+        self.assertEqual(strip_legacy_watch_section(ordinary), ordinary)

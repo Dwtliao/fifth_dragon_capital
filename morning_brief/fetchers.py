@@ -235,50 +235,6 @@ def fetch_positions(key_levels: dict) -> list[dict]:
     return enriched
 
 
-def fetch_watch_levels(key_levels: dict) -> list[dict]:
-    """
-    Fetch prices for tickers in key_levels['watch'] and compute distance
-    to support/resistance.
-    """
-    watch_config = key_levels.get("watch", {})
-    if not watch_config:
-        return []
-
-    # Use ticker keys directly as yfinance symbols — no hidden mapping.
-    # Users enter the yfinance format in key_levels.yml (e.g. NQ=F, GC=F, ^VIX, DX-Y.NYB).
-    symbols = {k: k for k in watch_config}
-    snaps   = _fetch_snapshot(symbols)
-
-    enriched = []
-    for snap in snaps:
-        label  = snap["label"]
-        config = watch_config.get(label, {})
-        last   = snap.get("last")
-        notes  = []
-
-        if last:
-            sup  = config.get("support")
-            res  = config.get("resistance")
-            alrt = config.get("alert_above")
-
-            if res:
-                dist = round(res - last, 2)
-                notes.append(f"Resistance {res} → {dist:+.2f} ({_safe_pct(res, last):+.1f}%)" if _safe_pct(res, last) else f"Resistance {res}")
-            if sup:
-                dist = round(last - sup, 2)
-                notes.append(f"Support {sup} → {dist:+.2f} away" if dist >= 0 else f"⚠ Below support {sup}")
-            if alrt and last > alrt:
-                notes.append(f"⚠ Above alert level {alrt}")
-
-        enriched.append({
-            **snap,
-            "key_note": config.get("note", ""),
-            "level_notes": notes,
-        })
-
-    return enriched
-
-
 def fetch_positions_from_db() -> list[dict]:
     """
     Query mv_unrealized_pnl for current holdings.
@@ -361,77 +317,70 @@ def sync_positions_from_db(key_levels: dict) -> tuple[dict, list[str], list[str]
             del existing_positions[symbol]
             removed.append(symbol)
 
-    updated = {**key_levels, "positions": existing_positions}
+    updated = {"positions": existing_positions}
     return updated, added, removed
 
 
 def load_key_levels_from_db() -> dict:
+    """Load position stops/notes only. Fail closed rather than saving an empty read.
+
+    An entirely empty table may seed position metadata from YAML. Retired watch
+    references in old YAML files are ignored and can never recreate saved levels.
+    Works before and after migration 078 without reading watch-only columns.
     """
-    Load key_levels dict from DB. Returns same structure as the old YAML:
-      {"positions": {ticker: {stop, note}}, "watch": {ticker: {support, resistance, ...}}}
-
-    On first run (empty table), seeds from key_levels.yml if it exists.
-    Falls back to empty dict if DB is unavailable.
-    """
-    try:
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-        from etrade_sync.db import get_connection
-        conn = get_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT section, ticker, stop, support, resistance, alert_above, note FROM key_levels ORDER BY section, ticker")
-            rows = cur.fetchall()
-
-        # If table empty, seed from YAML if available
-        if not rows:
-            yml_path = Path(__file__).parent / "key_levels.yml"
-            if yml_path.exists():
-                import yaml
-                with open(yml_path) as f:
-                    data = yaml.safe_load(f) or {}
-                save_key_levels_to_db(data)
-                conn.close()
-                return data
-            conn.close()
-            return {"positions": {}, "watch": {}}
-
-        conn.close()
-        result: dict = {"positions": {}, "watch": {}}
-        for section, ticker, stop, support, resistance, alert_above, note in rows:
-            entry = {}
-            if stop        is not None: entry["stop"]        = float(stop)
-            if support     is not None: entry["support"]     = float(support)
-            if resistance  is not None: entry["resistance"]  = float(resistance)
-            if alert_above is not None: entry["alert_above"] = float(alert_above)
-            if note:                    entry["note"]         = note
-            result[section][ticker] = entry
-        return result
-    except Exception:
-        return {"positions": {}, "watch": {}}
-
-
-def save_key_levels_to_db(key_levels: dict) -> None:
-    """Upsert key_levels dict to DB. Deletes rows not in the new dict."""
-    sys.path.insert(0, str(Path(__file__).parent.parent))
     from etrade_sync.db import get_connection
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            # Delete all existing rows then re-insert (clean state)
-            cur.execute("DELETE FROM key_levels")
-            for section in ("positions", "watch"):
-                for ticker, vals in (key_levels.get(section) or {}).items():
-                    cur.execute("""
-                        INSERT INTO key_levels (section, ticker, stop, support, resistance, alert_above, note, updated_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                    """, (
-                        section, ticker,
-                        vals.get("stop"),
-                        vals.get("support"),
-                        vals.get("resistance"),
-                        vals.get("alert_above"),
-                        vals.get("note"),
-                    ))
+            cur.execute("SELECT section,ticker,stop,note FROM key_levels ORDER BY section,ticker")
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        yml_path = Path(__file__).parent / "key_levels.yml"
+        if yml_path.exists():
+            import yaml
+            data = yaml.safe_load(yml_path.read_text()) or {}
+            positions = {ticker: {k: v for k, v in (vals or {}).items() if k in ('stop','note')}
+                         for ticker, vals in (data.get('positions') or {}).items()}
+            if positions:
+                save_key_levels_to_db({'positions': positions})
+                return {'positions': positions}
+    result = {'positions': {}}
+    for section, ticker, stop, note in rows:
+        if section != 'positions':
+            continue
+        entry = {}
+        if stop is not None:
+            entry['stop'] = float(stop)
+        if note:
+            entry['note'] = note
+        result['positions'][ticker] = entry
+    return result
+
+
+def save_key_levels_to_db(key_levels: dict) -> None:
+    """Save position metadata without changing identities or retired watch rows."""
+    if key_levels.get('watch'):
+        raise ValueError('Saved Watch Levels are retired; create an alert in P11 instead')
+    positions = key_levels.get('positions') or {}
+    if not positions:
+        raise ValueError('Refusing to save empty positions: this replaces the whole positions table, not a diff')
+    from etrade_sync.db import get_connection
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM key_levels WHERE section='positions' AND NOT (ticker=ANY(%s))", (list(positions),))
+            for ticker, vals in positions.items():
+                vals = vals or {}
+                cur.execute("""INSERT INTO key_levels(section,ticker,stop,note,updated_at)
+                    VALUES ('positions',%s,%s,%s,NOW()) ON CONFLICT(section,ticker)
+                    DO UPDATE SET stop=EXCLUDED.stop,note=EXCLUDED.note,updated_at=NOW()""",
+                    (ticker,vals.get('stop'),vals.get('note')))
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

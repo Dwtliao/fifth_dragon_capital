@@ -6,7 +6,7 @@ Usage:
     python -m morning_brief.brief --print    # also print to stdout
     python -m morning_brief.brief --dry-run  # print only, do not write file
 
-Reads key_levels.yml from the same directory.
+Reads position stops/notes from the database (position-only YAML seed on first use).
 Writes to $TRADING_DIARY/morning_brief.md  (overwrite, always today's brief)
     and $TRADING_DIARY/briefs/morning_brief_YYYYMMDD.md  (archive copy).
 
@@ -51,7 +51,12 @@ def _diary_path() -> Path:
 
 def generate_brief() -> str:
     """Fetch all data, render, return the full markdown string."""
-    key_levels = fetchers.load_key_levels_from_db()
+    metadata_error = None
+    try:
+        key_levels = fetchers.load_key_levels_from_db()
+    except Exception as exc:
+        key_levels = {'positions': {}}
+        metadata_error = str(exc)
     now        = datetime.datetime.now()
 
     sections = []
@@ -60,6 +65,8 @@ def generate_brief() -> str:
 
     # Header
     sections.append(formatter.render_header(now))
+    if metadata_error:
+        sections.append(f"_Position stops/notes unavailable: {metadata_error}_\n\n---\n")
 
     # Events (skip silently if empty — no events.yml yet)
     try:
@@ -84,18 +91,11 @@ def generate_brief() -> str:
     except Exception as exc:
         sections.append(f"_Positions fetch failed: {exc}_\n\n---\n")
 
-    # Key levels (from key_levels.yml watch section)
+    # Journal ideas are separate from the explicitly created P11 alerts.
     try:
         sections.append(journal_review_brief())
     except Exception:
         sections.append('_Journal review unavailable; apply the journal-review migration and check P10._\n')
-    try:
-        watch_data = fetchers.fetch_watch_levels(key_levels)
-        if watch_data:
-            sections.append(formatter.render_key_levels(watch_data))
-    except Exception as exc:
-        sections.append(f"_Key levels fetch failed: {exc}_\n\n---\n")
-
     # Use the exact snapshot displayed by the tables, independently of journals.
     if overview is not None:
         try:

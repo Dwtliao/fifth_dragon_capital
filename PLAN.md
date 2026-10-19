@@ -380,7 +380,539 @@ LIMIT 20;
 
 ## Current plan: P7 alert management
 
-### October 11, 2026 — Journal-to-alert approval (active round)
+### Current status and next actions — October 18, 2026
+
+Canonical resumption notes: [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md).
+Watch Levels retirement Steps 1–5 are **complete and deployed**, including
+migration 078. P10 retains position stops/notes; P11 is the discretionary alert
+inventory with inline editing, no expiry by default and on-page notices. Email
+is disabled. The poller was rechecked October 18 and is still unloaded.
+
+- [x] Commit checkpoint `85f8e2e` and production retirement `368f514`.
+- [x] Back up, test an isolated restored copy, apply the reviewed production
+  migration and verify preserved data. Final isolated regression: 222 tests.
+- [x] October 18: fetch origin; both implementation commits are now on the remote
+  branch at `368f514`, with no divergence before this final update.
+- [x] Save an explicit resumption handoff and update CLAUDE.md/current plan.
+- [x] User accepted alert testing on October 18.
+- [x] Correct P1's misleading default sync label from “90d” to incremental,
+  documenting its watermark overlap and initial-history fallback.
+- [x] Commit/push final handoff and label update as `9711e62`; open
+  [PR #88](https://github.com/Dwtliao/fifth_dragon_capital/pull/88).
+- [ ] User explicitly authorized committing/pushing review fixes and merging
+  PR #88 on October 18 after 220 passing tests. Complete publication and merge.
+  Keep email disabled and polling
+  unloaded; do not restore snapshots, remove backups or modify stop policy.
+
+The October 14 phased plan below is historical design context, superseded where
+it conflicts with the implemented October 15 simplification. Do not rerun
+Section 1, reintroduce saved Watch Levels, treat retired schema work as pending,
+or automatically start Sections 2–6. Shared control/history/journal tables and
+legacy alert source identities remain intentional. Counts in deployment notes
+are October 15 observations, not an October 18 production inventory query.
+
+### PR review follow-up — October 18, 2026
+
+Reusable database-test workflow: [isolated PostgreSQL runbook](docs/isolated_postgres_tests.md),
+also linked from CLAUDE.md. Use fresh data/socket directories and a checkout
+without production `.env`; production must never be the test target.
+
+Reviewed fixes ready for the authorized follow-up commit: reject empty position saves, restrict duplicate
+consolidation to exact position-stop identities, fail closed if migration 069's
+backfill marker is missing, and enforce rejection-only watch-idea selections.
+The simplified editable idea-alert creation form remains intact. Final focused
+validation: 67 tests passed in an isolated copy without production configuration,
+including rejection of idea/pending watch items with stale approve UI state, empty
+save guards, exact-stop consolidation and expiry-backfill guards. Subsequent full-suite validation passed **228 tests with zero skips**, including
+all 78 database-backed tests (the original 77 plus a new legacy-consolidation
+rejection regression). A fresh disposable PostgreSQL cluster and checkout were
+used with dummy credentials and mocked delivery/quotes; the cluster was stopped
+afterward. Corrected old consolidation fixtures to use actual position stops.
+No production migrations, cleanup or notification changes.
+These alert/etrade_sync edits are intentional exceptions to CLAUDE.md's older
+module restrictions, authorized by the requested alert behavior and review fixes.
+
+Deferred low-priority code work (not required for this PR):
+
+- [ ] Share strict above/below comparison logic across poller, attention reasons
+  and page notices while retaining each caller's freshness/eligibility checks.
+- [ ] Consider batching inline-edit reads/writes only if measured latency warrants
+  it; retain atomic validation, lock ordering and per-alert audit history.
+- [x] Remove unused journal normalization/backfill helpers, orphaned journal
+  matching/promotion DB helpers and the old archive_duplicate_alert mutation path,
+  plus tests/fakes that exercised only those removed APIs. Repository search found
+  no production callers. Retain harmless opt-in compatibility no-ops and active
+  management consolidation coverage; no change to alert history or data. Final cleanup
+  validation: **220 tests passed, zero skips**, including all 78 DB-backed tests.
+  Eight tests solely for removed APIs were deleted; the disposable cluster stopped.
+- [ ] Replace migration-comment parsing with explicit migration/backfill tracking
+  if broader migration work is commissioned; the current guard fails closed.
+- [ ] Harden the full-state position-save API against partial snapshots (or make
+  seeding insert-only); do not change P10's explicit deletion/baseline workflow.
+
+### Historical handoff and phased plan — October 14, 2026
+
+This section supersedes the October 13 next-task instructions below. That release
+remains complete; do not redo it. The user requested an overall plan, with only
+the first narrow changes in Section 1. Planning does not authorize implementing
+all sections. Work ONE agreed section at a time and stop for user review.
+
+**Principle:** `price_alerts` is the inventory of discretionary monitoring
+instructions. Journals and saved watch levels supply ideas/reference information;
+only explicit user action creates discretionary alerts. Holding stops are a
+separate policy decision. No new queues or large state machine are needed.
+
+Design input: `/Users/davidliao/financial_dashboard_alerts_architecture_recommendation.md`.
+Its recommendations are proposals, not verified descriptions of every code path.
+
+**Reboot handoff:** user reports committing and pushing prior changes. Verified
+branch `dev/journal-review-refinements`, HEAD `bc58797` (`redesign plan Oct 14`),
+with a clean working tree before this handoff edit. This new handoff edit is
+uncommitted; preserve it. No Section 1 implementation has started. On resume,
+read CLAUDE.md, this section, and the recovery guide; check git status. The next
+agreed scope is Section 1 only: inspect callers, implement the narrow behavior,
+run targeted isolated checks, then stop for user review. Do not redo the accepted
+form or start Sections 2–6. No production cleanup/restoration, migration,
+commit/push, PR/merge, or notification resumption without explicit direction.
+
+**Current working state:** branch `dev/journal-review-refinements`; preserve all
+local changes. The editable watch-idea manual alert form is implemented
+and user-tested successfully; do not rebuild it. It allows symbol/direction/price/
+expiry edits followed by preview/create, and leaves journal evidence unchanged.
+Three isolated Streamlit form tests and 15 journal unit tests passed; this is not
+a full release regression or authorization to commit/push/merge.
+
+**Temporary production test:** alert/journal tables were backed up and cleared at
+the user's request. A later Morning Pipeline run recreated 44 saved-level alerts.
+The poller was unloaded and left paused; reboot/login may change scheduler state.
+Verify its current status and keep notifications paused before further
+operational work. See `docs/alert_journal_blank_slate_recovery_20261014.md` for the
+persistent recovery schema, full dump, original row counts, and recovery procedure.
+Original controls/purge blocks remain in the recovery snapshot. Do not restore,
+clear, convert, or resume production state as a side effect of implementation.
+
+#### Section 1 — Discretionary watch alerts become opt-in (first narrow change)
+
+Scope: remove automatic discretionary creation/recreation and source ownership of
+watch thresholds, while retaining the current tables and holding-stop behavior.
+
+- [x] Inspect all creation/reconciliation callers: Morning Pipeline/Brief, P10
+  Save All, source refresh, journal sync, and relevant CLI entry points. Classify
+  position-stop identities separately from discretionary watch/journal identities;
+  do not rely on source alone (both stops and watch levels use `key_levels_watch`).
+- [x] Stop scheduled and user-triggered source reconciliation from automatically
+  creating discretionary watch alerts from saved levels or old journal data.
+  Journal ingestion continues staging ideas only. Saved levels remain editable.
+- [x] Keep existing discretionary alerts and their thresholds intact. Source
+  reconciliation must not overwrite explicit edits, reactivate suppressed alerts,
+  or retire them merely because a reference level or holding changes. Preserve
+  expiry and the existing notification/rearm behavior.
+- [x] Preserve explicit manual creation and the user-accepted editable idea form.
+  No new creation UI, preparation workflow, or journal extraction changes here.
+- [x] Make removal of discretionary alerts an ordinary explicit Delete operation
+  using the existing scoped preview/confirmation and audit snapshot behavior.
+  Do not create new permanent recreation blocks for those deletions. Future
+  journal ingestion may stage that symbol again; deleting an alert does not
+  reject/blacklist journal ideas. Keep stop deletion/purge behavior unchanged.
+- [x] Retain existing control/purge tables, triggers and historical blocks. Do not
+  remove old intent or bulk-convert legacy alerts. Document any legacy managed-row
+  editing restrictions for the later migration section rather than broadening
+  this change. Do not silently bypass existing journal-approval purge guards.
+- [x] Add targeted checks in an isolated database: saved levels and legacy journal
+  sources cannot create discretionary alerts; deletion stays absent across repeat
+  reconciliation; existing thresholds/control states survive source changes;
+  explicit form creation uses the confirmed values; ingestion remains ideas-only;
+  holding-stop maintenance and controls retain their prior behavior.
+- [ ] User browser review: run the relevant source refresh with representative
+  fixtures, delete a discretionary alert, repeat refresh, and confirm no return.
+  Use mocked delivery for automated tests; do not invoke live extraction, trades,
+  polling, or production cleanup for routine verification.
+
+Gate: no surprise discretionary creation, source-driven overwrite, or recreation;
+existing alerts retained unless explicitly removed; stop behavior unchanged.
+Report changes/tests/limitations concisely and STOP. No schema consolidation,
+production migration, backup restoration, commit/push, or release implied.
+
+**October 15 implementation checkpoint — ready for user review:** source
+reconciliation now maintains only exact `key_levels_watch` / `position:TICKER:stop`
+identities. Watch/journal/manual rows, thresholds, lifecycle fields and controls
+are retained unchanged by source refresh, including held/unheld transitions.
+Legacy journal refresh/promotion/backfill entrypoints no longer write live alerts.
+Delete retains scoped confirmation and audit/notification snapshots; only position
+stops receive new purge blocks. Historical blocks and journal approval guards
+remain intact. Legacy managed discretionary rows still cannot be edited directly;
+that ownership migration remains Section 3. The accepted idea form is unchanged.
+
+User additionally requested disabling noisy alert email: SMTP delivery is disabled
+in code regardless of credentials. P11 shows fresh-quote condition notices on
+explicit Refresh quotes, excludes suppressed/expired alerts, and does not monitor
+when closed. The scheduled poller was found loaded after reboot and unloaded;
+keep it paused. No production cleanup, restoration or schema changes were made.
+
+Validation: 136 targeted tests passed, including 66 disposable PostgreSQL/Streamlit
+checks; quote/delivery dependencies mocked, no emails sent. Python compilation and
+`git diff --check` passed. This is targeted validation, not a full release run.
+Original local handoff edits retained; no commit/push/merge. Sections 2–6 deferred.
+
+Browser review remains pending: save changed watch reference levels in P10 and
+verify existing discretionary alerts do not change; Delete a discretionary alert
+in P11 with preview/confirmation, repeat P10 Save All, and verify it stays absent.
+Check manual/idea-form creation and P11 Refresh quotes notices. Position-stop
+maintenance remains active under the prior policy. Do not restore the recovery
+snapshot or bulk-clean the recreated alerts as part of this review.
+
+**October 15 follow-up — direct edits and no-expiry alerts (user requested):**
+This supersedes the earlier UI deferral for discretionary edits only. P11 now
+allows Label/Condition/Level edits directly in the main table, followed by Save
+changes. Selection is reserved for bulk actions/history. All changed rows save
+atomically with stale-target checks, validation, duplicate safeguards and audit
+history. Legacy source/identity and controls remain intact; position-stop edits
+are rejected and remain in P10. No ownership migration or source conversion runs.
+New manual and explicitly approved journal alerts have no expiry by default.
+Removed raw timestamp/day-expiry inputs from ordinary creation; the accepted
+idea form otherwise retains its preview/create behavior. Existing expirations
+are preserved unless explicitly removed via the table's Remove expiry checkbox.
+Validation: 139 targeted tests passed using disposable PostgreSQL fixtures and
+mocked quotes/delivery, including inline edits, rollback, stop protection,
+no-expiry creation and source-refresh preservation. Browser acceptance pending.
+Email remains disabled; do not resume background polling. No production writes,
+restoration, migration, commit/push or merge performed by the agent.
+
+#### October 15 — Watch Levels removal preparation (Steps 1–3 only)
+
+User requested a checkpoint, dependency inventory/removal definition, and fresh
+backup before attempting isolated removal testing or production changes. This
+explicitly authorizes a local checkpoint commit; it does not authorize push,
+merge, Watch Levels implementation, data deletion, restoration or migration.
+The existing Section 1/direct-edit/no-expiry work is the checkpoint baseline.
+The latest targeted run passed 139 tests with disposable PostgreSQL fixtures and
+mocked quotes/delivery; browser acceptance remains separate from this checkpoint.
+
+**Current database observations (read-only, October 15 at 17:54:23 CDT):**
+
+| Object | Observed state | Removal boundary |
+|---|---|---|
+| `key_levels`, `section='watch'` | 27 rows; 25 support, 19 resistance, 16 alert-above values | Retire this saved-reference inventory after isolated testing and explicit production direction |
+| `key_levels`, `section='positions'` | 23 rows, including 4 saved stops; no support/resistance/alert-above values | Preserve position records, stops, notes and identifiers |
+| `price_alerts` | 34 legacy `watch:*` alerts, 4 exact position-stop identities, 1 manual alert | Preserve all existing monitoring rules; do not bulk-create alerts from retired reference rows |
+| `alert_controls` | 1 legacy watch identity | Preserve user suppression and identity |
+| `alert_purge_blocks` | No public rows currently | Keep shared stop protection and historical recovery snapshot; do not infer permission to drop shared machinery |
+| `journal_review_items` | 16 watch-kind ideas/blocked items and 7 context items | Preserve journal suggestions/evidence/history; these are not the P10 saved Watch Levels list |
+| `recovery_alert_journal_20261014_123231` | Present | Retain untouched |
+
+There is **no dedicated Watch Levels table** in the public schema. `key_levels`
+is shared with position stops. Journal, alert, control and history tables are
+also shared features and must not be dropped merely because they contain the
+word `watch`. The `key_levels_watch` source tag likewise identifies both stops
+and legacy alerts. Retain those identities at the first removal boundary; any
+later source-name conversion needs its own tested control/history migration.
+
+The read-only catalog inspection found no foreign keys referencing `key_levels`,
+no dependent database views, no user triggers on that table and no public stored
+functions with textual `key_levels` references. Application dependencies remain
+substantial. Current constraints include section in `positions`/`watch` and
+unique `(section,ticker)`. Shared price-alert triggers preserve controls across
+identity changes and prevent recreation of purged managed alerts; retain them.
+
+**Application dependency map and proposed removal:**
+
+| Location | Dependency / required future change |
+|---|---|
+| `dashboard/pages/P10_Morning_Brief.py` | Remove Watch Levels rows, add-watch form, delete widgets, watch-specific session keys and Save All payload. Keep position editing and stop reconciliation. Historic extraction display in Sync History is evidence, not a reference-data editor. |
+| `morning_brief/fetchers.py` | Remove saved-watch quote enrichment. Make DB loading, saving, empty-table seeding and position sync use position metadata only. Generic saving currently reads/writes watch-specific columns and can delete/reinsert all rows; update callers before any column removal. |
+| `morning_brief/key_levels.yml` | Remove the watch seed section, retain positions. Empty-table YAML seeding must never reintroduce retired saved references. |
+| `morning_brief/brief.py`, `formatter.py` | Remove saved Watch Levels fetch/render path; preserve positions, market context, journal ideas and alert attention. Generated/archived historical briefs remain untouched. |
+| `morning_brief/analysis.py` | Remove saved-watch evidence injection (currently used when portfolio context is explicitly enabled). Keep market and holding/stop evidence. Do not silently substitute automatic alert creation. |
+| `morning_brief/alert_compiler.py` | Change key-level save/CAS/reload field lists and loops to position-only data. Preserve exact stop identities, locks, source reload and controls. Discretionary source creation is already disabled. Review obsolete watch helper code separately from explicit alert-management utilities. |
+| `dashboard/pages/P11_Alerts.py`, `alerts/management.py`, lifecycle/attention/badge helpers | P11 remains the discretionary monitoring inventory and direct editor. Stop rows remain visible with editing in P10. No dependence on saved watch rows is required; retain existing legacy source identities and controls. |
+| `morning_brief/journal_sync.py`, `journal_review.py`, `dashboard/journal_review_ui.py` | Preserve journal extraction/review and explicit Create Alert. The extraction field named `watch_levels` denotes suggestions, not a live saved-reference table; removing the P10 feature must not remove journal evidence or reactivate ingestion. |
+| Schema definitions `066`, `069`, `070`, `075`, `076`, `077` | Keep historical migrations. Prepare a new, narrowly scoped migration only in a later authorized implementation stage; do not rerun old migrations against production. |
+| Tests and documentation | Update P10 save/CAS/browser fixtures, saved-watch fetching/rendering/analysis tests and schema expectations; retain stop concurrency/control checks and journal/P11 tests. Update README/CLAUDE context so retired seed paths are not restored accidentally. |
+
+**Proposed DB target for later implementation:** keep `key_levels` for position
+metadata and stops; retire its watch rows and the watch-only `support`,
+`resistance`, `alert_above` columns after every reader/writer is updated. Restrict
+its section constraint to positions while preserving the existing IDs, stop/note
+fields and unique key. No new replacement watch-reference table is needed.
+Keep `price_alerts`, journal review/sync tables, alert controls, audit history,
+notification history and all recovery tables. Do not automatically convert the
+27 reference rows into alerts or delete the 34 existing legacy watch alerts.
+These are definitions for review, not executable DDL or authorization to apply it.
+
+**Fresh full-database backup:**
+
+- File: `/Users/davidliao/Library/CloudStorage/Dropbox/Etrade/db_backups/fifth_dragon_capital_20261015_175416.dump`
+- Created October 15, 17:54:16 CDT using `bash scripts/backup_db.sh --no-prune`.
+- PostgreSQL custom format; 1,977,174 bytes.
+- SHA-256: `ed4fcf34b138b2c2079c3f0e61b876092f07d3285d9f08c72b56055f953f9043`
+- `pg_restore --list` succeeded. Verified table-data entries for key levels,
+  alerts, controls, purge blocks, action/notification/poll history, journal
+  review/evidence/decisions and sync log; October 14 recovery schema included.
+- No prior backups pruned. This is archive-listing verification, **not a restore
+  test**. Backup time and later read-only inventory time are distinct observations.
+- Restore testing/removal work (Step 4) and production changes (Step 5) remain
+  unstarted. Original recovery snapshot and October 14 backup remain intact.
+
+Before any future production removal, take another backup if newer trading or
+alert edits need protection. Do not restore the entire database over newer
+production data; isolate any validation and review targeted recovery separately.
+
+#### October 15 — Step 4 result: isolated Watch Levels removal tested
+
+User authorized Step 4 only. Implemented and tested in a separate detached
+checkout at `/private/tmp/fdc-watch-levels-step4`, based on `85f8e2e`; the running
+workspace `/Users/davidliao/git_repos/fifth_dragon_capital` is unchanged, clean,
+and still on `dev/journal-review-refinements`. No new commit, push or merge.
+Do not confuse the isolated checkout's modified files with a production deploy.
+
+**Implemented in the isolated checkout:**
+
+- P10's second tab is Position Stops. Removed the saved Watch Levels grid,
+  add/delete widgets and Save All watch payload. Added a direct Open Alerts
+  button. Historical extracted journal ideas remain visible as evidence.
+- Removed saved-watch quote fetching, brief table rendering, analysis evidence
+  injection and YAML seed entries. Journal extraction/review and explicit P11
+  creation are preserved. Existing P11 alert source identities are retained.
+- Position-only loading and both save paths work before and after migration.
+  DB-read failure is visible and disables P10 saving rather than treating it
+  as an empty successful read. The brief still renders its market sections
+  with a visible position-metadata-unavailable notice.
+- Added `078_retire_saved_watch_levels.sql`: one bounded transaction removes
+  only saved watch rows/columns and restricts `key_levels` to positions. Keeps
+  position IDs/stops/notes/timestamps, all alerts/controls/history and recovery
+  tables. No CASCADE. Unexpected position data or dependencies abort safely.
+
+**Verification:** full backup `fifth_dragon_capital_20261015_175416.dump` restored
+successfully into `/private/tmp` socket, port 55441, database
+`fdc_watch_levels_step4`. No production .env was copied into the checkout.
+Applied migration 078 twice. Removed 27 saved watch rows; preserved all 23
+position rows exactly, including original IDs/stops/notes/timestamps. Hashed
+all 50 other restored public/recovery tables before/after: row counts and
+contents unchanged, including all 39 price alerts and original recovery data.
+All sequence values unchanged. Dry-run stop reconciliation and read-only P10/P11
+Streamlit smoke checks passed against the migrated restored database.
+
+All **220 tests passed, none skipped**, using disposable schemas, dummy broker
+credentials, isolated database URLs and mocked market/LLM/delivery dependencies.
+Tests include double migration, preserved alerts/controls/sequences, rollback on
+unexpected position data and view dependency, bounded lock contention, old-schema
+reader/writer compatibility, stale-save and stop-approval concurrency, direct P11
+editing, ideas-only ingestion, position-only seeding (even with legacy YAML watch
+entries), and graceful brief metadata failure. `git diff --check` passed.
+No broker sync/order, live journal extraction, real quote polling or email sent.
+
+Detailed fingerprints/results: `docs/watch_levels_step4_verification_20261015.json`.
+Repro helper: `scripts/verify_watch_levels_retirement.py`. It refuses checkouts
+with `.env` and refuses any URL other than the designated local restored DB.
+Requires a fresh pre-migration restore for its before/after comparison.
+Regression log: `/private/tmp/watch_levels_step4_tests_final.log`.
+
+**Step 5 remains unstarted.** Production schema/data and live code are unchanged;
+email is disabled and background polling stays unloaded. For later review:
+
+1. Review the isolated diff and preservation report; choose when to deploy.
+2. Take a new backup if there have been intervening edits. Quiesce old P10/brief
+   writers and deploy/restart the position-only code before applying migration
+   078. New code supports the old schema, allowing read-only deployment checks
+   first; old code requires retired columns and must not remain running.
+3. Apply only the reviewed migration in its transaction, compare preserved data
+   and verify P10/P11. No automatic alert conversion, cleanup or restoration.
+4. A rollback after committed column removal is not a code-only revert to
+   `85f8e2e`: old readers would fail. Prefer a forward fix with position-only
+   code. Any schema/data restoration must be targeted, reviewed, backed up and
+   explicitly authorized; never replace newer production trading data with the
+   full test dump. Preserve recovery snapshots and sequence high-water marks.
+
+The isolated database is stopped after verification and retained for review.
+The temporary worktree contains uncommitted changes; keep it until the review
+and any separately authorized promotion are complete.
+
+#### October 15 — Step 5 complete: Watch Levels retired in production
+
+User explicitly authorized production completion. Promoted the tested Step 4
+files into `dev/journal-review-refinements` without overwriting local edits (the
+main checkout was clean). Applied only reviewed migration 078; did not run the
+broad production schema/bootstrap command, broker sync, live extraction or poll.
+
+**Backup and transaction:** fresh full backup created at 18:03:44 CDT using
+`bash scripts/backup_db.sh --no-prune`:
+`/Users/davidliao/Library/CloudStorage/Dropbox/Etrade/db_backups/fifth_dragon_capital_20261015_180344.dump`.
+Size 1,977,174 bytes; SHA-256
+`f713ef03ab4aa634a90c8fd7df89fdd39c6fd9b9a75d19d416a3968cbbf68081`.
+Archive listing verified, earlier backups retained. Migration committed at
+18:04:57 CDT under the poller maintenance advisory lock and exclusive key_levels
+lock with bounded timeouts. The exact tested SQL was executed within a wrapper
+transaction so preservation comparisons completed **before commit**.
+
+Removed exactly 27 `section='watch'` rows and the `support`, `resistance`,
+`alert_above` columns; restricted key_levels to positions. Preserved all 23
+position rows with original IDs/stops/notes/timestamps; all 39 alert rows; all
+50 other public/recovery tables byte-equivalent by sorted row fingerprints;
+all sequence values; and both shared alert-control/purge triggers. No alert
+conversion, automatic creation, historical purge clearing or recovery restore.
+Post-commit read-only comparisons confirmed the same preserved contents.
+
+**Final deployment checks:** 222 tests passed, none skipped, in the separate
+checkout against disposable PostgreSQL schemas with mocked external dependencies.
+Read-only production Streamlit AppTest checks passed for P10 and P11; live Chrome
+checks confirmed Position Stops and all 39 P11 alerts. Temporary Streamlit health
+endpoint returned `ok`. No UI save/create/delete/poll action was performed.
+The user chose to start Streamlit manually; the agent's temporary verification
+instance was stopped. The disposable test database was also stopped and retained.
+
+Two narrow integration fixes were included and tested before deployment:
+
+- Ordinary schema initialization and broad migrate no longer replay 069's
+  expiry data backfill when the expiry column is already installed. This
+  prevents future normal sync from assigning expiry to an explicit no-expiry
+  alert with a blank label; additive DDL repair remains available.
+- Display of a previously generated brief hides only its legacy KEY LEVELS
+  table, preserving the stored file and other sections. Fresh briefs no longer
+  generate it. Future attention instructions point to P11 and P10 stops.
+
+Evidence: `docs/watch_levels_step5_deployment_20261015.json` contains the fresh
+backup manifest, migration SHA, preserved-table hashes and final check results.
+`git diff --check` passed. These deployed changes are saved in the local commit
+containing this note. No push or merge; original checkpoint `85f8e2e` retained.
+Email remains disabled and `com.fifthdragon.alert-poller` is confirmed unloaded.
+
+Start manually from the main checkout with the existing venv's
+`streamlit run dashboard/app.py`. Review P10 Position Stops and P11 Alerts.
+The retired watch references are only in backups/recovery history, not active
+reference tables. The shared `key_levels` table remains for stops/notes.
+Old `key_levels_watch` alert identities are intentionally retained to preserve
+controls/history; they no longer imply source ownership of discretionary levels.
+
+Rollback constraints from Step 4 still apply: do not run old readers against the
+retired schema, rewind sequences, or overwrite newer production data with a full
+dump. Prefer a forward fix, keep notifications paused, and review any targeted
+restoration separately. Retain both backups, the recovery schema and isolated
+worktree until the user accepts the result.
+
+#### Section 2 — Decide holding-stop monitoring policy (deferred)
+
+- [ ] Choose universal opt-in or explicitly enabled automatic stop monitoring.
+  Recommendation for discussion: explicitly enabled automatic monitoring, clearly
+  distinct from discretionary watches. No policy is selected by this plan.
+- [ ] Define enabling/disabling scope, saved-stop changes, position closure and
+  reopening, stale/unavailable holdings, and the effect of deleting a managed stop.
+- [ ] Define a visible monitoring setting so deletion does not silently recreate
+  protection or silently turn it off. A notification is not a broker stop order.
+- [ ] Implement only after the decision, with isolated transition tests and browser
+  acceptance. Preserve existing behavior until this section is agreed.
+
+#### Section 3 — Reconcile legacy alerts and retire obsolete purge logic (deferred)
+
+- [ ] Inventory legacy watch alerts, identities, controls, purge blocks, and review
+  links, including the temporary-test recovery snapshot. Resolve restore/retain
+  choices with the user; do not assume the current test inventory is the baseline.
+- [ ] Plan explicit ownership conversion for retained discretionary managed rows
+  so normal manual editing is available without losing IDs, controls or history.
+- [ ] Verify no old caller/worker can recreate watches; then retire obsolete watch
+  purge checks/blocks without restoring previously unwanted alerts. Keep any
+  agreed holding-stop policy distinct. New explicit intent must be usable again.
+- [ ] Back up before approved data/schema changes; test migration repeatability,
+  stale/concurrent operations, preserved controls, and rollback in isolation.
+  Do not drop a table/trigger merely because its watch use became obsolete.
+
+#### Section 4 — Simplify everyday management and creation (deferred)
+
+- [ ] Review pause/snooze/archive/delete meanings with concrete user flows. Consider
+  folding controls into alert rows only after identity-preservation needs are gone.
+  Do not collapse enabled/triggered/snoozed/delivery into one ambiguous status.
+- [ ] Offer Create Alert from saved reference levels using the accepted editable
+  form; prefill the actual instrument, direction and price and require confirmation.
+- [ ] Keep the journal/manual entry workflow consistent and avoid additional
+  required review stages. This section does not redesign polling semantics.
+
+#### Section 5 — Journal idea recurrence and dismissal (deferred)
+
+- [ ] Inspect current deduplication and review-state retention before changing it.
+  Define dismiss-for-now versus incorrect extraction and what new evidence should
+  resurface; avoid permanent symbol blacklists and repeated unchanged suggestions.
+- [ ] Preserve evidence and decisions when the user edits a manual rule. Decide
+  whether a dedicated creation link is useful beyond today's idea number in label.
+- [ ] Test repeated, newer and materially changed evidence, dismissed ideas, deleted
+  alerts, and explicit recreation. Ingestion never activates notifications.
+
+#### Section 6 — Notification retention and release checks (deferred)
+
+- [ ] Decide retention/reporting needs before changing event deletion behavior.
+  Current purge already snapshots events into action history, but original event
+  rows cascade-delete. Compare retaining parent rows versus nullable event links.
+- [ ] Document existing first-observation, threshold satisfaction, rearm and retry
+  behavior; preserve it unless a separate behavior change is explicitly selected.
+  Verify repeated polls and quote gaps without sending real notifications.
+- [ ] At a release checkpoint, run full regression and required isolated database/
+  browser checks. Review migrations, deployment compatibility and rollback.
+- [ ] Obtain explicit direction for production migration/restoration, commit/push,
+  PR/merge and resuming notifications. Resuming the launchd agent polls immediately.
+  Retain recovery backups until the user accepts the restored/final state.
+
+### Historical handoff — October 13, 2026
+
+**Release is complete, not WIP.** PR #87 merged the journal approval feature on October 12.
+Current main: `72497c6`; release commit: `68f1108`. Earlier PR #85 shipped alert management
+and PR #86 shipped hygiene/brief attention. Old unchecked items and WIP warnings below
+are historical unless explicitly listed as remaining work here. Do not redo completed work.
+
+- Journal sync stages ideas only; new alerts/stop changes require P10 Journal Review
+  approval. Mentions are context, ordinary technical levels are watch ideas. Preparation,
+  rejection and acceptance are distinct; rejection never deletes an existing live alert.
+- Approved watch alerts are operator-owned/manual with a 21-day default. Holding stops
+  require verified holdings within four calendar days. Simple above/below conditions only;
+  unsupported timeframe/range language needs explicit clarification. Existing controls
+  and purge intent are preserved. Approval can lead to email on the next scheduled poll.
+- P10 has Sync Latest Journal and Sync Last 5 Journals. Never restore Sync All: selection
+  is at most five most recently modified FILES, not necessarily five days; unchanged files
+  skip. CLI defaults to five, supports --recent 1–5/--file and bounded --force, no --all.
+- Real journal sync initially failed on string commentary; now malformed optional
+  commentary warns/skips while valid ideas survive. Actionable arrays remain strictly
+  validated before DB access. User confirmed the corrected real journal sync worked.
+- User tested Journal Review, quote refresh/already-met warnings and Sync Positions.
+  Sync Positions affects saved metadata, not trades. Result persists across reruns, explains
+  added/removed symbols and distinguishes rejection from levels-saved/refresh-failed.
+- Groups A/B/C fixes are shipped: row-aware source CAS including notes, targeted writes,
+  preserved unseen rows, dry-run rollback, ordered lock acquisition/released-lock retries
+  carrying new requirements, protected source reload, pinned widget baselines and explicit
+  refresh, truthful partial-completion reporting. Do not restart the earlier review loops.
+- Release verification: **211/211 tests passed**, including isolated PostgreSQL/Streamlit
+  tests; migrations 075–077 repeated with original alerts/levels unchanged. Read-only
+  verification confirmed live review schema 077 present. No additional migration needed
+  merely for a new session. Do not run migrations, live extraction, notifications or trades
+  as routine diagnostics. Scheduled polling remains live independently of the agent.
+
+**Remaining small refinements — ask the user which ONE to address:**
+
+1. Parse older filename dates such as `trading_journal_august13_2026.md`; current extraction
+   recognizes ISO filename dates only, so older proposals show unknown evidence date.
+2. Explain redundant holding-stop proposals more clearly (e.g. URNM below 49.85, existing
+   alert #5). A quoted journal phrase "active alert unchanged" is historical evidence, not
+   a live-status guarantee. Do not automatically accept, delete or modify those alerts.
+3. Archive statistics include already-archived rows; banner honestly says "marked or kept
+   archived". A later isolated change may count actual transitions instead.
+4. A different proposal matching a purged condition can still appear as review clutter,
+   although approval is blocked. Presentation/filter refinement only after user selection.
+
+**Working preference:** ONE agreed section at a time, smallest scoped change, targeted
+tests first, concise changes/tests/risks report, then STOP for user review. No unrelated
+refactors, speculative improvements, long repetitive writeups or repeated full regressions.
+Use full regression at release checkpoints. Ask before expanding scope. Commit/push,
+PR/merge and live migrations require explicit direction. CLI mode toggle is Shift+Tab.
+
+**New-session entry:** read CLAUDE.md and this section, check git status, preserve local
+changes, then ask which refinement the user wants. Before implementation create a new
+feature/fix branch from updated main; never commit directly to main. There is currently
+no authorized next coding task. This handoff edit itself is local/uncommitted until saved.
+
+**Testing:** `/Users/davidliao/git_repos/py312/venv/bin/python -m unittest discover -s tests -q`
+runs default tests (DB cases skip without ALERT_TEST_DATABASE_URL). Opt-in DB tests require
+a disposable database, NEVER production. The local `/private/tmp/verify_alert_task1.py`
+full-suite helper restores a backup, tests migrations, then removes only its scratch DB;
+it is not tracked and may not exist on another machine. Inspect it before use. See backup
+and test details in the older handoff below; do not restore that backup into production.
+
+### October 11–12, 2026 — Journal-to-alert approval (completed release history)
 
 **Release checkpoint — October 12, 2026:** User reports Journal Review working in
 Streamlit and accepts this initial version for commit/push/PR merge, with future refinements

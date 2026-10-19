@@ -1,0 +1,249 @@
+{
+  "applied_at": "2026-10-15T23:04:57.756352+00:00",
+  "checkpoint": "85f8e2e",
+  "migration": "078_retire_saved_watch_levels.sql",
+  "migration_sha256": "5688f2d42062702baf96327c395e4b828a9d9d1ade24776d589b9d792824e007",
+  "backup": {
+    "path": "/Users/davidliao/Library/CloudStorage/Dropbox/Etrade/db_backups/fifth_dragon_capital_20261015_180344.dump",
+    "bytes": 1977174,
+    "sha256": "f713ef03ab4aa634a90c8fd7df89fdd39c6fd9b9a75d19d416a3968cbbf68081",
+    "archive_listing_verified": true,
+    "older_backups_pruned": false
+  },
+  "watch_rows_removed": 27,
+  "positions_preserved": {
+    "rows": 23,
+    "sha256": "7cf6eb8ee35e82f748e7544b92ef3bcdcca81ac182eef76a837c4fcffcc83fea"
+  },
+  "preserved_table_fingerprints": {
+    "public.accounts": {
+      "rows": 4,
+      "sha256": "edb2bdaa1ea1b447652b5a9c4352654dfb5e5fc74faf8da4ae073a602dbffa3a"
+    },
+    "public.alert_action_history": {
+      "rows": 9,
+      "sha256": "0c6679676ef1732e443b8cba8af29926dc1b3fb83c121d27e3bc099e91312224"
+    },
+    "public.alert_controls": {
+      "rows": 1,
+      "sha256": "ffb8746f3e521040747e27bb25a473f28ce182f641cdefbec9aa24e8bd73f4f8"
+    },
+    "public.alert_notification_events": {
+      "rows": 17,
+      "sha256": "400e71f265dc023b6f8f8cb69c296ae428d060873ed0d0f3d60342f3bebc860a"
+    },
+    "public.alert_poll_runs": {
+      "rows": 27,
+      "sha256": "8dbd44e3424f27587c69fa3dd2ca9d88c98f63fbc329215010fc492484183b05"
+    },
+    "public.alert_purge_blocks": {
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "public.balances": {
+      "rows": 396,
+      "sha256": "23a7d543889e5fe0f4703004877c2127df6376bf8cdc711d83b4eadb89f7bb17"
+    },
+    "public.broker_position_lots": {
+      "rows": 2897,
+      "sha256": "403bf35eb43078b523668b055a98158c370d9f2ca53d3478e1871531563d6ba9"
+    },
+    "public.dim_accounts": {
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "public.dim_dates": {
+      "rows": 5140,
+      "sha256": "21560c19661837f8b89022420f91a4577ebdc29964cfca35d7d4072183b5ff39"
+    },
+    "public.dim_sectors": {
+      "rows": 16,
+      "sha256": "97cf9dd307b138ed6fb52411f6168d50e0ad3005bb0508f8be483fb26f2e0fcf"
+    },
+    "public.dim_symbol_overrides": {
+      "rows": 31,
+      "sha256": "36cb985dadb0fb29809578f67ed27d875a4f3142c0f523587c30ce86e074aa01"
+    },
+    "public.dim_symbols": {
+      "rows": 44,
+      "sha256": "738c012d273623c9aa25b4af45c297ee205ed58d4ac3dc1adc22be1d598f86ff"
+    },
+    "public.fact_cashflows": {
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "public.fact_positions": {
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "public.fact_transactions": {
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "public.journal_review_decisions": {
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "public.journal_review_evidence": {
+      "rows": 23,
+      "sha256": "32d2f529c176bd19992413b31a7bc26a093eaeeadce996de059fe99c6c62c569"
+    },
+    "public.journal_review_items": {
+      "rows": 23,
+      "sha256": "53ffaea3aa7390e8e9797731df51b3c7b88646247077e3574916131d40cb65c5"
+    },
+    "public.journal_sync_log": {
+      "rows": 2,
+      "sha256": "16efead7d3cea7ac80151051ed56cec9de55d85c60e5a55cd4b2e25358099fe4"
+    },
+    "public.ledger": {
+      "rows": 926,
+      "sha256": "3ed7275fb2fff24c185eab1003ce0218cb9f9699bdbabea7e9bfc8338e4a3083"
+    },
+    "public.market_prices": {
+      "rows": 1706,
+      "sha256": "cdd867016e4b6a2bef074967c7c4ea17bf5bd7db07da564a470af57126dee150"
+    },
+    "public.open_lots": {
+      "rows": 120,
+      "sha256": "58e9a91f82d1ff3768847502a77111df0d1cb0e34fdb612a59e11909d6f4b32e"
+    },
+    "public.order_details": {
+      "rows": 569,
+      "sha256": "e8ce500c37a9ea4efcd55afb5869431c64ee9330f4f46b1283b559c23cf2a8cf"
+    },
+    "public.orders": {
+      "rows": 569,
+      "sha256": "13724719384cc3c225d0390a8b7d80ee3155b7798169fcf6ef3574620b76044a"
+    },
+    "public.physical_holdings_pm": {
+      "rows": 10,
+      "sha256": "3eaa123fd0ed09753ba7a009886a228b80e533b773c7a8be09ca4c44501708a5"
+    },
+    "public.physical_prices_pm": {
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "public.portfolio_value_backfill": {
+      "rows": 48,
+      "sha256": "2c38c237c25466dca3078640f2101dea4c4398e9c0c3f7ddb5010bbd8a66c5f2"
+    },
+    "public.positions": {
+      "rows": 5757,
+      "sha256": "341ef7d604adca36829e25fca6e1dcf4adcb3e9fff58f3af750ff4a371794a2c"
+    },
+    "public.price_alerts": {
+      "rows": 39,
+      "sha256": "8c387b8f5ee293067c1d0627fa6f33fb4b1e9a2940c0b28131c69fa988741171"
+    },
+    "public.realized_gains": {
+      "rows": 210,
+      "sha256": "bbf4c4a48a98ad2992993ae5741a420e0bd99b7f4180b94ae0b32cde6b943fa7"
+    },
+    "public.reconciliation_log": {
+      "rows": 182,
+      "sha256": "42053e6675526efa45ae2a6e6f4f85fc128ad74eef2b0daf344e15a5a4ab266e"
+    },
+    "public.sell_order_audit": {
+      "rows": 3,
+      "sha256": "9c4e31258351a11cb2f45471f287cb6c99253c8f51ff1458a223677ce120cfea"
+    },
+    "public.symbol_exposure_tags": {
+      "rows": 42,
+      "sha256": "bda88d601b01de4132152d2af5b884ce5e94b6b3de5cea15d5cbfab0ccfa4cf8"
+    },
+    "public.sync_log": {
+      "rows": 246,
+      "sha256": "681c2e28b741461975e158fb3f0a1646f00f75348a73c8bfaf0913e7cdd4beaa"
+    },
+    "public.sync_state": {
+      "rows": 16,
+      "sha256": "6ad7ebc0e9ecc427c24398b0f65d86a4e3c9ec797b78faf6a276e8fc8b14384b"
+    },
+    "public.trade_tags": {
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "public.transaction_ingest_audit": {
+      "rows": 992,
+      "sha256": "d97a8a0b7eb593b3b73a3f2fbc9becc74d2a85d0257cde9ce21f36e7a9d3bc81"
+    },
+    "public.transactions": {
+      "rows": 1171,
+      "sha256": "74af4f4cff86683922922c9eb344381ad0231bad9f1ae9b222ae2236cd76bb39"
+    },
+    "recovery_alert_journal_20261014_123231.alert_action_history": {
+      "rows": 18,
+      "sha256": "0eaf05696c0e9f01fb16d944812d6c9a4f6dcb1e54a36479549cb9dfc30675ca"
+    },
+    "recovery_alert_journal_20261014_123231.alert_controls": {
+      "rows": 50,
+      "sha256": "a30cd54d0c6f14fcc228f09fd6a708ef96d96248faf1dc5438dddaf87ce1b9e6"
+    },
+    "recovery_alert_journal_20261014_123231.alert_notification_events": {
+      "rows": 42,
+      "sha256": "80e547dd1ed1a66a7b99c795b3f7589f4933dccba5e0ab5a73eebbb13c924b0d"
+    },
+    "recovery_alert_journal_20261014_123231.alert_poll_runs": {
+      "rows": 1466,
+      "sha256": "8c1f77299a7a7d17759c0e173847be79cf736de9bfb3d5ba847eae1d41c57799"
+    },
+    "recovery_alert_journal_20261014_123231.alert_purge_blocks": {
+      "rows": 7,
+      "sha256": "de109035618a22be5825d97cd65a09fd62a732cdf53cd8c7688a4ce9c87463a2"
+    },
+    "recovery_alert_journal_20261014_123231.journal_review_decisions": {
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "recovery_alert_journal_20261014_123231.journal_review_evidence": {
+      "rows": 60,
+      "sha256": "267f7ca59089d21c5d89050d184fd4ba53a168196a449fe334cb0504c2090c3e"
+    },
+    "recovery_alert_journal_20261014_123231.journal_review_items": {
+      "rows": 57,
+      "sha256": "d451f1b963000088333a87a29f35e642f8986c5b4562aace61c182b07c861ab7"
+    },
+    "recovery_alert_journal_20261014_123231.journal_sync_log": {
+      "rows": 19,
+      "sha256": "38953ebe082f1637584c625ff47bbf2c99e9fb61b483255456cd0f1607fda6e7"
+    },
+    "recovery_alert_journal_20261014_123231.key_levels": {
+      "rows": 51,
+      "sha256": "55422a9f3aa5ec94104cfb54ea3bf7c9f5713e0664327e50bc5fea142872e812"
+    },
+    "recovery_alert_journal_20261014_123231.price_alerts": {
+      "rows": 92,
+      "sha256": "34bd5198af2688b7560a9d03e1c6b2d0a829dee4d8263c957bd5441525c73536"
+    }
+  },
+  "alert_rows_preserved": 39,
+  "other_tables_unchanged": 50,
+  "sequences_unchanged": true,
+  "shared_triggers_unchanged": true,
+  "recovery_schema_unchanged": true,
+  "remaining_key_levels_columns": [
+    "id",
+    "note",
+    "section",
+    "stop",
+    "ticker",
+    "updated_at"
+  ],
+  "verified_before_commit": true,
+  "committed": true,
+  "production_readonly_p10_p11_smoke_passed": true,
+  "postcommit_data_verification_passed": true,
+  "regression_tests_passed": 222,
+  "regression_tests_skipped": 0,
+  "regression_log": "/private/tmp/watch_levels_step5_tests.log",
+  "live_browser_p10_position_stops_verified": true,
+  "live_browser_p11_alerts_verified": true,
+  "temporary_streamlit_health_verified": true,
+  "temporary_streamlit_instance_stopped": true,
+  "streamlit_startup": "User will start manually",
+  "alert_email_disabled": true,
+  "alert_poller_unloaded": true,
+  "ordinary_sync_expiry_backfill_guard_tested": true,
+  "cached_legacy_watch_section_hidden": true
+}

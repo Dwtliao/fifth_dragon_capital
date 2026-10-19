@@ -380,7 +380,36 @@ LIMIT 20;
 
 ## Current plan: P7 alert management
 
-### Latest handoff and phased plan — October 14, 2026
+### Current status and next actions — October 18, 2026
+
+Canonical resumption notes: [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md).
+Watch Levels retirement Steps 1–5 are **complete and deployed**, including
+migration 078. P10 retains position stops/notes; P11 is the discretionary alert
+inventory with inline editing, no expiry by default and on-page notices. Email
+is disabled. The poller was rechecked October 18 and is still unloaded.
+
+- [x] Commit checkpoint `85f8e2e` and production retirement `368f514`.
+- [x] Back up, test an isolated restored copy, apply the reviewed production
+  migration and verify preserved data. Final isolated regression: 222 tests.
+- [x] October 18: fetch origin; both implementation commits are now on the remote
+  branch at `368f514`, with no divergence before this final update.
+- [x] Save an explicit resumption handoff and update CLAUDE.md/current plan.
+- [x] User accepted alert testing on October 18.
+- [x] Correct P1's misleading default sync label from “90d” to incremental,
+  documenting its watermark overlap and initial-history fallback.
+- [ ] Commit and push the final handoff/label update and open a PR against main,
+  as explicitly requested October 18. Leave the PR **unmerged** for review.
+- [ ] Merge only after explicit direction. Keep email disabled and polling
+  unloaded; do not restore snapshots, remove backups or modify stop policy.
+
+The October 14 phased plan below is historical design context, superseded where
+it conflicts with the implemented October 15 simplification. Do not rerun
+Section 1, reintroduce saved Watch Levels, treat retired schema work as pending,
+or automatically start Sections 2–6. Shared control/history/journal tables and
+legacy alert source identities remain intentional. Counts in deployment notes
+are October 15 observations, not an October 18 production inventory query.
+
+### Historical handoff and phased plan — October 14, 2026
 
 This section supersedes the October 13 next-task instructions below. That release
 remains complete; do not redo it. The user requested an overall plan, with only
@@ -779,7 +808,7 @@ worktree until the user accepts the result.
   PR/merge and resuming notifications. Resuming the launchd agent polls immediately.
   Retain recovery backups until the user accepts the restored/final state.
 
-### Latest handoff — October 13, 2026 (read this first)
+### Historical handoff — October 13, 2026
 
 **Release is complete, not WIP.** PR #87 merged the journal approval feature on October 12.
 Current main: `72497c6`; release commit: `68f1108`. Earlier PR #85 shipped alert management

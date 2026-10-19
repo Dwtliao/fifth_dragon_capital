@@ -1,5 +1,12 @@
 # Fifth Dragon Capital — Claude Context
-_Last updated: July 24, 2026. Read this at the start of every session._
+_Last updated: October 18, 2026. Read this at the start of every session._
+
+
+**Resume here:** [docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) records the
+current deployed state, backup/recovery constraints and next actions. The
+October 15 removal is complete, not pending. On October 18, the user accepted
+alert testing and authorized committing, pushing and opening a PR. Leave the PR
+unmerged; merging and further production operations require direction.
 
 ---
 

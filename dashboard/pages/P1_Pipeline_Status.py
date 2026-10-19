@@ -78,7 +78,13 @@ if job == "sync":
         if only != "all":
             cmd_extra += ["--only", only]
     with c2:
-        date_range = st.selectbox("Date range (transactions + orders)", ["default (90d)", "30 days", "365 days", "from beginning"])
+        date_range = st.selectbox(
+            "Date range (transactions + orders)",
+            ["Incremental (since last sync)", "30 days", "365 days", "from beginning"],
+            help="Incremental resumes per account/data type with a one-day overlap. "
+                 "Without prior sync history, it looks back two years. Explicit ranges "
+                 "override that starting point for transactions and orders only.",
+        )
         if date_range == "30 days":
             cmd_extra += ["--days", "30"]
         elif date_range == "365 days":

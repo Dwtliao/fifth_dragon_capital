@@ -275,7 +275,7 @@ sync_times = query("""
 if sync_times:
     df_st = pd.DataFrame(sync_times)
     df_st["last_synced_at"] = (
-        pd.to_datetime(df_st["last_synced_at"])
+        pd.to_datetime(df_st["last_synced_at"], utc=True)
         .dt.tz_convert("America/New_York")
         .dt.strftime("%Y-%m-%d %H:%M")
     )

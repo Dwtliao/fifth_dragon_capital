@@ -1,9 +1,26 @@
-# Session handoff — October 18, 2026
+# Session handoff — updated November 3, 2026
 
 Read this first when resuming, then CLAUDE.md and PLAN.md's current-status section.
 This records completed work; do not restart the old October 14 phased plan.
 
-## Git and current scope
+## Latest checkpoint — November 3, 2026
+
+PR #88 was merged on October 18 (local time), merge commit `32ff768`.
+Follow-up review fixes, unused-code removal and the PostgreSQL testing runbook
+were committed/pushed as `a761595`. Current checkout is `main` at `32ff768`,
+matching local `origin/main`; the working tree was clean before this handoff
+update. No new remote fetch was performed November 3.
+
+The alert/Watch Levels task is complete. Final validation was 220 passing tests,
+zero skips, including 78 database-backed cases in disposable PostgreSQL. The
+cluster was stopped. See [isolated_postgres_tests.md](isolated_postgres_tests.md)
+for the tested reusable workflow. Do not repeat migration 078 or the completed
+PR publication/merge instructions in older notes. Email remains disabled in
+code; keep polling paused (its live launchd status was not rechecked November 3).
+Deferred work remains in PLAN.md; do not start it without direction. This
+November 3 handoff update is documentation only and is not committed yet.
+
+## Historical implementation checkpoint — October 18
 
 - Main workspace: `/Users/davidliao/git_repos/fifth_dragon_capital`.
 - Branch: `dev/journal-review-refinements`; HEAD `368f514`.
@@ -125,7 +142,9 @@ with zero skips; its test cluster was stopped.
   broker credentials, mocked delivery/quotes/LLMs. `.env` overrides inherited
   config, so do not copy the production `.env` into an isolated test checkout.
 
-## Next actions
+## Historical publication actions — completed
+
+Superseded by the November 3 checkpoint above; PR #88 is already merged.
 
 1. Commit/push the reviewed fixes and unused-code cleanup normally on
    `dev/journal-review-refinements`; never force-push.

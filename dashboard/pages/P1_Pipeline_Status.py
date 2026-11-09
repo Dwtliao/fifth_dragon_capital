@@ -205,7 +205,7 @@ if runs:
     df = pd.DataFrame(runs)
     df["icon"] = df["status"].map(status_icon)
     df["started_at"] = (
-        pd.to_datetime(df["started_at"])
+        pd.to_datetime(df["started_at"], utc=True)
         .dt.tz_convert("America/New_York")
         .dt.strftime("%Y-%m-%d %H:%M:%S")
     )

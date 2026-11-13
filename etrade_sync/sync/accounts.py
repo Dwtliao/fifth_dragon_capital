@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime, timezone
 
 from pyetrade.accounts import ETradeAccounts
@@ -22,11 +23,20 @@ def _get_client():
     return ETradeAccounts(CONSUMER_KEY, CONSUMER_SECRET, token, secret, dev=DEV)
 
 
-def _list_accounts(client):
-    resp = client.session.get(
-        f"{BASE_URL}/v1/accounts/list.json",
-        timeout=(5, 15),
-    )
+def _list_accounts(client, retries=2, backoff_s=2):
+    """GET the account list, retrying on transient errors.
+
+    E*TRADE's accounts/list.json has been observed intermittently returning
+    404/5xx for otherwise-valid requests; a short retry clears it in practice.
+    """
+    for attempt in range(retries + 1):
+        resp = client.session.get(
+            f"{BASE_URL}/v1/accounts/list.json",
+            timeout=(5, 15),
+        )
+        if resp.status_code < 400 or attempt == retries:
+            break
+        time.sleep(backoff_s * (attempt + 1))
     resp.raise_for_status()
     data = resp.json()
     accounts = (

@@ -21,7 +21,7 @@ from morning_brief.formatter import strip_legacy_watch_section
 from morning_brief.alert_compiler import reconcile_structural_alerts, save_structural_key_levels
 from dashboard.morning_pipeline import run_command, run_morning_pipeline, positions_sync_message
 from morning_brief.fetchers import (
-    fetch_positions_from_db, sync_positions_from_db,
+    fetch_holdings, sync_positions_from_db,
     load_key_levels_from_db,
 )
 
@@ -290,19 +290,24 @@ with tab_levels:
 
     # ── Positions ──────────────────────────────────────────────────────────────
 
-    st.subheader("Positions")
+    st.markdown('<h3 style="color: #7dd3fc;">Positions</h3>', unsafe_allow_html=True)  # light blue
 
-    db_rows = fetch_positions_from_db()
-    if db_rows and "error" not in db_rows[0]:
-        db_df = pd.DataFrame(db_rows)[["symbol","quantity","cost_basis","market_value","unrealized_pnl","unrealized_pnl_pct"]]
-        db_df.columns = ["Symbol","Qty","Cost Basis","Mkt Value","Unreal P/L $","Unreal P/L %"]
+    try:
+        db_rows, db_error = fetch_holdings(), None  # one row per symbol across active accounts
+    except Exception as exc:
+        db_rows, db_error = [], exc
+    if db_rows:
+        db_df = pd.DataFrame(db_rows)[["symbol","quantity","cost_basis","market_value","unrealized_pnl","unrealized_pnl_pct","accounts"]]
+        db_df.columns = ["Symbol","Qty","Cost Basis","Mkt Value","Unreal P/L $","Unreal P/L %","Accounts"]
         for col in ["Cost Basis","Mkt Value","Unreal P/L $"]:
             db_df[col] = db_df[col].apply(lambda x: f"${x:,.2f}" if x is not None else "—")
         db_df["Unreal P/L %"] = db_df["Unreal P/L %"].apply(lambda x: f"{x:+.2f}%" if x is not None else "—")
-        st.caption("📊 Last E*TRADE sync snapshot (read-only) — brief uses real-time E*TRADE quotes when token is valid")
+        db_df["Accounts"] = db_df["Accounts"].apply(lambda names: ", ".join(n.split(" …")[0] for n in names or []))
+        st.caption("📊 Last E*TRADE sync snapshot (read-only), one row per symbol summed across your active "
+                   "accounts — brief uses real-time E*TRADE quotes when token is valid")
         st.dataframe(db_df, use_container_width=True, hide_index=True)
-    elif db_rows and "error" in db_rows[0]:
-        st.warning(f"DB unavailable: {db_rows[0]['error']}")
+    elif db_error:
+        st.warning(f"DB unavailable: {db_error}")
 
     st.caption("Set stops and notes per position:")
 

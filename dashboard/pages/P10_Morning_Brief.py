@@ -222,11 +222,16 @@ if last_result:
 
 # ── tabs ───────────────────────────────────────────────────────────────────────
 
-tab_brief, tab_levels, tab_history, tab_review = st.tabs(["📋 Brief", "Position Stops", "📜 Sync History", "Journal Review"])
+tab_brief, tab_levels, tab_history, tab_review, tab_events = st.tabs(
+    ["📋 Brief", "Position Stops", "📜 Sync History", "Journal Review", "📅 Event Dates"])
 
 with tab_review:
     from dashboard.journal_review_ui import render_journal_review
     render_journal_review()
+
+with tab_events:
+    from dashboard.event_dates_ui import render_event_dates
+    render_event_dates()
 
 
 # ══ Tab 1: Brief ══════════════════════════════════════════════════════════════
@@ -239,7 +244,8 @@ with tab_brief:
         )
     else:
         content = brief_path.read_text(encoding="utf-8")
-        st.markdown(strip_legacy_watch_section(content))
+        from dashboard.brief_titles import render_brief
+        render_brief(strip_legacy_watch_section(content))
 
 
 # ══ Tab 2: Position Stops ═════════════════════════════════════════════════════════

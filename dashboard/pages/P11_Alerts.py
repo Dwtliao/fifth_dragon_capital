@@ -43,6 +43,10 @@ a.metric('Active', sum(is_eligible(r) for r in alerts))
 b.metric('Paused / Snoozed', sum(state(r) in ('Paused', 'Snoozed') for r in alerts))
 c.metric('Archived / Expired / Disabled', sum(state(r) in ('Archived', 'Expired', 'Disabled') for r in alerts))
 
+with st.expander('🧹 Triage — review all active alerts by distance'):
+    from dashboard.alert_triage import render_triage
+    render_triage(alerts, notify)
+
 refresh, reload_data = st.columns(2)
 if reload_data.button('Refresh alert status', key='workspace_reload'):
     st.session_state['workspace_table_epoch'] = st.session_state.get('workspace_table_epoch', 0) + 1

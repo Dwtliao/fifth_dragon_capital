@@ -263,7 +263,9 @@ def render_positions(data: list[dict]) -> str:
     else:
         source_note = "_(prices: yfinance ~15min delayed)_"
 
-    lines = [f"## 💼  YOUR POSITIONS  {source_note}\n"]
+    accounts = sorted({name for r in data for name in (r.get("accounts") or [])})
+    account_note = f" — {', '.join(accounts)}" if accounts else ""
+    lines = [f"## 💼  YOUR POSITIONS{account_note}  {source_note}\n"]
 
     # Table header
     lines.append("| | Symbol | Price | Day % | Cost Basis | Unreal P/L % | Stop | Note |")

@@ -244,7 +244,8 @@ with tab_brief:
         )
     else:
         content = brief_path.read_text(encoding="utf-8")
-        st.markdown(strip_legacy_watch_section(content))
+        from dashboard.brief_titles import render_brief
+        render_brief(strip_legacy_watch_section(content))
 
 
 # ══ Tab 2: Position Stops ═════════════════════════════════════════════════════════

@@ -13,6 +13,8 @@ import yfinance as yf
 MARKET_GROUPS = {
     "global": {
         "Nikkei 225": "^N225", "Hang Seng": "^HSI", "Shanghai": "000001.SS",
+        "Taiwan TAIEX": "^TWII", "South Korea KOSPI": "^KS11",
+        "Nikkei 225 futures (CME)": "NIY=F",
         "India Nifty 50": "^NSEI", "ASX 200": "^AXJO", "Euro Stoxx 50": "^STOXX50E",
         "DAX": "^GDAXI", "FTSE 100": "^FTSE", "CAC 40": "^FCHI",
         "Canada TSX": "^GSPTSE", "Brazil Bovespa": "^BVSP",
@@ -96,6 +98,35 @@ def summarize_history(label, ticker, history, today):
     return row
 
 
+def _latest_intraday(ticker):
+    """(local date, price) of the newest 15-minute bar, or None when Yahoo has nothing."""
+    bars = yf.Ticker(ticker).history(period="2d", interval="15m")
+    closes = pd.to_numeric(bars["Close"], errors="coerce").dropna()
+    if closes.empty:
+        return None
+    return closes.index[-1].date(), float(closes.iloc[-1])
+
+
+def _with_intraday(history, ticker, today):
+    """Yahoo's daily feed sometimes lacks today's bar for Asian sessions that have already traded.
+
+    When the newest intraday bar is on a later date than the newest daily bar, append it as the
+    latest bar so every change and moving average includes the current session. Returns
+    (history, used_intraday); any failure keeps the daily history unchanged.
+    """
+    try:
+        closes = pd.to_numeric(history["Close"], errors="coerce").dropna()
+        if closes.empty or closes.index[-1].date() >= today:
+            return history, False
+        latest = _latest_intraday(ticker)
+        if latest is None or latest[0] <= closes.index[-1].date():
+            return history, False
+        extra = pd.DataFrame({"Close": [latest[1]]}, index=pd.DatetimeIndex([pd.Timestamp(latest[0])]))
+        return pd.concat([history[["Close"]], extra]), True
+    except Exception:
+        return history, False
+
+
 def build_cross_market_signals(histories, today):
     """Align dates before comparisons; never combine mismatched snapshots."""
     specs = (
@@ -157,6 +188,13 @@ def fetch_market_overview():
     except Exception as exc:
         download_error = str(exc)
 
+    intraday = set()
+    for ticker in MARKET_GROUPS["global"].values():
+        if ticker in histories:
+            histories[ticker], used = _with_intraday(histories[ticker], ticker, now.date())
+            if used:
+                intraday.add(ticker)
+
     groups = {}
     for name, group in MARKET_GROUPS.items():
         rows = []
@@ -164,7 +202,10 @@ def fetch_market_overview():
             try:
                 if ticker not in histories:
                     raise ValueError(download_error or "daily history unavailable")
-                rows.append(summarize_history(label, ticker, histories[ticker], now.date()))
+                row = summarize_history(label, ticker, histories[ticker], now.date())
+                if ticker in intraday and "error" not in row:
+                    row["intraday"] = True
+                rows.append(row)
             except Exception as exc:
                 rows.append({"label": label, "ticker": ticker, "error": str(exc)})
         groups[name] = rows

@@ -159,7 +159,7 @@ def render_market_overview(overview: dict) -> str:
             )
             low, high = row.get("low_20d"), row.get("high_20d")
             close_range = f"{_market_value(low, unit)} – {_market_value(high, unit)}" if low is not None else "—"
-            date = row["as_of"] + (" ⚠" if row.get("stale") else "")
+            date = row["as_of"] + (" ⚠" if row.get("stale") else "") + (" (intraday)" if row.get("intraday") else "")
             changes = " | ".join(_market_change(row.get(f"change_{days}d"), unit) for days in (1, 5, 20))
             lines.append(f"| {row['label']} | {_market_value(row['last'], unit)} | {changes} | {trend} | {close_range} | {date} |")
         lines.append("")
@@ -167,6 +167,10 @@ def render_market_overview(overview: dict) -> str:
             lines.append("_Yield levels are percentages; yield changes are basis points. "
                          "Treasury futures and bond ETFs show price changes, not yields. "
                          "The 13-week bill is a quoted discount yield; TIP prices are not inflation expectations._\n")
+        elif group == "global":
+            lines.append("_Rows marked (intraday) use Yahoo's latest 15-minute price because its daily bar "
+                         "for that session was missing; changes and averages include that partial session. "
+                         "A closed market (holiday) keeps its last close; the futures row trades while Tokyo is closed._\n")
         elif group in ("energy", "commodities"):
             lines.append("_Futures use Yahoo's front-contract series; contract rolls can affect comparisons. "
                          "URA and URNM track uranium equities, not spot uranium._\n")

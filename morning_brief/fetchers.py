@@ -139,6 +139,47 @@ def fetch_vol_proxies() -> list[dict]:
 # Do not delete their broker history or treat this as a global symbol blacklist.
 BRIEF_POSITION_EXCLUSIONS = frozenset({'RBL', 'RPI', 'BR'})
 
+# Accounts shown in the brief's YOUR POSITIONS table (accounts.account_type values).
+# Only the brief uses this; attention, alert maintenance and P10 still use fetch_positions_from_db().
+BRIEF_ACCOUNT_TYPES = ('IRA_ROLLOVER',)
+
+
+def fetch_holdings(account_types=None) -> list[dict]:
+    """One row per symbol, summed across the selected ACTIVE accounts (all when None).
+
+    Equities only, so Treasury bills and money market funds are excluded. Joining `accounts`
+    ignores account keys that exist only in `positions` (stale test data). `accounts` lists
+    the contributing accounts as "<name> …<last 4 of account number>". Raises on DB errors.
+    """
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from etrade_sync.db import get_connection  # type: ignore
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT u.symbol,
+                       SUM(u.quantity)                      AS quantity,
+                       SUM(u.cost_basis)                    AS cost_basis,
+                       SUM(u.market_value)                  AS market_value,
+                       SUM(u.market_value) - SUM(u.cost_basis) AS unrealized_pnl,
+                       CASE WHEN SUM(u.cost_basis) <> 0
+                            THEN ROUND((SUM(u.market_value) - SUM(u.cost_basis)) / SUM(u.cost_basis) * 100, 2)
+                       END                                  AS unrealized_pnl_pct,
+                       ARRAY_AGG(DISTINCT a.account_name || ' …' || RIGHT(a.account_id, 4)) AS accounts
+                FROM mv_unrealized_pnl u
+                JOIN accounts a ON a.account_id_key = u.account_id_key
+                WHERE a.status = 'ACTIVE'
+                  AND u.security_type = 'EQ'
+                  AND u.quantity > 0
+                  AND (%(types)s::text[] IS NULL OR a.account_type = ANY(%(types)s::text[]))
+                GROUP BY u.symbol
+                ORDER BY SUM(u.market_value) DESC NULLS LAST
+            """, {"types": list(account_types) if account_types else None})
+            cols = [d.name for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
 
 def fetch_positions(key_levels: dict) -> list[dict]:
     """
@@ -157,10 +198,11 @@ def fetch_positions(key_levels: dict) -> list[dict]:
     pos_config = dict(key_levels.get("positions") or {})
 
     # ── Try DB first ──────────────────────────────────────────────────────────
-    db_rows    = fetch_positions_from_db()
+    try:
+        db_rows = fetch_holdings(BRIEF_ACCOUNT_TYPES)
+    except Exception as exc:
+        raise RuntimeError('Current holdings unavailable; refusing to display saved metadata as holdings') from exc
     db_by_sym  : dict[str, dict] = {}
-    if any('error' in row for row in db_rows):
-        raise RuntimeError('Current holdings unavailable; refusing to display saved metadata as holdings')
     for row in db_rows:
         if float(row.get('quantity') or 0) > 0 and row['symbol'].upper() not in BRIEF_POSITION_EXCLUSIONS:
             db_by_sym[row["symbol"].upper()] = row
@@ -227,6 +269,7 @@ def fetch_positions(key_levels: dict) -> list[dict]:
             "unrealized_pnl":      db.get("unrealized_pnl"),
             "unrealized_pnl_pct":  db.get("unrealized_pnl_pct"),
             "quantity":            db.get("quantity"),
+            "accounts":            db.get("accounts") or [],
             "stop":                stop,
             "note":                note,
             "warn":                warn,

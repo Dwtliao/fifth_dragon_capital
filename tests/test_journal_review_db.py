@@ -581,6 +581,7 @@ class JournalReviewDatabaseTests(unittest.TestCase):
              patch('dashboard.db.get_connection',self.connect), \
              patch('morning_brief.alert_compiler.save_structural_key_levels',raise_rejection), \
              patch('morning_brief.fetchers.fetch_positions_from_db',return_value=[]), \
+             patch('morning_brief.fetchers.fetch_holdings',return_value=[]), \
              patch('dashboard.journal_review_ui.quote_snapshot'):
             app=AppTest.from_file(p10_path,default_timeout=30).run()
             self.assertEqual(len(app.exception),0)
@@ -595,6 +596,7 @@ class JournalReviewDatabaseTests(unittest.TestCase):
              patch('dashboard.db.get_connection',self.connect), \
              patch('morning_brief.alert_compiler.save_structural_key_levels',partial_completion), \
              patch('morning_brief.fetchers.fetch_positions_from_db',return_value=[]), \
+             patch('morning_brief.fetchers.fetch_holdings',return_value=[]), \
              patch('dashboard.journal_review_ui.quote_snapshot'):
             app=AppTest.from_file(p10_path,default_timeout=30).run()
             self.assertEqual(len(app.exception),0)

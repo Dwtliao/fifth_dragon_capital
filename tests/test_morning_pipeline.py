@@ -99,6 +99,7 @@ class MorningPipelineUITests(unittest.TestCase):
         ]
         with patch("morning_brief.fetchers.load_key_levels_from_db", return_value={}), \
              patch("morning_brief.fetchers.fetch_positions_from_db", return_value=[]), \
+             patch("morning_brief.fetchers.fetch_holdings", return_value=[]), \
              patch("dashboard.db.query", return_value=[]), \
              patch("dashboard.morning_pipeline.run_morning_pipeline", return_value=steps) as pipeline:
             app = AppTest.from_file(str(page)).run()

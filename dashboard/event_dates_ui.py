@@ -15,6 +15,12 @@ def list_event_notes(notes_dir=NOTES_DIR):
     return sorted(Path(notes_dir).glob("*.md"), reverse=True) if Path(notes_dir).is_dir() else []
 
 
+def _title(text, color):
+    """Colored section title; Streamlit's named text colors have no light blue, so use hex."""
+    st.markdown(f'<h3 style="color: {color}; padding: 0.5rem 0 0.25rem;">{text}</h3>',
+                unsafe_allow_html=True)
+
+
 def _fmt(d, today):
     return f"{d:%a %b %d, %Y}", (d - today).days
 
@@ -64,7 +70,7 @@ def render_event_dates(today=None):
                "published Cboe/CME rules and a US exchange holiday calendar. Spot-check against the "
                "Cboe options calendar and CME contract calendars, especially around holidays.")
 
-    st.subheader("Upcoming dates")
+    _title("Upcoming dates", "#4ade80")  # green
     col_window, col_cat = st.columns([1, 3])
     days = col_window.selectbox("Look ahead", [30, 60, 90], index=1, format_func=lambda n: f"{n} days",
                                 key="event_dates_window")
@@ -83,7 +89,7 @@ def render_event_dates(today=None):
     else:
         st.info("No events in this window for the selected categories.")
 
-    st.subheader("Futures: which contract to chart")
+    _title("Futures: which contract to chart", "#facc15")  # gold/yellow
     st.caption("Chart this = first contract whose roll marker has not passed. Roll marker is first notice "
                "day for metals, first position day for Treasuries and last trade for crude; volume "
                "typically moves to the next contract around that date. Rolling off = marker passed but "
@@ -97,10 +103,10 @@ def render_event_dates(today=None):
                       "Last trade": last, "Expires in (days)": last_away})
     st.dataframe(style_contracts(pd.DataFrame(table)), width="stretch", hide_index=True)
 
-    st.subheader("Notes")
+    _title("Market Event Notes from:", "#7dd3fc")  # light blue
     notes = list_event_notes()
     if not notes:
         st.info(f"No notes yet. Add files such as market_events_{today:%Y-%m}.md to {NOTES_DIR.name}/.")
         return
-    picked = st.selectbox("Month", notes, format_func=lambda p: p.stem, key="event_dates_note")
+    picked = st.selectbox("File market_events_YYYY-MM", notes, format_func=lambda p: p.stem, key="event_dates_note")
     st.markdown(picked.read_text(encoding="utf-8"))

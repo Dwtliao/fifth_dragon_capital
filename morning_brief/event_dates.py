@@ -9,7 +9,7 @@ NYSE holidays. They are very close but not guaranteed identical.
 """
 import datetime as dt
 from functools import lru_cache
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 from dateutil.easter import easter
 
@@ -106,6 +106,7 @@ class Contract(NamedTuple):
     roll_date: dt.date
     roll_label: str
     last_trade: dt.date
+    options_expiry: Optional[dt.date] = None   # COMEX gold options only; volume starts moving here
 
 
 # code -> (name, delivery months, rule)
@@ -137,6 +138,22 @@ def _contract_dates(rule, year, month):
             shift_business_days(last_business_day(year, month), -7))
 
 
+def gold_options_expiry(year, month):
+    """COMEX gold options (OG) on the `month` delivery contract.
+
+    Rulebook ch. 115: expire at the close four business days before the end of the month
+    preceding the option month, moved to the prior business day when that date is a Friday
+    or the day before an exchange holiday. Counting the month's last business day as day 1
+    reproduces CME's listed Dec 2026 expiry (Nov 24). Spot-check against the CME calendar.
+    """
+    py, pm = year - (month == 1), (month - 2) % 12 + 1
+    d = shift_business_days(last_business_day(py, pm), -3)
+    next_day = lambda: d + dt.timedelta(days=1)
+    while d.weekday() == 4 or (next_day().weekday() < 5 and not is_business_day(next_day())):
+        d = shift_business_days(d, -1)
+    return d
+
+
 def contracts(product, from_year, years=2):
     name, months, rule = PRODUCTS[product]
     out = []
@@ -144,19 +161,29 @@ def contracts(product, from_year, years=2):
         for month in months:
             roll, label, last = _contract_dates(rule, year, month)
             out.append(Contract(product, f"{product}{MONTH_CODES[month - 1]}{year % 100:02d}",
-                                year, month, roll, label, last))
+                                year, month, roll, label, last,
+                                gold_options_expiry(year, month) if product == "GC" else None))
     return out
 
 
 def contract_table(today, per_product=4):
-    """Unexpired contracts per product with a chart hint: Rolling off / Chart this / Next."""
+    """Unexpired contracts per product with a chart hint.
+
+    Rolling off / Chart this / Next, plus for gold a roll window: from the options expiry day
+    until first notice day the front contract is "Roll window" and the next is "Switch to this".
+    """
     rows = []
     for product, (name, _, _) in PRODUCTS.items():
         live = [c for c in contracts(product, today.year - 1, 3) if c.last_trade >= today][:per_product]
-        chosen = False
+        chosen = switch_next = False
         for c in live:
-            if not chosen and c.roll_date >= today:
-                status, chosen = "Chart this", True
+            if switch_next:
+                status, switch_next, chosen = "Switch to this", False, True
+            elif not chosen and c.roll_date >= today:
+                if c.options_expiry is not None and c.options_expiry <= today:
+                    status, switch_next = "Roll window", True
+                else:
+                    status, chosen = "Chart this", True
             else:
                 status = "Next" if chosen else "Rolling off"
             rows.append({"product": name, "contract": c.symbol, "status": status,
@@ -200,5 +227,8 @@ def upcoming_events(today, days=60):
                 add(c.roll_date, "Futures", f"{c.symbol} {c.roll_label}",
                     "Volume typically moves to the next contract around here")
             add(c.last_trade, "Futures", f"{c.symbol} last trading day")
+            if c.options_expiry:
+                add(c.options_expiry, "Options", f"COMEX gold options expiry ({c.symbol})",
+                    "Volume typically starts moving to the next contract")
 
     return sorted(events, key=lambda e: (e["date"], e["category"], e["event"]))

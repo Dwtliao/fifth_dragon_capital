@@ -27,7 +27,8 @@ def _fmt(d, today):
 
 # RGB triplets used with transparency so the tints read on both dark and light themes.
 CATEGORY_RGB = {"Options": "59, 130, 246", "Futures": "245, 158, 11", "Holiday": "148, 163, 184"}
-STATUS_RGB = {"Chart this": "34, 197, 94", "Rolling off": "245, 158, 11"}
+STATUS_RGB = {"Chart this": "34, 197, 94", "Switch to this": "34, 197, 94",
+              "Roll window": "234, 179, 8", "Rolling off": "245, 158, 11"}
 
 
 def _urgency(days):
@@ -93,7 +94,9 @@ def render_event_dates(today=None):
     st.caption("Chart this = first contract whose roll marker has not passed. Roll marker is first notice "
                "day for metals, first position day for Treasuries and last trade for crude; volume "
                "typically moves to the next contract around that date. Rolling off = marker passed but "
-               "not yet expired. Yahoo's continuous symbols (GC=F, CL=F, ...) pick their own roll date.")
+               "not yet expired. Gold also has a roll window: from the gold options expiry day until first "
+               "notice day the front contract shows Roll window and the next shows Switch to this. "
+               "Yahoo's continuous symbols (GC=F, CL=F, ...) pick their own roll date.")
     table = []
     for r in contract_table(today):
         roll, roll_away = _fmt(r["roll_date"], today)

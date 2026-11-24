@@ -1,3 +1,4 @@
+import datetime as dt
 import unittest
 from datetime import date
 
@@ -94,6 +95,41 @@ class TestTables(unittest.TestCase):
         rows = {r["contract"]: r["status"] for r in ed.contract_table(D(2026, 12, 1))}
         self.assertEqual(rows["GCZ26"], "Rolling off")
         self.assertEqual(rows["GCG27"], "Chart this")
+
+    def test_gold_options_expiry_matches_cme_listing(self):
+        self.assertEqual(ed.gold_options_expiry(2026, 12), D(2026, 11, 24))   # CME: Nov 24
+
+    def test_gold_options_expiry_never_friday_or_before_a_holiday(self):
+        for year in (2026, 2027, 2028):
+            for month in (2, 4, 6, 8, 10, 12):
+                d = ed.gold_options_expiry(year, month)
+                nxt = d + dt.timedelta(days=1)
+                self.assertTrue(ed.is_business_day(d))
+                self.assertNotEqual(d.weekday(), 4)
+                self.assertFalse(nxt.weekday() < 5 and not ed.is_business_day(nxt), (year, month, d))
+                self.assertLess(d, ed.last_business_day(year - (month == 1), (month - 2) % 12 + 1))
+
+    def test_gold_roll_window_runs_from_options_expiry_to_first_notice(self):
+        def statuses(today):
+            return {r["contract"]: r["status"] for r in ed.contract_table(today)}
+        before = statuses(D(2026, 11, 23))
+        self.assertEqual((before["GCZ26"], before["GCG27"]), ("Chart this", "Next"))
+        for day in (D(2026, 11, 24), D(2026, 11, 27), D(2026, 11, 30)):
+            window = statuses(day)
+            self.assertEqual((window["GCZ26"], window["GCG27"], window["GCJ27"]),
+                             ("Roll window", "Switch to this", "Next"), day)
+        after = statuses(D(2026, 12, 1))
+        self.assertEqual((after["GCZ26"], after["GCG27"]), ("Rolling off", "Chart this"))
+
+    def test_roll_window_is_gold_only(self):
+        rows = {r["contract"]: r["status"] for r in ed.contract_table(D(2026, 11, 24))}
+        self.assertEqual(rows["SIZ26"], "Chart this")
+        self.assertEqual(rows["CLF27"], "Chart this")
+
+    def test_gold_options_expiry_listed_in_upcoming_events(self):
+        events = ed.upcoming_events(D(2026, 11, 20), 30)
+        match = [e for e in events if e["event"] == "COMEX gold options expiry (GCZ26)"]
+        self.assertEqual([(e["date"], e["category"]) for e in match], [(D(2026, 11, 24), "Options")])
 
     def test_upcoming_events_window_and_order(self):
         today = D(2026, 12, 1)

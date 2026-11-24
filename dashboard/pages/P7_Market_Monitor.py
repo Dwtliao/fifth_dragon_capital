@@ -45,12 +45,31 @@ GROUPS = {
         ("NYSE Composite", "^NYA"),
         ("DXY (US Dollar)", "DX-Y.NYB"),
     ],
-    "Global Indices": [
+    "Europe & Americas": [
         ("FTSE 100",   "^FTSE"),
         ("DAX",        "^GDAXI"),
+        ("VGK Europe", "VGK"),
+        ("EWZ Brazil", "EWZ"),
+        ("EWC Canada", "EWC"),
+    ],
+    "Asia": [
         ("Nikkei 225", "^N225"),
         ("Hang Seng",  "^HSI"),
         ("Shanghai",   "000001.SS"),
+        ("Taiwan TAIEX", "^TWII"),
+        ("South Korea KOSPI", "^KS11"),
+        ("EWJ Japan",      "EWJ"),
+        ("EWT Taiwan",     "EWT"),
+        ("EWY South Korea", "EWY"),
+        ("EWH Hong Kong",  "EWH"),
+        ("FXI China Large-Cap", "FXI"),
+        ("KWEB China Internet", "KWEB"),
+        ("INDA India",     "INDA"),
+    ],
+    "Global & Emerging Markets": [
+        ("ACWI All-World", "ACWI"),
+        ("EFA Developed ex-US", "EFA"),
+        ("EEM Emerging Markets", "EEM"),
     ],
     "ETFs": [
         ("SMH",  "SMH"),
@@ -76,6 +95,17 @@ GROUPS = {
         ("XLV Healthcare", "XLV"),
         ("XLP Cons. Staples", "XLP"),
         ("XLU Utilities",  "XLU"),
+        ("XLY Cons. Discretionary", "XLY"),
+    ],
+    "Finance": [
+        ("XLF Financials",     "XLF"),
+        ("KBE Banks",          "KBE"),
+        ("KRE Regional Banks", "KRE"),
+        ("KBWB Large Banks",   "KBWB"),
+        ("FINX FinTech",       "FINX"),
+        ("XRT Retail",         "XRT"),
+        ("Visa",               "V"),
+        ("Mastercard",         "MA"),
     ],
 }
 
@@ -753,16 +783,28 @@ def market_panel() -> None:
                 "source_badge": alert_source_badge(a["source"], a["tier"], a["pinned"]),
             })
 
+    group_keys = [f"p7_exp_{g}" for g in GROUPS]
+    for k in group_keys:
+        st.session_state.setdefault(k, True)
+
+    all_expanded = all(st.session_state[k] for k in group_keys)
+    if st.button("▲ Collapse All" if all_expanded else "▼ Expand All", key="p7_toggle_all"):
+        new_val = not all_expanded
+        for k in group_keys:
+            st.session_state[k] = new_val
+        st.rerun(scope="fragment")
+
     show_ema = yf_period in ("1mo", "3mo", "6mo")
     for group_name, tickers in GROUPS.items():
-        st.subheader(group_name)
-        for row_start in range(0, len(tickers), COLS):
-            row  = tickers[row_start : row_start + COLS]
-            cols = st.columns(COLS, gap="large")
-            for col, (label, ticker) in zip(cols, row):
-                with col:
-                    df, prev_close = fetch_ticker(ticker, yf_period, yf_interval)
-                    _intraday_chart(label, ticker, df, prev_close, x_fmt, tooltip_fmt, alerts_by_ticker.get(ticker), show_ema, indicator, show_st)
+        exp_key = f"p7_exp_{group_name}"
+        with st.expander(group_name, expanded=st.session_state[exp_key], key=exp_key):
+            for row_start in range(0, len(tickers), COLS):
+                row  = tickers[row_start : row_start + COLS]
+                cols = st.columns(COLS, gap="large")
+                for col, (label, ticker) in zip(cols, row):
+                    with col:
+                        df, prev_close = fetch_ticker(ticker, yf_period, yf_interval)
+                        _intraday_chart(label, ticker, df, prev_close, x_fmt, tooltip_fmt, alerts_by_ticker.get(ticker), show_ema, indicator, show_st)
         st.divider()
 
 

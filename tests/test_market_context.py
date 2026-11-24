@@ -6,7 +6,7 @@ import pandas as pd
 
 from morning_brief import formatter
 from morning_brief.market_context import (
-    MARKET_GROUPS, build_cross_market_signals, fetch_market_overview, summarize_history,
+    MARKET_GROUPS, _with_intraday, build_cross_market_signals, fetch_market_overview, summarize_history,
 )
 
 
@@ -26,6 +26,42 @@ class MarketContextTests(unittest.TestCase):
         self.assertEqual((row["low_20d"], row["high_20d"]), (140, 159))
         self.assertTrue(row["above_ma20"])
         self.assertEqual(row["as_of"], self.today.isoformat())
+
+    def test_intraday_price_fills_a_missing_daily_bar(self):
+        today = self.today + datetime.timedelta(days=3)
+        with patch("morning_brief.market_context._latest_intraday", return_value=(today, 189.0)):
+            history, used = _with_intraday(self.history, "^TWII", today)
+        self.assertTrue(used)
+        row = summarize_history("Taiwan", "^TWII", history, today)
+        self.assertEqual(row["as_of"], today.isoformat())
+        self.assertAlmostEqual(row["change_1d"], (189 / 159 - 1) * 100)
+        self.assertAlmostEqual(row["change_5d"], (189 / 155 - 1) * 100)
+
+    def test_intraday_not_used_when_daily_bar_current_or_market_closed_or_failing(self):
+        today = self.today + datetime.timedelta(days=3)
+        with patch("morning_brief.market_context._latest_intraday") as latest:
+            self.assertFalse(_with_intraday(self.history, "X", self.today)[1])  # daily bar is today
+            latest.assert_not_called()
+            latest.return_value = (self.today, 150.0)                            # holiday: same date
+            self.assertFalse(_with_intraday(self.history, "X", today)[1])
+            latest.return_value = None                                           # Yahoo has nothing
+            self.assertFalse(_with_intraday(self.history, "X", today)[1])
+            latest.side_effect = RuntimeError("network")                         # request fails
+            history, used = _with_intraday(self.history, "X", today)
+        self.assertFalse(used)
+        self.assertIs(history, self.history)
+
+    def test_overview_tags_intraday_rows_and_formatter_shows_it(self):
+        today = datetime.datetime.now(datetime.timezone.utc).date()
+        index = pd.bdate_range(end=today - datetime.timedelta(days=7), periods=60)
+        data = pd.concat({"^TWII": pd.DataFrame({"Close": range(100, 160)}, index=index, dtype=float)}, axis=1)
+        with patch("morning_brief.market_context.yf.download", return_value=data), \
+             patch("morning_brief.market_context._latest_intraday", return_value=(today, 200.0)):
+            overview = fetch_market_overview()
+        row = next(r for r in overview["groups"]["global"] if r["ticker"] == "^TWII")
+        self.assertTrue(row["intraday"])
+        self.assertIn("(intraday)", formatter.render_market_overview(overview))
+        self.assertIn("NIY=F", MARKET_GROUPS["global"].values())
 
     def test_yield_changes_are_basis_points_without_rescaling_level(self):
         history = pd.DataFrame({"Close": [4.10, 4.25]}, index=self.dates[-2:])

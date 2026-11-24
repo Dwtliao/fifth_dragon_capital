@@ -59,6 +59,7 @@ GROUPS = {
         ("EWH Hong Kong",  "EWH"),
         ("EWZ Brazil",     "EWZ"),
         ("EWJ Japan",      "EWJ"),
+        ("EEM Emerging Markets", "EEM"),
     ],
     "ETFs": [
         ("SMH",  "SMH"),

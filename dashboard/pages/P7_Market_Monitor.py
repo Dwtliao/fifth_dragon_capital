@@ -86,6 +86,16 @@ GROUPS = {
         ("XLU Utilities",  "XLU"),
         ("XLY Cons. Discretionary", "XLY"),
     ],
+    "Finance": [
+        ("XLF Financials",     "XLF"),
+        ("KBE Banks",          "KBE"),
+        ("KRE Regional Banks", "KRE"),
+        ("KBWB Large Banks",   "KBWB"),
+        ("FINX FinTech",       "FINX"),
+        ("XRT Retail",         "XRT"),
+        ("Visa",               "V"),
+        ("Mastercard",         "MA"),
+    ],
 }
 
 COLS = 2  # charts per row

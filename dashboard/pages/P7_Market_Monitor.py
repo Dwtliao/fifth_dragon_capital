@@ -84,6 +84,7 @@ GROUPS = {
         ("XLV Healthcare", "XLV"),
         ("XLP Cons. Staples", "XLP"),
         ("XLU Utilities",  "XLU"),
+        ("XLY Cons. Discretionary", "XLY"),
     ],
 }
 

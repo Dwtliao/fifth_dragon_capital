@@ -50,6 +50,7 @@ GROUPS = {
         ("DAX",        "^GDAXI"),
         ("VGK Europe", "VGK"),
         ("EWZ Brazil", "EWZ"),
+        ("EWC Canada", "EWC"),
     ],
     "Asia": [
         ("Nikkei 225", "^N225"),
@@ -69,7 +70,6 @@ GROUPS = {
         ("ACWI All-World", "ACWI"),
         ("EFA Developed ex-US", "EFA"),
         ("EEM Emerging Markets", "EEM"),
-        ("EWC Canada",     "EWC"),
     ],
     "ETFs": [
         ("SMH",  "SMH"),

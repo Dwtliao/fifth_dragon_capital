@@ -60,6 +60,12 @@ GROUPS = {
         ("EWZ Brazil",     "EWZ"),
         ("EWJ Japan",      "EWJ"),
         ("EEM Emerging Markets", "EEM"),
+        ("ACWI All-World", "ACWI"),
+        ("EFA Developed ex-US", "EFA"),
+        ("VGK Europe",     "VGK"),
+        ("FXI China Large-Cap", "FXI"),
+        ("KWEB China Internet", "KWEB"),
+        ("INDA India",     "INDA"),
     ],
     "ETFs": [
         ("SMH",  "SMH"),

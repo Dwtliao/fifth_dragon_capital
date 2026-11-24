@@ -45,7 +45,7 @@ GROUPS = {
         ("NYSE Composite", "^NYA"),
         ("DXY (US Dollar)", "DX-Y.NYB"),
     ],
-    "Europe & Brazil": [
+    "Europe & Americas": [
         ("FTSE 100",   "^FTSE"),
         ("DAX",        "^GDAXI"),
         ("VGK Europe", "VGK"),

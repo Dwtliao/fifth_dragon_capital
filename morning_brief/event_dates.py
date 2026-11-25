@@ -106,7 +106,7 @@ class Contract(NamedTuple):
     roll_date: dt.date
     roll_label: str
     last_trade: dt.date
-    options_expiry: Optional[dt.date] = None   # COMEX gold options only; volume starts moving here
+    options_expiry: Optional[dt.date] = None   # COMEX gold/silver options; volume starts moving here
 
 
 # code -> (name, delivery months, rule)
@@ -138,13 +138,17 @@ def _contract_dates(rule, year, month):
             shift_business_days(last_business_day(year, month), -7))
 
 
-def gold_options_expiry(year, month):
-    """COMEX gold options (OG) on the `month` delivery contract.
+OPTION_NAMES = {"GC": "gold", "SI": "silver"}
 
-    Rulebook ch. 115: expire at the close four business days before the end of the month
+
+def comex_options_expiry(year, month):
+    """COMEX gold (OG) or silver (SO) options on the `month` delivery contract.
+
+    Rulebooks ch. 115 and 116 use the same rule: expire at the close four business days before the end of the month
     preceding the option month, moved to the prior business day when that date is a Friday
     or the day before an exchange holiday. Counting the month's last business day as day 1
-    reproduces CME's listed Dec 2026 expiry (Nov 24). Spot-check against the CME calendar.
+    reproduces CME's listed Dec 2026 gold expiry (Nov 24) and CME's advisory that the Oct 2013
+    gold/silver options expired Sep 25, 2013. Spot-check against the CME calendar.
     """
     py, pm = year - (month == 1), (month - 2) % 12 + 1
     d = shift_business_days(last_business_day(py, pm), -3)
@@ -162,14 +166,14 @@ def contracts(product, from_year, years=2):
             roll, label, last = _contract_dates(rule, year, month)
             out.append(Contract(product, f"{product}{MONTH_CODES[month - 1]}{year % 100:02d}",
                                 year, month, roll, label, last,
-                                gold_options_expiry(year, month) if product == "GC" else None))
+                                comex_options_expiry(year, month) if product in OPTION_NAMES else None))
     return out
 
 
 def contract_table(today, per_product=4):
     """Unexpired contracts per product with a chart hint.
 
-    Rolling off / Chart this / Next, plus for gold a roll window: from the options expiry day
+    Rolling off / Chart this / Next, plus for gold and silver a roll window: from the options expiry day
     until first notice day the front contract is "Roll window" and the next is "Switch to this".
     """
     rows = []
@@ -228,7 +232,7 @@ def upcoming_events(today, days=60):
                     "Volume typically moves to the next contract around here")
             add(c.last_trade, "Futures", f"{c.symbol} last trading day")
             if c.options_expiry:
-                add(c.options_expiry, "Options", f"COMEX gold options expiry ({c.symbol})",
+                add(c.options_expiry, "Options", f"COMEX {OPTION_NAMES[product]} options expiry ({c.symbol})",
                     "Volume typically starts moving to the next contract")
 
     return sorted(events, key=lambda e: (e["date"], e["category"], e["event"]))

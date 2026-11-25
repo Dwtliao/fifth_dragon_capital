@@ -96,13 +96,13 @@ class TestTables(unittest.TestCase):
         self.assertEqual(rows["GCZ26"], "Rolling off")
         self.assertEqual(rows["GCG27"], "Chart this")
 
-    def test_gold_options_expiry_matches_cme_listing(self):
-        self.assertEqual(ed.gold_options_expiry(2026, 12), D(2026, 11, 24))   # CME: Nov 24
+    def test_comex_options_expiry_matches_cme_listing(self):
+        self.assertEqual(ed.comex_options_expiry(2026, 12), D(2026, 11, 24))   # CME: Nov 24
 
-    def test_gold_options_expiry_never_friday_or_before_a_holiday(self):
+    def test_comex_options_expiry_never_friday_or_before_a_holiday(self):
         for year in (2026, 2027, 2028):
             for month in (2, 4, 6, 8, 10, 12):
-                d = ed.gold_options_expiry(year, month)
+                d = ed.comex_options_expiry(year, month)
                 nxt = d + dt.timedelta(days=1)
                 self.assertTrue(ed.is_business_day(d))
                 self.assertNotEqual(d.weekday(), 4)
@@ -121,12 +121,28 @@ class TestTables(unittest.TestCase):
         after = statuses(D(2026, 12, 1))
         self.assertEqual((after["GCZ26"], after["GCG27"]), ("Rolling off", "Chart this"))
 
-    def test_roll_window_is_gold_only(self):
-        rows = {r["contract"]: r["status"] for r in ed.contract_table(D(2026, 11, 24))}
-        self.assertEqual(rows["SIZ26"], "Chart this")
-        self.assertEqual(rows["CLF27"], "Chart this")
+    def test_options_expiry_matches_cme_advisory_example(self):
+        self.assertEqual(ed.comex_options_expiry(2013, 10), D(2013, 9, 25))   # Chadv13-435
 
-    def test_gold_options_expiry_listed_in_upcoming_events(self):
+    def test_silver_roll_window_mirrors_gold(self):
+        def statuses(today):
+            return {r["contract"]: r["status"] for r in ed.contract_table(today)}
+        self.assertEqual(statuses(D(2026, 11, 23))["SIZ26"], "Chart this")
+        for day in (D(2026, 11, 24), D(2026, 11, 30)):
+            window = statuses(day)
+            self.assertEqual((window["SIZ26"], window["SIH27"], window["SIK27"]),
+                             ("Roll window", "Switch to this", "Next"), day)
+        after = statuses(D(2026, 12, 1))
+        self.assertEqual((after["SIZ26"], after["SIH27"]), ("Rolling off", "Chart this"))
+        events = [e["event"] for e in ed.upcoming_events(D(2026, 11, 20), 30)]
+        self.assertIn("COMEX silver options expiry (SIZ26)", events)
+
+    def test_roll_window_not_applied_to_crude_or_treasuries(self):
+        rows = {r["contract"]: r["status"] for r in ed.contract_table(D(2026, 11, 24))}
+        self.assertEqual(rows["CLF27"], "Chart this")
+        self.assertEqual(rows["ZNZ26"], "Chart this")
+
+    def test_comex_options_expiry_listed_in_upcoming_events(self):
         events = ed.upcoming_events(D(2026, 11, 20), 30)
         match = [e for e in events if e["event"] == "COMEX gold options expiry (GCZ26)"]
         self.assertEqual([(e["date"], e["category"]) for e in match], [(D(2026, 11, 24), "Options")])

@@ -94,7 +94,7 @@ def render_event_dates(today=None):
     st.caption("Chart this = first contract whose roll marker has not passed. Roll marker is first notice "
                "day for metals, first position day for Treasuries and last trade for crude; volume "
                "typically moves to the next contract around that date. Rolling off = marker passed but "
-               "not yet expired. Gold also has a roll window: from the gold options expiry day until first "
+               "not yet expired. Gold and silver also have a roll window: from the options expiry day until first "
                "notice day the front contract shows Roll window and the next shows Switch to this. "
                "Yahoo's continuous symbols (GC=F, CL=F, ...) pick their own roll date.")
     table = []
